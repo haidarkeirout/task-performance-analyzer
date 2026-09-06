@@ -1,5 +1,5 @@
 {
-  "config_version": "1.0",
+  "config_version": "1.1",
   "source": "jira",
   "supported_file_types": ["xlsx"],
   "worksheet_rules": {
@@ -8,6 +8,7 @@
     "one_task_per_row": true
   },
   "column_mapping": {
+    "Labels": "labels",
     "Issue Type": "issue_type",
     "Issue key": "issue_key",
     "Issue id": "issue_id",
@@ -27,6 +28,7 @@
     "Status"
   ],
   "optional_columns": [
+    "Labels",
     "Issue Type",
     "Issue id",
     "Assignee",
@@ -104,6 +106,54 @@
     "check_status_sequence_continuity": true,
     "incomplete_history": "flag_and_disable_affected_metrics",
     "snapshot_conflicts": "require_resolution_before_affected_analysis"
+  },
+  "label_rules": {
+    "storage_type": "list_of_strings",
+    "supported_excel_layout": "single_Labels_column",
+    "text_cell_format": "single_label_or_explicit_user_delimiter",
+    "guess_delimiter": false,
+    "trim_each_label": true,
+    "remove_empty_labels": true,
+    "deduplicate_within_task": true,
+    "preserve_label_case": true,
+    "confirmed_empty_list_label": "No labels",
+    "unavailable_labels_label": "Labels unavailable",
+    "count_task_once_per_label": true,
+    "overall_counts_use_unique_tasks": true,
+    "label_group_totals_are_additive": false
+  },
+  "api_enrichment": {
+    "fields_to_retrieve": [
+      "assignee_id",
+      "assignee_name",
+      "issue_type",
+      "labels"
+    ],
+    "missing_export_fields": "fill_from_api_when_time_consistent",
+    "conflicting_values": "require_snapshot_resolution",
+    "historical_evaluation": "require_values_valid_at_cutoff",
+    "unavailable_fields": "preserve_unknown_and_warn",
+    "record_field_source": true
+  },
+  "issue_type_rules": {
+    "preserve_source_value": true,
+    "supported_example_types": ["Task", "Bug"],
+    "restrict_to_example_types": false,
+    "missing_type_label": "Issue type unavailable",
+    "workflow_compatibility": "validate_against_workflow_config",
+    "unmapped_status": "require_mapping_before_workflow_metrics"
+  },
+  "analysis_dimensions": {
+    "enabled": [
+      "assignee",
+      "issue_type",
+      "labels"
+    ],
+    "allow_combined_filters": true,
+    "assignee_attribution": "assignee_at_evaluation_cutoff",
+    "historical_assignee_attribution": "requires_assignment_history",
+    "missing_dimension": "show_unavailable_group_and_warn",
+    "overall_task_count": "distinct_task_identity"
   },
   "metric_availability": {
     "missing_created_at": [
