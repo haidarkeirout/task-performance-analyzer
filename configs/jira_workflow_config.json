@@ -1,0 +1,85 @@
+{
+  "config_version": "1.0",
+  "source": "jira",
+  "workflow_name": "Website Launch Workflow",
+  "statuses": {
+    "Idea": {
+      "description": "Task idea awaiting initial assessment."
+    },
+    "In Triage": {
+      "description": "Task undergoing assessment before execution."
+    },
+    "To Do": {
+      "description": "Task waiting for execution or returned for replanning."
+    },
+    "In Progress": {
+      "description": "Task in the execution stage."
+    },
+    "In Review": {
+      "description": "Task in the review stage."
+    },
+    "Done": {
+      "description": "Completed task."
+    },
+    "Rejected": {
+      "description": "Rejected task; not counted as completed."
+    }
+  },
+  "main_flow": [
+    "Idea",
+    "In Triage",
+    "To Do",
+    "In Progress",
+    "In Review",
+    "Done"
+  ],
+  "status_groups": {
+    "completed": ["Done"],
+    "rejected": ["Rejected"],
+    "terminal": ["Done", "Rejected"],
+    "open": ["Idea", "In Triage", "To Do", "In Progress", "In Review"],
+    "wip": ["In Progress", "In Review"],
+    "waiting_for_execution": ["Idea", "In Triage", "To Do"]
+  },
+  "exception_transitions": [
+    {
+      "from_status": "In Review",
+      "to_status": "In Progress",
+      "type": "rework",
+      "label": "Request Changes"
+    },
+    {
+      "from_status": "In Review",
+      "to_status": "To Do",
+      "type": "replanning",
+      "label": "Needs Replanning"
+    },
+    {
+      "from_status": "In Review",
+      "to_status": "In Triage",
+      "type": "re_evaluation",
+      "label": "Re-evaluate"
+    },
+    {
+      "from_status": "In Triage",
+      "to_status": "Rejected",
+      "type": "rejection",
+      "label": "Rejection"
+    }
+  ],
+  "event_rules": {
+    "workflow_history_field": "status",
+    "exception_matching": "from_status_and_to_status",
+    "unknown_status_handling": "require_mapping",
+    "unrecognized_transition_handling": "flag_for_review"
+  },
+  "timing_rules": {
+    "planned_start_field": "Custom field (Start date)",
+    "actual_start_status": "In Progress",
+    "actual_start_selection": "first_recorded_entry",
+    "use_planned_start_as_actual_start": false,
+    "repeated_status_visits": "sum_all_observed_intervals",
+    "unfinished_status_interval_end": "evaluation_cutoff",
+    "missing_timestamp_handling": "mark_affected_metric_unavailable"
+  }
+}
