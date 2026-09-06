@@ -334,7 +334,6 @@ def normalize_tasks(
     if "issue_key" in normalized.columns:
         duplicate_mask = normalized["issue_key"].duplicated(
             keep=False,
-            na=False,
         )
 
         duplicate_groups = normalized[duplicate_mask].groupby(
