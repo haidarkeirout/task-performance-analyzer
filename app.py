@@ -10,7 +10,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
 
@@ -392,16 +391,9 @@ def show_executive_dashboard(
         )
 
         if not status_counts.empty:
-            figure = px.bar(
-                status_counts,
-                x="Status",
-                y="Tasks",
-                title="Task Distribution by Status",
-                color="Status",
-            )
-
-            st.plotly_chart(
-                figure,
+            st.subheader("Task Distribution by Status")
+            st.bar_chart(
+                status_counts.set_index("Status")["Tasks"],
                 use_container_width=True,
             )
 
@@ -431,16 +423,9 @@ def show_executive_dashboard(
             )
 
             if not assignee_frame.empty:
-                figure = px.bar(
-                    assignee_frame,
-                    x="Assignee",
-                    y=["Completed", "Open"],
-                    barmode="group",
-                    title="Work Distribution by Assignee",
-                )
-
-                st.plotly_chart(
-                    figure,
+                st.subheader("Work Distribution by Assignee")
+                st.bar_chart(
+                    assignee_frame.set_index("Assignee")[["Completed", "Open"]],
                     use_container_width=True,
                 )
 
