@@ -1,0 +1,126 @@
+{
+  "config_version": "1.0",
+  "source": "jira",
+  "supported_file_types": ["xlsx"],
+  "worksheet_rules": {
+    "selection": "auto_select_if_one_matching_sheet_otherwise_ask",
+    "header_row": 1,
+    "one_task_per_row": true
+  },
+  "column_mapping": {
+    "Issue Type": "issue_type",
+    "Issue key": "issue_key",
+    "Issue id": "issue_id",
+    "Summary": "task_name",
+    "Assignee": "assignee_name",
+    "Assignee Id": "assignee_id",
+    "Priority": "priority",
+    "Status": "current_status",
+    "Resolution": "resolution",
+    "Created": "created_at",
+    "Due date": "due_date",
+    "Custom field (Start date)": "planned_start_date"
+  },
+  "required_columns": [
+    "Issue key",
+    "Summary",
+    "Status"
+  ],
+  "optional_columns": [
+    "Issue Type",
+    "Issue id",
+    "Assignee",
+    "Assignee Id",
+    "Priority",
+    "Resolution",
+    "Created",
+    "Due date",
+    "Custom field (Start date)"
+  ],
+  "header_rules": {
+    "trim_whitespace": true,
+    "case_sensitive_matching": false,
+    "duplicate_mapped_headers": "block_import",
+    "unrecognized_columns": "preserve_without_interpreting"
+  },
+  "cleaning_rules": {
+    "preserve_original_data": true,
+    "record_changes_in_log": true,
+    "remove_fully_empty_rows": true,
+    "trim_text_edges": true,
+    "identifier_storage_type": "string",
+    "blank_optional_values": "null",
+    "missing_optional_columns": "create_null_column_and_warn",
+    "missing_required_columns": "block_import",
+    "blank_required_values": "block_import_and_show_rows",
+    "formula_cells_in_mapped_columns": "block_import_and_request_values"
+  },
+  "duplicate_rules": {
+    "task_identity": ["jira_site_url", "issue_key"],
+    "identical_duplicate_rows": "keep_one_and_log",
+    "conflicting_duplicate_rows": "block_import_and_show_conflicts"
+  },
+  "date_rules": {
+    "datetime_fields": ["created_at"],
+    "date_only_fields": ["due_date", "planned_start_date"],
+    "accept_excel_serial_dates": true,
+    "excel_date_system": "read_from_workbook",
+    "accept_native_excel_dates": true,
+    "accept_iso8601_text": true,
+    "other_text_date_formats": "require_explicit_user_format",
+    "timezone_for_naive_datetimes": "source_timezone",
+    "timezone_for_aware_datetimes": "preserve_offset_then_normalize",
+    "internal_datetime_timezone": "UTC",
+    "date_only_handling": "preserve_calendar_date",
+    "invalid_dates": "flag_and_mark_affected_metrics_unavailable",
+    "missing_dates": "do_not_invent"
+  },
+  "assignee_rules": {
+    "preferred_grouping_field": "assignee_id",
+    "name_only_fallback": "group_with_identity_warning",
+    "missing_id_and_name_label": "Unassigned",
+    "infer_previous_assignees_from_current_assignee": false
+  },
+  "run_context": {
+    "required": [
+      "jira_site_url",
+      "evaluation_cutoff",
+      "source_timezone"
+    ],
+    "cutoff_format": "datetime_with_timezone",
+    "task_scope": "tasks_listed_in_uploaded_file"
+  },
+  "history_requirements": {
+    "source": "jira_api",
+    "match_tasks_using": "issue_key",
+    "event_fields": [
+      "issue_key",
+      "from_status",
+      "to_status",
+      "changed_at"
+    ],
+    "fetch_all_pages": true,
+    "apply_evaluation_cutoff": true,
+    "check_status_sequence_continuity": true,
+    "incomplete_history": "flag_and_disable_affected_metrics",
+    "snapshot_conflicts": "require_resolution_before_affected_analysis"
+  },
+  "metric_availability": {
+    "missing_created_at": [
+      "lead_time",
+      "time_to_start",
+      "task_age"
+    ],
+    "missing_due_date": [
+      "on_time_completion",
+      "overdue_days",
+      "schedule_variance"
+    ],
+    "missing_planned_start_date": [
+      "start_schedule_variance"
+    ],
+    "unavailable_metric_value": null,
+    "show_unavailability_reason": true,
+    "never_replace_unavailable_with_zero": true
+  }
+}
