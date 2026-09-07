@@ -64,6 +64,10 @@ inferred timestamp or an assertion about later Jira activity.
   view supports all available weeks, the last 4 weeks, the last 12 weeks
   (quarter), and the last 52 weeks (year), and exports the weekly table with
   net and cumulative flow values.
+- The Executive Dashboard shows leadership-level averages for completed work
+  (execution time, lead time, and time to start) and delay/planning risk (late
+  completion days, open overdue days, and start variance days). Averages with
+  no qualifying tasks are shown as unavailable rather than misleading zeros.
 - Assignment Summary and Task Detail show created date, planned start date,
   actual start date, start schedule variance in days, due date, completion date,
   priority, current-status age, and overdue days. Positive start variance means

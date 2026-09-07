@@ -151,6 +151,62 @@ def calculate_dashboard_values(task_metrics):
             "overdue": row["overdue_open_tasks"], "rework": row["tasks_with_rework"]}
 
 
+def _mean_for_mask(frame: pd.DataFrame, column: str, mask: pd.Series):
+    if column not in frame.columns:
+        return None
+    values = pd.to_numeric(frame.loc[mask, column], errors="coerce").dropna()
+    return None if values.empty else float(values.mean())
+
+
+def _format_average(value, suffix: str) -> str:
+    if value is None or pd.isna(value):
+        return "Unavailable"
+    return f"{value:.1f} {suffix}"
+
+
+def show_management_averages(task_metrics: pd.DataFrame) -> None:
+    """Show leadership-level averages with explicit valid-population scopes."""
+    completed = task_metrics["is_completed"].eq(True)
+    completed_late = completed & task_metrics["schedule_variance_days"].gt(0)
+    open_overdue = task_metrics["is_open"].eq(True) & task_metrics["overdue_days"].gt(0)
+    started = task_metrics["time_to_start_business_hours"].notna()
+    start_variance = task_metrics["start_schedule_variance_days"].notna()
+
+    st.subheader("Management Averages")
+    st.caption(
+        "Execution, lead-time, and start-wait averages use configured business hours. "
+        "Delay and schedule-variance averages use calendar days. Unavailable means no qualifying tasks exist."
+    )
+
+    completed_cards = st.columns(3)
+    completed_cards[0].metric(
+        "Avg Execution Time (Completed)",
+        _format_average(_mean_for_mask(task_metrics, "execution_business_hours", completed), "h"),
+    )
+    completed_cards[1].metric(
+        "Avg Lead Time (Completed)",
+        _format_average(_mean_for_mask(task_metrics, "lead_time_business_hours", completed), "h"),
+    )
+    completed_cards[2].metric(
+        "Avg Time to Start",
+        _format_average(_mean_for_mask(task_metrics, "time_to_start_business_hours", started), "h"),
+    )
+
+    delay_cards = st.columns(3)
+    delay_cards[0].metric(
+        "Avg Late Completion",
+        _format_average(_mean_for_mask(task_metrics, "schedule_variance_days", completed_late), "days"),
+    )
+    delay_cards[1].metric(
+        "Avg Open Overdue",
+        _format_average(_mean_for_mask(task_metrics, "overdue_days", open_overdue), "days"),
+    )
+    delay_cards[2].metric(
+        "Avg Start Variance",
+        _format_average(_mean_for_mask(task_metrics, "start_schedule_variance_days", start_variance), "days"),
+    )
+
+
 def show_weekly_task_flow(process_data: dict | None = None) -> None:
     """Show weekly task intake versus completion without a chart dependency."""
     weekly = process_data.get("weekly_flow") if process_data else None
@@ -340,6 +396,10 @@ def show_executive_dashboard(
         "WIP Tasks",
         values["wip"],
     )
+
+    st.divider()
+
+    show_management_averages(task_metrics)
 
     st.divider()
 
