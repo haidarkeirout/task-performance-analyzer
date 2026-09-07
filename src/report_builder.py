@@ -149,540 +149,98 @@ def add_key_value_table(
         cells[0].paragraphs[0].runs[0].bold = True
 
 
-def add_task_table(
-    document: Document,
-    frame: pd.DataFrame,
-) -> None:
-    columns = [
-        "issue_key",
-        "task_name",
-        "issue_type",
-        "status_at_cutoff",
-        "completed_at",
-        "due_date",
-        "on_time_completion",
-        "execution_business_hours",
-        "rework_count",
-    ]
-
-    available_columns = [
-        column
-        for column in columns
-        if column in frame.columns
-    ]
-
-    if not available_columns:
-        add_paragraph(
-            document,
-            "No task-level data is available.",
-        )
-        return
-
-    table = document.add_table(
-        rows=1,
-        cols=len(available_columns),
-    )
-
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.style = "Table Grid"
-
-    headers = table.rows[0].cells
-
-    for index, column in enumerate(available_columns):
-        headers[index].text = column.replace(
-            "_",
-            " ",
-        ).title()
-
-        headers[index].paragraphs[0].runs[0].bold = True
-
-    for _, row in frame.iterrows():
-        cells = table.add_row().cells
-
-        for index, column in enumerate(available_columns):
-            cells[index].text = format_value(
-                row.get(column)
-            )
-
-
-def calculate_overall_metrics(
-    frame: pd.DataFrame,
-) -> dict[str, Any]:
-    total = int(
-        frame["issue_key"].nunique()
-    ) if "issue_key" in frame.columns else len(frame)
-
-    completed = int(
-        frame["is_completed"].sum()
-    ) if "is_completed" in frame.columns else 0
-
-    rejected = int(
-        frame["is_rejected"].sum()
-    ) if "is_rejected" in frame.columns else 0
-
-    open_tasks = int(
-        frame["is_open"].sum()
-    ) if "is_open" in frame.columns else 0
-
-    wip = int(
-        frame["is_wip"].sum()
-    ) if "is_wip" in frame.columns else 0
-
-    valid_on_time = frame[
-        frame["on_time_completion"].notna()
-    ] if "on_time_completion" in frame.columns else pd.DataFrame()
-
-    on_time = int(
-        valid_on_time["on_time_completion"].sum()
-    ) if not valid_on_time.empty else 0
-
-    valid_overdue = frame[
-        frame["overdue_days"].notna()
-    ] if "overdue_days" in frame.columns else pd.DataFrame()
-
-    overdue = int(
-        (valid_overdue["overdue_days"] > 0).sum()
-    ) if not valid_overdue.empty else 0
-
-    return {
-        "Total tasks": total,
-        "Completed tasks": completed,
-        "Rejected tasks": rejected,
-        "Open tasks": open_tasks,
-        "Work in progress tasks": wip,
-        "Completion rate": format_percent(
-            completed,
-            total,
-        ),
-        "On-time completion rate": format_percent(
-            on_time,
-            len(valid_on_time),
-        ),
-        "Open overdue rate": format_percent(
-            overdue,
-            len(valid_overdue),
-        ),
-        "Mean execution business hours": (
-            frame["execution_business_hours"].mean()
-            if "execution_business_hours" in frame.columns
-            else None
-        ),
-        "Median execution business hours": (
-            frame["execution_business_hours"].median()
-            if "execution_business_hours" in frame.columns
-            else None
-        ),
-    }
-
-
-def add_individual_profile(
-    document: Document,
-    assignee: str,
-    frame: pd.DataFrame,
-) -> None:
-    add_heading(
-        document,
-        f"Individual Achievement Profile: {assignee}",
-        level=2,
-    )
-
-    completed = frame[
-        frame["is_completed"] == True
-    ] if "is_completed" in frame.columns else pd.DataFrame()
-
-    valid_on_time = completed[
-        completed["on_time_completion"].notna()
-    ] if not completed.empty and "on_time_completion" in completed.columns else pd.DataFrame()
-
-    on_time_count = int(
-        valid_on_time["on_time_completion"].sum()
-    ) if not valid_on_time.empty else 0
-
-    rework_valid = frame[
-        frame["rework_count"].notna()
-    ] if "rework_count" in frame.columns else pd.DataFrame()
-
-    rework_total = int(
-        rework_valid["rework_count"].sum()
-    ) if not rework_valid.empty else 0
-
-    profile_values = {
-        "Tasks assigned at evaluation cutoff": len(frame),
-        "Completed tasks": len(completed),
-        "Completion rate": format_percent(
-            len(completed),
-            len(frame),
-        ),
-        "On-time completed tasks": on_time_count,
-        "On-time completion rate": format_percent(
-            on_time_count,
-            len(valid_on_time),
-        ),
-        "Open tasks": int(
-            frame["is_open"].sum()
-        ) if "is_open" in frame.columns else 0,
-        "Open overdue tasks": int(
-            (
-                frame["overdue_days"] > 0
-            ).sum()
-        ) if "overdue_days" in frame.columns else 0,
-        "Mean execution business hours": (
-            completed["execution_business_hours"].mean()
-            if not completed.empty
-            and "execution_business_hours" in completed.columns
-            else None
-        ),
-        "Total recorded rework transitions": rework_total,
-    }
-
-    add_key_value_table(
-        document,
-        profile_values,
-    )
-
-    if completed.empty:
-        add_paragraph(
-            document,
-            "No completed tasks were verified for this assignee "
-            "within the selected evaluation scope.",
-        )
-        return
-
-    issue_types = []
-
-    if "issue_type" in completed.columns:
-        issue_types = sorted(
-            completed["issue_type"]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-
-    if issue_types:
-        add_paragraph(
-            document,
-            "Completed issue types: "
-            + ", ".join(issue_types),
-        )
-
-    labels: set[str] = set()
-
-    if "labels" in completed.columns:
-        for value in completed["labels"]:
-            labels.update(parse_labels(value))
-
-    if labels:
-        add_paragraph(
-            document,
-            "Labels represented in completed work: "
-            + ", ".join(sorted(labels)),
-        )
-
-    add_paragraph(
-        document,
-        (
-            f"{assignee} has {len(completed)} verified completed task(s) "
-            f"within the evaluation scope. "
-            f"The profile describes recorded task outcomes and timing; "
-            f"it does not infer effort, quality, or business impact "
-            f"from duration alone."
-        ),
-    )
-
-    add_task_table(
-        document,
-        completed,
-    )
-
-
-def add_bottlenecks_section(
-    document: Document,
-    frame: pd.DataFrame,
-) -> None:
-    add_heading(
-        document,
-        "Bottlenecks and Exceptions",
-        level=1,
-    )
-
-    if "status_at_cutoff" in frame.columns:
-        status_counts = (
-            frame["status_at_cutoff"]
-            .fillna("Unavailable")
-            .value_counts()
-        )
-
-        if not status_counts.empty:
-            add_paragraph(
-                document,
-                "Task distribution by current status:",
-            )
-
-            for status, count in status_counts.items():
-                add_paragraph(
-                    document,
-                    f"{status}: {count} task(s)",
-                )
-
-    if "rework_count" in frame.columns:
-        rework_tasks = frame[
-            frame["rework_count"].fillna(0) > 0
-        ]
-
-        add_paragraph(
-            document,
-            (
-                f"Tasks with at least one verified rework transition: "
-                f"{len(rework_tasks)}."
-            ),
-        )
-
-    if "overdue_days" in frame.columns:
-        overdue_tasks = frame[
-            frame["overdue_days"].fillna(0) > 0
-        ]
-
-        add_paragraph(
-            document,
-            (
-                f"Tasks with overdue days greater than zero: "
-                f"{len(overdue_tasks)}."
-            ),
-        )
-
-    add_paragraph(
-        document,
-        (
-            "These observations identify review candidates. "
-            "They should be interpreted with task complexity, dependencies, "
-            "assignment history, and data completeness."
-        ),
-    )
-
-
-def add_recommendations(
-    document: Document,
-    frame: pd.DataFrame,
-) -> None:
-    add_heading(
-        document,
-        "Conclusions and Recommendations",
-        level=1,
-    )
-
-    recommendations = [
-        (
-            "Review open tasks with overdue days greater than zero "
-            "and confirm whether the due date, dependency, or scope changed."
-        ),
-        (
-            "Review repeated In Review to In Progress transitions "
-            "to identify requirements, testing, or approval issues."
-        ),
-        (
-            "Use individual achievement profiles for evidence-based "
-            "discussion of completed work and delivery reliability."
-        ),
-        (
-            "Keep elapsed duration and business-hours duration visible "
-            "together so management can distinguish calendar delay "
-            "from time inside the standard work calendar."
-        ),
-        (
-            "Collect complete Jira worklogs when actual recorded effort "
-            "and work outside standard hours must be evaluated."
-        ),
-    ]
-
-    for recommendation in recommendations:
-        paragraph = document.add_paragraph(
-            style="List Bullet"
-        )
-        paragraph.add_run(recommendation)
-
-
 def build_report(
-    task_metrics: pd.DataFrame,
-    output_path: Path,
-    *,
-    title: str,
-    evaluation_cutoff: str,
-    timezone_name: str,
-    work_days: str,
-    work_window: str,
-) -> None:
+    task_metrics, output_path, *, title, evaluation_cutoff,
+    timezone_name, work_days, work_window, process_data=None,
+):
+    from process_analysis import process_tables
+    from metrics_engine import aggregate
+    from docx.oxml import OxmlElement
+    tables = process_data if process_data is not None else process_tables(task_metrics)
     document = Document()
     set_document_style(document)
-
-    add_title(
-        document,
-        title,
-    )
-
-    metadata = {
-        "Evaluation cutoff": evaluation_cutoff,
-        "Timezone": timezone_name,
-        "Working days": work_days,
-        "Standard work window": work_window,
-        "Report language": "English",
-        "Primary report focus": "Individual achievements",
-    }
-
-    add_key_value_table(
-        document,
-        metadata,
-    )
-
-    add_heading(
-        document,
-        "Executive Summary",
-        level=1,
-    )
-
-    overall = calculate_overall_metrics(
-        task_metrics,
-    )
-
-    add_key_value_table(
-        document,
-        overall,
-    )
-
-    add_paragraph(
-        document,
-        (
-            "This report evaluates recorded Jira task outcomes within "
-            "the selected scope. The executive view summarizes delivery "
-            "status, timeliness, work in progress, and exceptions. "
-            "The individual sections focus on verified achievements "
-            "associated with each assignee."
-        ),
-    )
-
-    add_heading(
-        document,
-        "Methodology and Work Calendar",
-        level=1,
-    )
-
-    add_paragraph(
-        document,
-        (
-            "Elapsed durations measure the complete time between verified "
-            "timestamps. Business-hours durations count only time within "
-            "the configured Syria work calendar: Sunday through Thursday, "
-            "09:00 to 17:00, Asia/Damascus. Friday and Saturday are excluded."
-        ),
-    )
-
-    add_paragraph(
-        document,
-        (
-            "Business-hours duration describes process time inside the "
-            "configured calendar. It is not a direct measure of employee "
-            "labor. Actual work outside standard hours requires verified "
-            "Jira worklog or time-tracking records."
-        ),
-    )
-
-    add_heading(
-        document,
-        "Overall Performance Indicators",
-        level=1,
-    )
-
-    add_key_value_table(
-        document,
-        overall,
-    )
-
-    add_heading(
-        document,
-        "Individual Achievement Profiles",
-        level=1,
-    )
-
-    if "assignee_name" in task_metrics.columns:
-        assignees = sorted(
-            task_metrics["assignee_name"]
-            .fillna("Assignee unavailable")
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-
-        for assignee in assignees:
-            assignee_frame = task_metrics[
-                task_metrics["assignee_name"].fillna(
-                    "Assignee unavailable"
-                ).astype(str) == assignee
-            ]
-
-            add_individual_profile(
-                document,
-                assignee,
-                assignee_frame,
-            )
-    else:
-        add_paragraph(
-            document,
-            "Assignee information was unavailable.",
-        )
-
-    add_heading(
-        document,
-        "Per-Task Evaluation",
-        level=1,
-    )
-
-    add_task_table(
-        document,
-        task_metrics,
-    )
-
-    add_bottlenecks_section(
-        document,
-        task_metrics,
-    )
-
-    add_recommendations(
-        document,
-        task_metrics,
-    )
-
-    add_heading(
-        document,
-        "Data Quality and Limitations",
-        level=1,
-    )
-
-    limitations = [
-        "Missing dates make affected duration metrics unavailable.",
-        "Incomplete Jira history disables metrics that require verified transitions.",
-        "A task outcome is not automatically proof of one person's total contribution.",
-        "Task duration alone does not establish effort, quality, or impact.",
-        "Labels can overlap; label-group counts should not be added to calculate overall task counts.",
-        "Outside-hours activity is reported only when supported by verified work records.",
-    ]
-
-    for limitation in limitations:
-        paragraph = document.add_paragraph(
-            style="List Bullet"
-        )
-        paragraph.add_run(limitation)
-
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
+    document.styles["Normal"].paragraph_format.space_after = Pt(6)
+    add_title(document, title)
+    add_heading(document, "Process Context and Scope")
+    add_key_value_table(document, dict(tables["process_context"].itertuples(index=False, name=None)))
+    add_heading(document, "Overall Performance Indicators")
+    row = tables["overall_summary"].iloc[0]
+    names = {"Total tasks": "total_tasks", "Completed tasks": "completed_tasks",
+             "Rejected tasks": "rejected_tasks", "Open tasks": "open_tasks", "WIP tasks": "wip_tasks",
+             "Status unavailable": "unknown_status_tasks", "Complete histories": "history_complete_tasks",
+             "Histories excluded": "history_excluded_tasks", "Reviewed eligible tasks": "reviewed_valid_tasks"}
+    add_key_value_table(document, {name: int(row[key]) for name, key in names.items()})
+    for label, count, denom in [
+        ("Completion", "completed_tasks", "total_tasks"),
+        ("On-time completion", "on_time_tasks", "on_time_valid_tasks"),
+        ("Open overdue", "overdue_open_tasks", "overdue_valid_tasks"),
+        ("Rework", "tasks_with_rework", "reviewed_valid_tasks"),
+        ("Replanning", "tasks_with_replanning", "reviewed_valid_tasks"),
+        ("Re-evaluation", "tasks_with_re_evaluation", "reviewed_valid_tasks"),
+        ("Any review exception", "review_exception_tasks", "reviewed_valid_tasks")]:
+        add_paragraph(document, f"{label}: {format_percent(int(row[count]), int(row[denom]))} ({int(row[count])}/{int(row[denom])} tasks).")
+    add_key_value_table(document, {kind.replace("_", " ").title() + " events": row["total_" + kind + "_count"]
+                                  for kind in ["rework", "replanning", "re_evaluation"]})
+    add_heading(document, "Process Timing")
+    for metric in ["execution", "lead_time", "time_to_start"]:
+        add_paragraph(document, f"{metric.replace('_', ' ').title()}: mean {format_value(row['mean_' + metric + '_elapsed_hours'])} elapsed hours / {format_value(row['mean_' + metric + '_business_hours'])} business hours; valid tasks: {int(row[metric + '_elapsed_hours_valid_tasks'])}.")
+    add_paragraph(document, "Business hours are process residence within the configured calendar, not recorded employee effort. Durations include waiting and repeated visits. Date adherence uses uploaded schedule values, not a reconstructed historical baseline.")
+    add_heading(document, "Stage Residence and Open Work")
+    for stage in tables["stage_summary"].to_dict("records"):
+        add_heading(document, str(stage["status"]), 2)
+        add_key_value_table(document, {"Tasks visited": stage["tasks_visited"],
+            "Mean elapsed / business hours": f"{stage['elapsed_mean_hours']:.2f} / {stage['business_mean_hours']:.2f}",
+            "Median elapsed / business hours": f"{stage['elapsed_median_hours']:.2f} / {stage['business_median_hours']:.2f}",
+            "Total elapsed / business hours": f"{stage['elapsed_total_hours']:.2f} / {stage['business_total_hours']:.2f}",
+            "Open tasks currently here": stage["open_tasks_currently_here"]})
+    add_paragraph(document, "Stage statistics sum all visits per task through cutoff, including unfinished visits. Done and Rejected residence is excluded. High residence identifies a review candidate; it does not establish a cause.")
+    add_heading(document, "Bottlenecks, Exceptions and Follow-up")
+    findings = tables["process_findings"]
+    if findings.empty:
+        add_paragraph(document, "No supported exception findings are available in this scope.")
+    for finding in findings.to_dict("records"):
+        add_paragraph(document, f"{finding['issue_key']}: {finding['observation']} {finding['follow_up']}")
+    add_heading(document, "Assignment Distribution")
+    add_paragraph(document, "Groups use the uploaded assignee snapshot. Unassigned is a separate task group, not an individual. These counts do not verify contribution or ownership at completion.")
+    for group in aggregate(task_metrics, ["assignee_name"]).to_dict("records"):
+        add_paragraph(document, f"{group['assignee_name']}: {group['total_tasks']} tasks; {group['completed_tasks']} completed, {group['open_tasks']} open, {group['rejected_tasks']} rejected, {group['unknown_status_tasks']} status unavailable.")
+    add_heading(document, "Per-Task Evaluation")
+    for task in task_metrics.to_dict("records"):
+        add_heading(document, f"{task['issue_key']} — {task['task_name']}", 2)
+        add_key_value_table(document, {
+            "Status at cutoff": task["status_at_cutoff"],
+            "Actual start / completion (UTC)": f"{format_value(task['actual_start_at'])} / {format_value(task['completed_at'])}",
+            "Due date (uploaded snapshot)": task["due_date"],
+            "On-time completion": task["on_time_completion"],
+            "Execution elapsed / business hours": f"{format_value(task['execution_elapsed_hours'])} / {format_value(task['execution_business_hours'])}",
+            "Open task age elapsed / business hours": f"{format_value(task['task_age_elapsed_hours'])} / {format_value(task['task_age_business_hours'])}",
+            "Current status age elapsed / business hours": f"{format_value(task['current_status_age_elapsed_hours'])} / {format_value(task['current_status_age_business_hours'])}",
+            "Overdue days": task["overdue_days"],
+            "Rework / replanning / re-evaluation events": " / ".join(format_value(task[k]) for k in ["rework_count", "replanning_count", "re_evaluation_count"]),
+            "History complete": task["history_complete"],
+        })
+    add_heading(document, "Data Quality")
+    if tables["data_quality"].empty:
+        add_paragraph(document, "No data-quality findings were recorded by these validation checks.")
+    for item in tables["data_quality"].to_dict("records"):
+        add_paragraph(document, f"{item['issue_key']}: {item['finding']}")
+    add_heading(document, "Metric Definitions and Limitations")
+    for metric, definition in tables["metric_definitions"].itertuples(index=False, name=None):
+        add_paragraph(document, f"{metric}: {definition}")
+    add_paragraph(document, "All percentages use a 0–100 scale. A zero denominator is unavailable. The Excel export includes the transition audit trail and detailed stage statistics. Simulation data cannot establish long-term employee performance.")
+    # Keep rows intact; narrow two-column tables avoid the old nine-column overflow.
+    for table in document.tables:
+        for row in table.rows:
+            prop = row._tr.get_or_add_trPr()
+            prop.append(OxmlElement("w:cantSplit"))
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build an individual-achievement Jira Word report."
+        description="Build a Jira process-performance Word report."
     )
 
     parser.add_argument(
@@ -722,11 +280,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    task_metrics = pd.read_excel(
-        args.metrics_workbook,
-        sheet_name="task_metrics",
-        dtype=object,
-    )
+    workbook = pd.read_excel(args.metrics_workbook, sheet_name=None)
+    task_metrics = workbook["task_metrics"]
+    required = {"process_context", "overall_summary", "stage_summary", "process_findings", "data_quality", "metric_definitions"}
+    process_data = {name: workbook[name] for name in required} if required.issubset(workbook) else None
 
     cutoff = args.evaluation_cutoff
 
@@ -738,6 +295,7 @@ def main() -> int:
         timezone_name=args.timezone,
         work_days="Sunday-Thursday",
         work_window="09:00-17:00",
+        process_data=process_data,
     )
 
     print(

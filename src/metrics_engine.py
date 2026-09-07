@@ -46,7 +46,7 @@ def parse_timestamp(
     if value is None:
         return None
 
-    if isinstance(value, float) and pd.isna(value):
+    if not isinstance(value, (list, dict)) and pd.isna(value):
         return None
 
     if isinstance(value, str) and not value.strip():
@@ -54,6 +54,8 @@ def parse_timestamp(
 
     try:
         timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            return None
 
         if timestamp.tzinfo is None:
             timestamp = timestamp.tz_localize(
@@ -72,14 +74,15 @@ def parse_date_value(value: Any) -> date | None:
     if value is None:
         return None
 
-    if isinstance(value, float) and pd.isna(value):
+    if not isinstance(value, (list, dict)) and pd.isna(value):
         return None
 
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
 
     try:
-        return pd.Timestamp(value).date()
+        parsed = pd.Timestamp(value)
+        return None if pd.isna(parsed) else parsed.date()
     except Exception:
         return None
 
@@ -237,7 +240,7 @@ def normalize_labels(value: Any) -> list[str]:
     if value is None:
         return []
 
-    if isinstance(value, float) and pd.isna(value):
+    if not isinstance(value, (list, dict)) and pd.isna(value):
         return []
 
     if isinstance(value, list):
@@ -325,7 +328,7 @@ def build_status_intervals(
         if changed_at < cursor:
             return [], False
 
-        if from_status and from_status != current_status:
+        if not from_status or from_status != current_status:
             return [], False
 
         if not to_status:
@@ -464,11 +467,36 @@ def calculate_task(
         calendar.timezone_name,
     )
 
-    intervals, history_complete = build_status_intervals(
-        created_at,
-        events,
-        cutoff,
-    )
+    # Validate the entire claimed history, then reconstruct only through cutoff.
+    history = history or {}
+    through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
+    all_events = get_status_events(history, pd.Timestamp.max.tz_localize("UTC"), calendar.timezone_name)
+    invalid_events = len(all_events) != len(history.get("status_events", []))
+    verified = (history.get("history_complete") is True and not history.get("error")
+                and through is not None and through >= cutoff and not invalid_events
+                and created_at is not None and created_at <= cutoff)
+    initial = all_events[0].get("from_status") if all_events else history.get("initial_status")
+    intervals = []
+    chain_valid = False
+    if verified and initial:
+        if all_events:
+            full, chain_valid = build_status_intervals(created_at, all_events, through)
+            if all_events[-1]["_changed_at"] > through:
+                chain_valid = False
+            snapshot_status = (history.get("snapshot") or {}).get("current_status")
+            if snapshot_status and full and full[-1]["status"] != snapshot_status:
+                chain_valid = False
+        else:
+            chain_valid = True
+        if chain_valid:
+            if events:
+                intervals, chain_valid = build_status_intervals(created_at, events, cutoff)
+            else:
+                intervals = [{"status": initial, "start": created_at, "end": cutoff}]
+    history_complete = bool(verified and chain_valid)
+    if not history_complete:
+        intervals = []
+        events = []  # Partial histories cannot supply verified starts/completions/counts.
 
     status_times = status_time_summary(
         intervals,
@@ -480,6 +508,9 @@ def calculate_task(
         "In Progress",
     )
 
+    if history_complete and initial == "In Progress":
+        actual_start = created_at
+
     latest_done = latest_entry(
         events,
         "Done",
@@ -488,17 +519,19 @@ def calculate_task(
     final_status = (
         intervals[-1]["status"]
         if intervals
-        else current_status
+        else "Unavailable"
     )
 
     completed = final_status == "Done"
     rejected = final_status == "Rejected"
-    open_task = not completed and not rejected
+    open_task = history_complete and not completed and not rejected
     wip = final_status in {
         "In Progress",
         "In Review",
     }
 
+    if history_complete and initial == "Done" and latest_done is None:
+        latest_done = created_at
     completed_at = latest_done if completed else None
 
     execution_elapsed = elapsed_hours(
@@ -605,7 +638,7 @@ def calculate_task(
 
     if not history_complete:
         history_note = (
-            "Status history is incomplete or unavailable."
+            "History coverage, timestamps, or status continuity could not be verified through cutoff."
         )
     else:
         history_note = None
@@ -621,6 +654,9 @@ def calculate_task(
         or "Unassigned",
         "priority": task.get("priority"),
         "status_at_cutoff": final_status,
+        "source_snapshot_status": current_status,
+        "status_known": history_complete,
+        "reached_review": (any(i["status"] == "In Review" for i in intervals) if history_complete else None),
         "created_at": (
             created_at.isoformat()
             if created_at is not None
@@ -719,7 +755,7 @@ def calculate_task(
         "time_in_status": status_times,
         "evaluation_cutoff": cutoff.isoformat(),
         "work_calendar_timezone": calendar.timezone_name,
-        "work_calendar_days": "Sunday-Thursday",
+        "work_calendar_days": ", ".join(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][d] for d in sorted(calendar.working_days)),
         "work_calendar_window": (
             f"{calendar.start_hour:02d}:00-"
             f"{calendar.end_hour:02d}:00"
@@ -734,6 +770,7 @@ def analyze_tasks(
     calendar: WorkCalendar,
 ) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
+    excluded = []
 
     for _, row in tasks_frame.iterrows():
         task = row.to_dict()
@@ -741,6 +778,10 @@ def analyze_tasks(
             task.get("issue_key") or ""
         ).strip()
 
+        created = parse_timestamp(task.get("created_at"), calendar.timezone_name)
+        if created is None or created > cutoff:
+            excluded.append({"issue_key": issue_key, "reason": "Creation missing/invalid" if created is None else "Created after cutoff"})
+            continue
         records.append(
             calculate_task(
                 task,
@@ -750,7 +791,9 @@ def analyze_tasks(
             )
         )
 
-    return pd.DataFrame(records)
+    result = pd.DataFrame(records)
+    result.attrs["excluded_tasks"] = excluded
+    return result
 
 
 def safe_mean(series: pd.Series) -> float | None:
@@ -833,11 +876,11 @@ def aggregate(
         ]
 
         valid_overdue = group[
-            group["overdue_days"].notna()
+            group["is_open"].eq(True) & group["overdue_days"].notna()
         ]
 
         valid_rework = group[
-            group["rework_count"].notna()
+            group["history_complete"].eq(True) & group["reached_review"].eq(True)
         ]
 
         on_time_count = int(
@@ -922,6 +965,24 @@ def aggregate(
             }
         )
 
+        reviewed = valid_rework
+        valid = group[group["history_complete"].eq(True)]
+        record["unknown_status_tasks"] = int((~group["status_known"].eq(True)).sum())
+        record["history_excluded_tasks"] = total - len(valid)
+        record["reviewed_valid_tasks"] = len(reviewed)
+        record["pending_before_execution"] = int(group["status_at_cutoff"].isin(["Idea", "In Triage", "To Do"]).sum())
+        for kind in ["rework", "replanning", "re_evaluation"]:
+            count = int((reviewed[kind + "_count"] > 0).sum())
+            record["tasks_with_" + kind] = count
+            record["total_" + kind + "_count"] = int(valid[kind + "_count"].sum()) if len(valid) else None
+            record[kind + "_rate"] = count / len(reviewed) * 100 if len(reviewed) else None
+        exception_count = int(reviewed[["rework_count", "replanning_count", "re_evaluation_count"]].gt(0).any(axis=1).sum())
+        record["review_exception_tasks"] = exception_count
+        record["review_exception_rate"] = exception_count / len(reviewed) * 100 if len(reviewed) else None
+        for field in ["execution_elapsed_hours", "execution_business_hours", "lead_time_elapsed_hours", "lead_time_business_hours", "time_to_start_elapsed_hours", "time_to_start_business_hours"]:
+            record["mean_" + field] = safe_mean(group[field])
+            record["median_" + field] = safe_median(group[field])
+            record[field + "_valid_tasks"] = int(group[field].notna().sum())
         rows.append(record)
 
     return pd.DataFrame(rows)
@@ -946,47 +1007,11 @@ def flatten_for_excel(
     return output
 
 
-def write_output(
-    output_path: Path,
-    task_metrics: pd.DataFrame,
-    overall: pd.DataFrame,
-    by_assignee: pd.DataFrame,
-    by_issue_type: pd.DataFrame,
-) -> None:
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    with pd.ExcelWriter(
-        output_path,
-        engine="openpyxl",
-    ) as writer:
-        flatten_for_excel(
-            task_metrics
-        ).to_excel(
-            writer,
-            index=False,
-            sheet_name="task_metrics",
-        )
-
-        overall.to_excel(
-            writer,
-            index=False,
-            sheet_name="overall_summary",
-        )
-
-        by_assignee.to_excel(
-            writer,
-            index=False,
-            sheet_name="by_assignee",
-        )
-
-        by_issue_type.to_excel(
-            writer,
-            index=False,
-            sheet_name="by_issue_type",
-        )
+def write_output(output_path, task_metrics, overall, by_assignee, by_issue_type, process_data=None):
+    from process_analysis import excel_bytes, process_tables
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(excel_bytes(task_metrics, process_data or process_tables(task_metrics)))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1080,6 +1105,10 @@ def main() -> int:
             calendar,
         )
 
+        if task_metrics.empty:
+            raise ValueError("No tasks created on or before cutoff with valid creation dates.")
+        from process_analysis import process_tables
+        tables = process_tables(task_metrics, histories)
         overall = aggregate(
             task_metrics,
             [],
@@ -1101,6 +1130,7 @@ def main() -> int:
             overall,
             by_assignee,
             by_issue_type,
+            process_data=tables,
         )
 
         print(

@@ -19,7 +19,6 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from jira_client import JiraClient
 from jira_processor import choose_sheet, normalize_tasks
 from metrics_engine import (
     aggregate,
@@ -29,6 +28,7 @@ from metrics_engine import (
     parse_timestamp,
 )
 from report_builder import build_report
+from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
 
 
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -37,7 +37,7 @@ METRICS_CONFIG_PATH = CONFIG_DIR / "jira_metrics_config.json"
 
 
 st.set_page_config(
-    page_title="Jira Executive Performance Dashboard",
+    page_title="Jira Process Performance Dashboard",
     page_icon="📊",
     layout="wide",
 )
@@ -77,61 +77,14 @@ def read_history_file(
     )
 
 
-def create_excel_download(
-    task_metrics: pd.DataFrame,
-    overall: pd.DataFrame,
-    by_assignee: pd.DataFrame,
-    by_issue_type: pd.DataFrame,
-) -> bytes:
-    buffer = BytesIO()
-
-    export_tasks = task_metrics.copy()
-
-    for column in ["labels", "time_in_status"]:
-        if column in export_tasks.columns:
-            export_tasks[column] = export_tasks[column].apply(
-                lambda value: json.dumps(
-                    value,
-                    ensure_ascii=False,
-                )
-                if isinstance(value, (list, dict))
-                else value
-            )
-
-    with pd.ExcelWriter(
-        buffer,
-        engine="openpyxl",
-    ) as writer:
-        export_tasks.to_excel(
-            writer,
-            index=False,
-            sheet_name="task_metrics",
-        )
-
-        overall.to_excel(
-            writer,
-            index=False,
-            sheet_name="overall_summary",
-        )
-
-        by_assignee.to_excel(
-            writer,
-            index=False,
-            sheet_name="by_assignee",
-        )
-
-        by_issue_type.to_excel(
-            writer,
-            index=False,
-            sheet_name="by_issue_type",
-        )
-
-    return buffer.getvalue()
+def create_excel_download(task_metrics, overall, by_assignee, by_issue_type, tables=None):
+    return excel_bytes(task_metrics, tables or process_tables(task_metrics))
 
 
 def create_word_report_download(
     task_metrics: pd.DataFrame,
     cutoff: str,
+    tables=None,
 ) -> bytes:
     temporary_file = tempfile.NamedTemporaryFile(
         suffix=".docx",
@@ -148,7 +101,8 @@ def create_word_report_download(
         build_report(
             task_metrics,
             temporary_path,
-            title="Jira Task Performance Evaluation Report",
+            title="Jira Process Performance Evaluation Report",
+            process_data=tables,
             evaluation_cutoff=cutoff,
             timezone_name="Asia/Damascus",
             work_days="Sunday-Thursday",
@@ -188,66 +142,13 @@ def format_percentage(
     return f"{numerator / denominator * 100:.1f}%"
 
 
-def calculate_dashboard_values(
-    task_metrics: pd.DataFrame,
-) -> dict[str, object]:
-    total = int(
-        task_metrics["issue_key"].nunique()
-    ) if "issue_key" in task_metrics.columns else len(task_metrics)
-
-    completed = int(
-        task_metrics["is_completed"].sum()
-    ) if "is_completed" in task_metrics.columns else 0
-
-    rejected = int(
-        task_metrics["is_rejected"].sum()
-    ) if "is_rejected" in task_metrics.columns else 0
-
-    open_tasks = int(
-        task_metrics["is_open"].sum()
-    ) if "is_open" in task_metrics.columns else 0
-
-    wip = int(
-        task_metrics["is_wip"].sum()
-    ) if "is_wip" in task_metrics.columns else 0
-
-    valid_on_time = task_metrics[
-        task_metrics["on_time_completion"].notna()
-    ] if "on_time_completion" in task_metrics.columns else pd.DataFrame()
-
-    on_time = int(
-        valid_on_time["on_time_completion"].sum()
-    ) if not valid_on_time.empty else 0
-
-    overdue = int(
-        (
-            task_metrics["overdue_days"].fillna(0) > 0
-        ).sum()
-    ) if "overdue_days" in task_metrics.columns else 0
-
-    rework = int(
-        (
-            task_metrics["rework_count"].fillna(0) > 0
-        ).sum()
-    ) if "rework_count" in task_metrics.columns else 0
-
-    return {
-        "total": total,
-        "completed": completed,
-        "rejected": rejected,
-        "open": open_tasks,
-        "wip": wip,
-        "completion_rate": format_percentage(
-            completed,
-            total,
-        ),
-        "on_time_rate": format_percentage(
-            on_time,
-            len(valid_on_time),
-        ),
-        "overdue": overdue,
-        "rework": rework,
-    }
+def calculate_dashboard_values(task_metrics):
+    row = aggregate(task_metrics, []).iloc[0]
+    return {"total": row["total_tasks"], "completed": row["completed_tasks"],
+            "rejected": row["rejected_tasks"], "open": row["open_tasks"], "wip": row["wip_tasks"],
+            "completion_rate": format_percentage(int(row["completed_tasks"]), int(row["total_tasks"])),
+            "on_time_rate": format_percentage(int(row["on_time_tasks"]), int(row["on_time_valid_tasks"])),
+            "overdue": row["overdue_open_tasks"], "rework": row["tasks_with_rework"]}
 
 
 def run_analysis(
@@ -258,7 +159,11 @@ def run_analysis(
     token: str,
     cutoff_text: str,
     source_timezone: str,
-) -> tuple[pd.DataFrame, list[dict]]:
+    history_source="Jira API",
+    coverage_through=None,
+    coverage_confirmed=False,
+    context_overrides=None,
+):
     input_config, metrics_config = load_configurations()
 
     cutoff = parse_timestamp(
@@ -294,7 +199,12 @@ def run_analysis(
         explicit_date_format=None,
     )
 
-    if uploaded_history is not None:
+    if history_source == "Workbook transitions":
+        histories = workbook_histories(workbook, tasks_frame, source_timezone,
+                                       coverage_through or cutoff_text, coverage_confirmed)
+    elif history_source == "History JSON":
+        if uploaded_history is None:
+            raise ValueError("Upload the history JSON file.")
         histories = read_history_file(
             uploaded_history,
         )
@@ -305,6 +215,7 @@ def run_analysis(
                 "or upload a history JSON file."
             )
 
+        from jira_client import JiraClient
         client = JiraClient(
             base_url=base_url.strip(),
             email=email.strip(),
@@ -331,15 +242,23 @@ def run_analysis(
         calendar=calendar,
     )
 
+    if task_metrics.empty:
+        raise ValueError("No tasks have a valid creation date on or before this cutoff.")
+    context = workbook_context(workbook)
+    context.update(context_overrides or {})
+    context["History source"] = history_source
+    task_metrics.attrs["process_context"] = context
     task_metrics.attrs["selected_sheet"] = sheet_name
     task_metrics.attrs["validation_log"] = validation_log
     task_metrics.attrs["cutoff"] = cutoff.isoformat()
 
-    return task_metrics, validation_log
+    tables = process_tables(task_metrics, histories, context, validation_log)
+    return task_metrics, validation_log, tables
 
 
 def show_executive_dashboard(
     task_metrics: pd.DataFrame,
+    process_data: dict | None = None,
 ) -> None:
     values = calculate_dashboard_values(
         task_metrics,
@@ -397,6 +316,43 @@ def show_executive_dashboard(
                 use_container_width=True,
             )
 
+        st.subheader("Open Tasks by Due Status")
+        st.caption(
+            "Open tasks with verified status, grouped by the supplied due date. "
+            "Unknown-status tasks remain separate in Data Quality."
+        )
+        deadline_table = process_data.get("deadline_summary") if process_data else None
+        if deadline_table is not None and not deadline_table.empty:
+            st.bar_chart(
+                deadline_table.set_index("due_status")["task_count"],
+                use_container_width=True,
+            )
+            st.dataframe(
+                deadline_table.rename(columns={
+                    "due_status": "Due status",
+                    "task_count": "Tasks",
+                    "share_of_open_known_tasks": "Share of open known tasks (%)",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        unknown_status = int(task_metrics["status_known"].eq(False).sum()) if "status_known" in task_metrics.columns else 0
+        late_completed = int((
+            task_metrics["is_completed"].eq(True)
+            & task_metrics["schedule_variance_days"].notna()
+            & task_metrics["schedule_variance_days"].gt(0)
+        ).sum()) if "schedule_variance_days" in task_metrics.columns else 0
+        card_a, card_b = st.columns(2)
+        card_a.metric("Completed late", late_completed)
+        card_b.metric("Status unavailable", unknown_status)
+        if process_data and not process_data.get("late_completed_tasks", pd.DataFrame()).empty:
+            st.caption("Completed late tasks")
+            st.dataframe(
+                process_data["late_completed_tasks"],
+                use_container_width=True,
+                hide_index=True,
+            )
+
     with right:
         if "assignee_name" in task_metrics.columns:
             assignee_frame = (
@@ -413,6 +369,7 @@ def show_executive_dashboard(
                         "is_open",
                         "sum",
                     ),
+                    Rejected=("is_rejected", "sum"),
                 )
                 .reset_index()
                 .rename(
@@ -425,167 +382,53 @@ def show_executive_dashboard(
             if not assignee_frame.empty:
                 st.subheader("Work Distribution by Assignee")
                 st.bar_chart(
-                    assignee_frame.set_index("Assignee")[["Completed", "Open"]],
+                    assignee_frame.set_index("Assignee")[["Completed", "Open", "Rejected"]],
                     use_container_width=True,
                 )
 
-    st.subheader(
-        "Executive Exceptions Requiring Review"
-    )
+    st.caption("Work distribution uses the uploaded assignee snapshot and does not establish individual contribution.")
 
-    exception_columns = [
-        "issue_key",
-        "task_name",
-        "issue_type",
-        "assignee_name",
-        "status_at_cutoff",
-        "overdue_days",
-        "rework_count",
-        "replanning_count",
-    ]
 
-    available_columns = [
-        column
-        for column in exception_columns
-        if column in task_metrics.columns
-    ]
-
-    exceptions = task_metrics.copy()
-
-    if "overdue_days" in exceptions.columns:
-        exceptions = exceptions[
-            exceptions["overdue_days"].fillna(0) > 0
-        ]
-
-    if exceptions.empty:
-        st.success(
-            "No overdue tasks were identified in the current scope."
-        )
+def show_process_analysis(frame, tables):
+    st.subheader("Process scope and definitions")
+    st.dataframe(tables["process_context"], hide_index=True, use_container_width=True)
+    row = tables["overall_summary"].iloc[0]
+    st.caption(f"Complete histories: {int(row['history_complete_tasks'])}/{int(row['total_tasks'])}; "
+               f"excluded from history-dependent metrics: {int(row['history_excluded_tasks'])}; "
+               f"reviewed tasks eligible for exception rates: {int(row['reviewed_valid_tasks'])}.")
+    counts = st.columns(4)
+    for col, label, count_name, rate_name in zip(counts,
+            ["Rework", "Replanning", "Re-evaluation", "Any review exception"],
+            ["tasks_with_rework", "tasks_with_replanning", "tasks_with_re_evaluation", "review_exception_tasks"],
+            ["rework_rate", "replanning_rate", "re_evaluation_rate", "review_exception_rate"]):
+        rate = row[rate_name]
+        col.metric(label, "Unavailable" if pd.isna(rate) else f"{rate:.2f}%")
+        col.caption(f"{int(row[count_name])} affected / {int(row['reviewed_valid_tasks'])} reviewed tasks")
+    event_counts = {kind: row["total_" + kind + "_count"] for kind in ["rework", "replanning", "re_evaluation"]}
+    st.write("Event totals (a task may have multiple events):", event_counts)
+    durations = []
+    for field in ["execution", "lead_time", "time_to_start"]:
+        durations.append({"Measure": field.replace("_", " ").title(),
+                          "Mean elapsed hours": row["mean_" + field + "_elapsed_hours"],
+                          "Mean business hours": row["mean_" + field + "_business_hours"],
+                          "Valid tasks": row[field + "_elapsed_hours_valid_tasks"]})
+    st.dataframe(pd.DataFrame(durations), hide_index=True, use_container_width=True)
+    st.subheader("Stage residence")
+    st.caption("Repeated visits are summed per task. Unfinished visits are included through cutoff; terminal states are excluded. These are process durations, not labor hours.")
+    st.dataframe(tables["stage_summary"], hide_index=True, use_container_width=True)
+    st.subheader("Open tasks and current waiting")
+    st.dataframe(tables["open_tasks"], hide_index=True, use_container_width=True)
+    st.subheader("Open overdue tasks")
+    if tables["overdue_tasks"].empty:
+        st.success("No open overdue tasks were identified in the current scope.")
     else:
-        st.dataframe(
-            exceptions[available_columns],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-
-def show_individual_achievements(
-    task_metrics: pd.DataFrame,
-) -> None:
-    st.subheader(
-        "Individual Achievement Profiles"
-    )
-
-    if "assignee_name" not in task_metrics.columns:
-        st.warning(
-            "Assignee information is unavailable."
-        )
-        return
-
-    assignees = sorted(
-        task_metrics["assignee_name"]
-        .fillna("Assignee unavailable")
-        .astype(str)
-        .unique()
-        .tolist()
-    )
-
-    selected_assignee = st.selectbox(
-        "Select an assignee",
-        assignees,
-    )
-
-    selected = task_metrics[
-        task_metrics["assignee_name"]
-        .fillna("Assignee unavailable")
-        .astype(str)
-        == selected_assignee
-    ]
-
-    completed = selected[
-        selected["is_completed"] == True
-    ]
-
-    valid_on_time = completed[
-        completed["on_time_completion"].notna()
-    ] if "on_time_completion" in completed.columns else pd.DataFrame()
-
-    on_time_count = int(
-        valid_on_time["on_time_completion"].sum()
-    ) if not valid_on_time.empty else 0
-
-    columns = st.columns(5)
-
-    columns[0].metric(
-        "Assigned Tasks",
-        len(selected),
-    )
-
-    columns[1].metric(
-        "Completed",
-        len(completed),
-    )
-
-    columns[2].metric(
-        "Completion Rate",
-        format_percentage(
-            len(completed),
-            len(selected),
-        ),
-    )
-
-    columns[3].metric(
-        "On-Time Rate",
-        format_percentage(
-            on_time_count,
-            len(valid_on_time),
-        ),
-    )
-
-    columns[4].metric(
-        "Open Tasks",
-        int(
-            selected["is_open"].sum()
-        ) if "is_open" in selected.columns else 0,
-    )
-
-    st.write(
-        (
-            f"Evidence-based achievement view for "
-            f"**{selected_assignee}**. "
-            "Durations describe process timing and do not "
-            "automatically prove effort or quality."
-        )
-    )
-
-    completed_columns = [
-        "issue_key",
-        "task_name",
-        "issue_type",
-        "labels",
-        "completed_at",
-        "due_date",
-        "on_time_completion",
-        "execution_business_hours",
-        "rework_count",
-    ]
-
-    completed_columns = [
-        column
-        for column in completed_columns
-        if column in completed.columns
-    ]
-
-    if completed.empty:
-        st.info(
-            "No completed tasks were verified for this assignee."
-        )
-    else:
-        st.dataframe(
-            completed[completed_columns],
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(tables["overdue_tasks"], hide_index=True, use_container_width=True)
+    st.subheader("Evidence and follow-up")
+    st.dataframe(tables["process_findings"], hide_index=True, use_container_width=True)
+    with st.expander("Transition audit trail"):
+        st.dataframe(tables["workflow_events"], hide_index=True, use_container_width=True)
+    with st.expander("Metric definitions"):
+        st.dataframe(tables["metric_definitions"], hide_index=True, use_container_width=True)
 
 
 def show_task_detail(
@@ -665,9 +508,12 @@ def show_task_detail(
         "issue_type",
         "labels",
         "assignee_name",
+        "priority",
         "status_at_cutoff",
         "created_at",
+        "planned_start_date",
         "actual_start_at",
+        "start_schedule_variance_days",
         "completed_at",
         "due_date",
         "execution_elapsed_hours",
@@ -691,6 +537,51 @@ def show_task_detail(
         use_container_width=True,
         hide_index=True,
     )
+
+
+def show_assignment_summary(task_metrics: pd.DataFrame) -> None:
+    st.subheader("Individual Achievements and Assignment Summary")
+    st.caption(
+        "Assignment uses the assignee recorded in the Jira snapshot. "
+        "Unassigned is a separate group; these values do not establish individual contribution."
+    )
+    st.dataframe(
+        aggregate(task_metrics, ["assignee_name"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    assignees = sorted(task_metrics["assignee_name"].fillna("Unassigned").astype(str).unique())
+    selected = st.selectbox(
+        "Show tasks for",
+        ["All", *assignees],
+        key="assignment_task_filter",
+    )
+    detail = task_metrics.copy()
+    if selected != "All":
+        detail = detail[detail["assignee_name"].fillna("Unassigned").astype(str).eq(selected)]
+
+    columns = [
+        "issue_key", "task_name", "priority", "status_at_cutoff",
+        "created_at", "planned_start_date", "actual_start_at",
+        "start_schedule_variance_days", "due_date", "completed_at",
+        "execution_elapsed_hours", "execution_business_hours",
+        "current_status_age_elapsed_hours", "current_status_age_business_hours",
+        "overdue_days", "rework_count",
+    ]
+    detail = detail[[column for column in columns if column in detail.columns]].rename(columns={
+        "issue_key": "Issue Key", "task_name": "Task Name", "priority": "Priority",
+        "status_at_cutoff": "Status", "created_at": "Created Date",
+        "planned_start_date": "Planned Start Date", "actual_start_at": "Actual Start Date",
+        "start_schedule_variance_days": "Start Variance (Days)", "due_date": "Due Date",
+        "completed_at": "Completed Date", "execution_elapsed_hours": "Execution Elapsed Hours",
+        "execution_business_hours": "Execution Business Hours",
+        "current_status_age_elapsed_hours": "Current Status Age (Elapsed Hours)",
+        "current_status_age_business_hours": "Current Status Age (Business Hours)",
+        "overdue_days": "Overdue Days", "rework_count": "Rework Count",
+    })
+    st.subheader("Task details")
+    st.dataframe(detail, use_container_width=True, hide_index=True)
 
 
 def show_data_quality(
@@ -735,11 +626,11 @@ def show_data_quality(
 
 
 st.title(
-    "Jira Executive Performance Dashboard"
+    "Jira Process Performance Dashboard"
 )
 
 st.caption(
-    "Executive delivery oversight and individual achievement analysis"
+    "Process analysis v2.0 — delivery, stage residence, review returns, and data coverage"
 )
 
 with st.sidebar:
@@ -754,11 +645,12 @@ with st.sidebar:
         "Optional Jira history JSON",
         type=["json"],
         help=(
-            "Use this for offline testing. If omitted, the app "
-            "will retrieve history from Jira API."
+            "Select History JSON below to use this file. New JSON exports include history coverage metadata."
         ),
     )
 
+    history_source = st.selectbox("History source", ["Jira API", "Workbook transitions", "History JSON"])
+    st.caption("Workbook transitions reads Workflow_Events without a Jira connection. JSON must include history_complete and history_through metadata.")
     st.subheader("Jira Connection")
 
     base_url = st.text_input(
@@ -790,14 +682,33 @@ with st.sidebar:
         microsecond=0,
     ).isoformat()
 
+    st.session_state.setdefault("evaluation_cutoff_input", default_cutoff)
     cutoff_text = st.text_input(
         "Evaluation cutoff",
-        value=default_cutoff,
+        key="evaluation_cutoff_input",
         help=(
             "Example: 2026-09-06T17:00:00+03:00"
         ),
     )
 
+    context_defaults = {}
+    if uploaded_excel is not None:
+        try:
+            context_defaults = workbook_context(read_workbook(uploaded_excel))
+        except Exception:
+            pass
+    if context_defaults.get("Evaluation Cutoff Date"):
+        st.caption("Workbook cutoff: " + context_defaults["Evaluation Cutoff Date"] +
+                   ". Enter the intended exact time above; a date alone does not specify end of day.")
+    process_name = st.text_input("Process name", value=context_defaults.get("Process Name", "Jira task process"))
+    process_scope = st.text_input("Evaluation scope", value=context_defaults.get("Evaluation Scope", "Process execution performance"))
+    dataset_type = st.text_input("Dataset type", value=context_defaults.get("Dataset Type", "Not specified"))
+    coverage_through = cutoff_text
+    coverage_confirmed = False
+    if history_source == "Workbook transitions":
+        coverage_through = st.text_input("History coverage ends at", value=cutoff_text,
+            help="The moment up to which the workbook status snapshot and complete transition log are valid. Must cover the evaluation cutoff.")
+        coverage_confirmed = st.checkbox("I confirm the workbook includes all status transitions from creation through this coverage time, and Status is the snapshot at that time.")
     run_button = st.button(
         "Run Analysis",
         type="primary",
@@ -806,6 +717,8 @@ with st.sidebar:
 
 if run_button:
     if uploaded_excel is None:
+        st.session_state.pop("task_metrics", None)
+        st.session_state.pop("process_data", None)
         st.error(
             "Upload the Jira Excel export first."
         )
@@ -814,7 +727,7 @@ if run_button:
             with st.spinner(
                 "Reading data and calculating Jira metrics..."
             ):
-                task_metrics, validation_log = run_analysis(
+                task_metrics, validation_log, process_data = run_analysis(
                     uploaded_excel,
                     uploaded_history,
                     base_url,
@@ -822,8 +735,13 @@ if run_button:
                     token,
                     cutoff_text,
                     source_timezone,
+                    history_source=history_source,
+                    coverage_through=coverage_through,
+                    coverage_confirmed=coverage_confirmed,
+                    context_overrides={"Process Name": process_name, "Evaluation Scope": process_scope, "Dataset Type": dataset_type},
                 )
 
+            st.session_state["process_data"] = process_data
             st.session_state["task_metrics"] = task_metrics
             st.session_state["validation_log"] = validation_log
             st.session_state["cutoff_text"] = cutoff_text
@@ -833,9 +751,16 @@ if run_button:
             )
 
         except Exception as exc:
+            st.session_state.pop("task_metrics", None)
+            st.session_state.pop("process_data", None)
             st.error(
                 f"Analysis failed: {exc}"
             )
+
+if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
+    st.session_state.pop("task_metrics", None)
+    st.session_state.pop("process_data", None)
+    st.info("The analysis has been updated. Run Analysis to calculate the new process metrics.")
 
 if "task_metrics" in st.session_state:
     task_metrics = st.session_state["task_metrics"]
@@ -844,9 +769,14 @@ if "task_metrics" in st.session_state:
         [],
     )
 
-    tab_dashboard, tab_individual, tab_tasks, tab_quality = st.tabs(
+    process_data = st.session_state.get("process_data") or process_tables(task_metrics)
+    st.caption("Results calculated through: " + str(task_metrics.iloc[0]["evaluation_cutoff"]))
+    if not task_metrics["history_complete"].all():
+        st.warning("Some task histories cannot be verified. Affected statuses and metrics are unavailable; see Data Quality.")
+    tab_dashboard, tab_process, tab_individual, tab_tasks, tab_quality = st.tabs(
         [
             "Executive Dashboard",
+            "Process Analysis",
             "Individual Achievements",
             "Task Detail",
             "Data Quality",
@@ -856,12 +786,14 @@ if "task_metrics" in st.session_state:
     with tab_dashboard:
         show_executive_dashboard(
             task_metrics,
+            process_data,
         )
 
+    with tab_process:
+        show_process_analysis(task_metrics, process_data)
+
     with tab_individual:
-        show_individual_achievements(
-            task_metrics,
-        )
+        show_assignment_summary(task_metrics)
 
     with tab_tasks:
         show_task_detail(
@@ -869,6 +801,7 @@ if "task_metrics" in st.session_state:
         )
 
     with tab_quality:
+        st.dataframe(process_data["data_quality"], hide_index=True, use_container_width=True)
         show_data_quality(
             task_metrics,
             validation_log,
@@ -903,6 +836,7 @@ if "task_metrics" in st.session_state:
                 overall,
                 by_assignee,
                 by_issue_type,
+                tables=process_data,
             ),
             file_name="jira_performance_analysis.xlsx",
             mime=(
@@ -920,6 +854,7 @@ if "task_metrics" in st.session_state:
                     "cutoff_text",
                     cutoff_text,
                 ),
+                tables=process_data,
             )
 
             st.download_button(

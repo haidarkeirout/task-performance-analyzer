@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -213,6 +214,8 @@ class JiraClient:
             values = payload.get("values", [])
 
             if not values:
+                if payload.get("total") is not None and start_at < int(payload["total"]):
+                    raise JiraApiError("Changelog ended before its declared total.")
                 break
 
             all_changes.extend(values)
@@ -223,7 +226,11 @@ class JiraClient:
             if total is not None and start_at >= int(total):
                 break
 
-            if len(values) < page_size:
+            if payload.get("isLast") is True:
+                if total is not None and start_at < int(total):
+                    raise JiraApiError("Changelog pagination metadata is inconsistent.")
+                break
+            if total is None and "isLast" not in payload and len(values) < page_size:
                 break
 
         return all_changes
@@ -295,12 +302,16 @@ class JiraClient:
         return events
 
     def fetch_issue_history(self, issue_key: str) -> dict[str, Any]:
+        retrieved_at = datetime.now(timezone.utc).isoformat()
         snapshot = self.get_issue_snapshot(issue_key)
         changelog = self.get_issue_changelog(issue_key)
 
         return {
             "issue_key": issue_key,
             "snapshot": snapshot,
+            "history_complete": True,
+            "history_through": retrieved_at,
+            "initial_status": snapshot.get("current_status") if not self._extract_status_events(issue_key, changelog) else None,
             "status_events": self._extract_status_events(
                 issue_key,
                 changelog,
