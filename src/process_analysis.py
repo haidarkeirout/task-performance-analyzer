@@ -32,6 +32,14 @@ DEADLINE_COLUMNS = [
     "share_of_open_known_tasks",
 ]
 
+WEEKLY_FLOW_COLUMNS = [
+    "week_start",
+    "tasks_opened",
+    "tasks_completed",
+    "net_flow",
+    "cumulative_net_flow",
+]
+
 
 def workbook_context(workbook):
     frame = workbook.get("Process_Context")
@@ -160,6 +168,58 @@ def deadline_summary(frame):
     )
 
 
+def weekly_flow_summary(frame):
+    """Count task creation and completion events by Monday-starting week.
+
+    The chart is intentionally based on task-level created/completed dates,
+    not on status-transition rows. Each task can therefore contribute at most
+    once to each weekly series. Counts are limited to the evaluation cutoff.
+    """
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=WEEKLY_FLOW_COLUMNS)
+
+    timezone_name = str(frame.iloc[0].get("work_calendar_timezone") or "UTC")
+    try:
+        created = pd.to_datetime(frame.get("created_at"), utc=True, errors="coerce")
+        completed = pd.to_datetime(frame.get("completed_at"), utc=True, errors="coerce")
+        created = created.dt.tz_convert(timezone_name)
+        completed = completed.dt.tz_convert(timezone_name)
+    except (TypeError, ValueError):
+        return pd.DataFrame(columns=WEEKLY_FLOW_COLUMNS)
+
+    cutoff = parse_timestamp(frame.iloc[0].get("evaluation_cutoff"), "UTC")
+    if cutoff is not None:
+        cutoff_local = cutoff.tz_convert(timezone_name)
+        created = created.where(created.le(cutoff_local))
+        completed = completed.where(completed.le(cutoff_local))
+
+    def week_starts(values):
+        values = values.dropna()
+        if values.empty:
+            return pd.Series(dtype="datetime64[ns]")
+        normalized = values.dt.normalize()
+        starts = normalized - pd.to_timedelta(normalized.dt.weekday, unit="D")
+        # Excel cannot store timezone-aware datetimes. Keep the local calendar
+        # date as a naive timestamp for charts and exports.
+        return starts.dt.tz_localize(None)
+
+    created_weeks = week_starts(created)
+    completed_weeks = week_starts(completed)
+    available = pd.concat([created_weeks, completed_weeks], ignore_index=True).dropna()
+    if available.empty:
+        return pd.DataFrame(columns=WEEKLY_FLOW_COLUMNS)
+
+    first_week = available.min()
+    last_week = available.max()
+    weeks = pd.date_range(first_week, last_week, freq="7D")
+    result = pd.DataFrame({"week_start": weeks})
+    result["tasks_opened"] = result["week_start"].map(created_weeks.value_counts()).fillna(0).astype(int)
+    result["tasks_completed"] = result["week_start"].map(completed_weeks.value_counts()).fillna(0).astype(int)
+    result["net_flow"] = result["tasks_opened"] - result["tasks_completed"]
+    result["cumulative_net_flow"] = result["net_flow"].cumsum()
+    return result[WEEKLY_FLOW_COLUMNS]
+
+
 def process_tables(frame, histories=None, context=None, validation_log=None):
     context = dict(context or frame.attrs.get("process_context", {}))
     histories = histories or {}
@@ -175,6 +235,7 @@ def process_tables(frame, histories=None, context=None, validation_log=None):
                 "source": event.get("source", "History JSON"), "included_in_metrics": task["history_complete"]})
     stages = stage_summary(frame)
     deadlines = deadline_summary(frame)
+    weekly_flow = weekly_flow_summary(frame)
     quality = [{"issue_key": t["issue_key"], "finding": t["history_note"]}
                for t in frame.to_dict("records") if not t["history_complete"]]
     for t in frame.to_dict("records"):
@@ -215,6 +276,7 @@ def process_tables(frame, histories=None, context=None, validation_log=None):
         "workflow_events": pd.DataFrame(events, columns=EVENT_COLUMNS),
         "stage_summary": stages,
         "deadline_summary": deadlines,
+        "weekly_flow": weekly_flow,
         "overdue_tasks": frame.loc[
             frame["is_open"].eq(True)
             & frame["overdue_days"].notna()

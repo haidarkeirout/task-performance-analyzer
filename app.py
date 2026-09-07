@@ -151,6 +151,51 @@ def calculate_dashboard_values(task_metrics):
             "overdue": row["overdue_open_tasks"], "rework": row["tasks_with_rework"]}
 
 
+def show_weekly_task_flow(process_data: dict | None = None) -> None:
+    """Show weekly task intake versus completion without a chart dependency."""
+    weekly = process_data.get("weekly_flow") if process_data else None
+    st.subheader("Weekly Task Flow")
+    st.caption(
+        "Tasks opened are grouped by Created Date; tasks completed are grouped by the date they reached Done. "
+        "Each point represents a Monday-starting week."
+    )
+    if weekly is None or weekly.empty:
+        st.info("No created or completed dates are available for a weekly trend.")
+        return
+
+    range_options = {
+        "All available weeks": None,
+        "Last 4 weeks": 4,
+        "Last 12 weeks (quarter)": 12,
+        "Last 52 weeks (year)": 52,
+    }
+    selected_range = st.selectbox(
+        "Trend period",
+        list(range_options),
+        key="weekly_flow_period",
+    )
+    weeks_to_show = range_options[selected_range]
+    visible = weekly.tail(weeks_to_show).copy() if weeks_to_show else weekly.copy()
+    chart = visible.set_index("week_start")[["tasks_opened", "tasks_completed"]].rename(
+        columns={
+            "tasks_opened": "Tasks Opened",
+            "tasks_completed": "Tasks Completed",
+        }
+    )
+    st.line_chart(chart, use_container_width=True)
+    st.dataframe(
+        visible.rename(columns={
+            "week_start": "Week Starting",
+            "tasks_opened": "Tasks Opened",
+            "tasks_completed": "Tasks Completed",
+            "net_flow": "Net Flow",
+            "cumulative_net_flow": "Cumulative Net Flow",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def run_analysis(
     uploaded_excel,
     uploaded_history,
@@ -295,6 +340,10 @@ def show_executive_dashboard(
         "WIP Tasks",
         values["wip"],
     )
+
+    st.divider()
+
+    show_weekly_task_flow(process_data)
 
     st.divider()
 

@@ -18,7 +18,7 @@ from docx import Document
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from metrics_engine import WorkCalendar, analyze_tasks, calculate_task, aggregate, parse_timestamp, business_hours_between
-from process_analysis import workbook_histories, workbook_context, process_tables, stage_summary, excel_bytes
+from process_analysis import workbook_histories, workbook_context, process_tables, stage_summary, weekly_flow_summary, excel_bytes
 from jira_processor import choose_sheet, normalize_tasks
 from report_builder import build_report
 
@@ -111,7 +111,25 @@ class EngineTests(unittest.TestCase):
             doc=Document(p);text='\n'.join(x.text for x in doc.paragraphs)
             self.assertIn('Rework: Unavailable (0/0 tasks)',text)
             self.assertIn('Stage Residence',text)
-            self.assertNotIn('Individual Achievement Profile',text)
+        self.assertNotIn('Individual Achievement Profile',text)
+
+    def test_weekly_flow_counts_created_and_completed_tasks(self):
+        flow_cutoff = "2026-09-10T20:59:59Z"
+        frame = pd.DataFrame([
+            {"issue_key": "T-1", "created_at": "2026-09-01T08:00:00Z", "completed_at": "2026-09-03T08:00:00Z",
+             "evaluation_cutoff": flow_cutoff, "work_calendar_timezone": "Asia/Damascus"},
+            {"issue_key": "T-2", "created_at": "2026-09-08T08:00:00Z", "completed_at": None,
+             "evaluation_cutoff": flow_cutoff, "work_calendar_timezone": "Asia/Damascus"},
+            {"issue_key": "T-3", "created_at": "2026-09-08T08:00:00Z", "completed_at": "2026-09-09T08:00:00Z",
+             "evaluation_cutoff": flow_cutoff, "work_calendar_timezone": "Asia/Damascus"},
+        ])
+        weekly = weekly_flow_summary(frame)
+        self.assertEqual(len(weekly), 2)
+        self.assertEqual(weekly.iloc[0]["tasks_opened"], 1)
+        self.assertEqual(weekly.iloc[0]["tasks_completed"], 1)
+        self.assertEqual(weekly.iloc[1]["tasks_opened"], 2)
+        self.assertEqual(weekly.iloc[1]["tasks_completed"], 1)
+        self.assertEqual(weekly.iloc[1]["net_flow"], 1)
 
 class WorkbookTests(unittest.TestCase):
     @classmethod

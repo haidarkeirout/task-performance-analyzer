@@ -59,6 +59,11 @@ inferred timestamp or an assertion about later Jira activity.
   overdue, within-due-date, and missing-due-date open tasks. It separately shows
   tasks whose status cannot be verified, plus a separate count/table for completed
   tasks that finished after the supplied due date.
+- The Executive Dashboard adds a native `Weekly Task Flow` line chart with
+  `Tasks Opened` and `Tasks Completed`, grouped into Monday-starting weeks. The
+  view supports all available weeks, the last 4 weeks, the last 12 weeks
+  (quarter), and the last 52 weeks (year), and exports the weekly table with
+  net and cumulative flow values.
 - Assignment Summary and Task Detail show created date, planned start date,
   actual start date, start schedule variance in days, due date, completion date,
   priority, current-status age, and overdue days. Positive start variance means
