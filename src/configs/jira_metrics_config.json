@@ -1,0 +1,630 @@
+{
+  "config_version": "2.0-process",
+  "source": "jira",
+  "depends_on": [
+    "jira_workflow_config.json",
+    "jira_input_config.json"
+  ],
+  "calculation_contract": {
+    "definition_format": "declarative_rules_for_future_processing_code",
+    "task_identity": [
+      "jira_site_url",
+      "issue_key"
+    ],
+    "task_scope": "uploaded_tasks_created_on_or_before_evaluation_cutoff",
+    "unknown_creation_time": "require_evidence_task_existed_at_cutoff",
+    "status_reference": "verified_status_at_evaluation_cutoff",
+    "events_included": "changed_at_less_than_or_equal_to_evaluation_cutoff",
+    "datetime_calculation_timezone": "UTC",
+    "calendar_date_timezone": "Asia/Damascus",
+    "naive_source_timestamp_timezone": "use_confirmed_source_timezone_from_input_config",
+    "elapsed_hours_calculation": "elapsed_seconds_divided_by_3600",
+    "round_only_for_display": true,
+    "display_decimal_places": 2,
+    "unavailable_value": null,
+    "show_unavailability_reason": true,
+    "replace_unavailable_with_zero": false,
+    "negative_duration": "mark_unavailable_and_flag_data_conflict",
+    "zero_denominator": "return_null_and_explain"
+  },
+  "work_calendar": {
+    "timezone": "Asia/Damascus",
+    "working_days": [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday"
+    ],
+    "weekend_days": [
+      "Friday",
+      "Saturday"
+    ],
+    "daily_windows": [
+      {
+        "start": "09:00",
+        "end": "17:00"
+      }
+    ],
+    "interval_boundary": "start_inclusive_end_exclusive",
+    "break_deduction_minutes": 0,
+    "break_rule": "no_break_deduction_defined",
+    "holiday_dates": [],
+    "holiday_date_format": "YYYY-MM-DD",
+    "holiday_policy": "exclude_only_explicitly_configured_dates",
+    "holiday_list_status": "not_provided",
+    "show_calendar_assumptions": true,
+    "individual_calendar_overrides": "not_configured",
+    "business_hours_calculation": "sum_interval_intersections_with_working_windows_excluding_weekends_and_configured_holidays",
+    "business_hours_meaning": "elapsed_time_within_work_calendar_not_actual_employee_labor",
+    "outside_business_hours_calculation": "elapsed_hours_minus_business_hours",
+    "outside_business_hours_meaning": "elapsed_time_outside_calendar_not_proof_of_work"
+  },
+  "history_rules": {
+    "sort_events": "chronological_with_verified_order_for_timestamp_ties",
+    "ambiguous_event_order": "disable_affected_metrics_and_flag",
+    "validate_status_sequence": true,
+    "unknown_status": "require_workflow_mapping",
+    "initial_status_interval": "include_from_created_at_only_when_initial_status_and_history_are_verified",
+    "repeated_status_visits": "sum_all_verified_intervals",
+    "last_status_interval_end": "evaluation_cutoff",
+    "clip_intervals_at_cutoff": true,
+    "incomplete_history": "disable_metrics_requiring_missing_intervals_or_events",
+    "partial_observed_durations": "may_display_separately_with_partial_label",
+    "use_partial_durations_as_complete_totals": false,
+    "zero_transition_count": "allowed_only_when_relevant_history_is_complete"
+  },
+  "completion_rules": {
+    "completed_statuses": [
+      "Done"
+    ],
+    "rejected_statuses": [
+      "Rejected"
+    ],
+    "completed_at": "latest_verified_entry_into_Done_at_or_before_cutoff_if_status_at_cutoff_is_Done",
+    "done_without_verified_entry_timestamp": "completion_timestamp_unavailable",
+    "reopened_task": "task_that_left_Done_for_a_nonterminal_status",
+    "reopened_and_still_open": "exclude_from_completed_duration_and_on_time_metrics",
+    "reopened_then_completed_again": "use_latest_entry_into_Done",
+    "execution_duration_after_reopening": "measure_from_first_actual_start_to_latest_completion",
+    "count_completed_task_once": true,
+    "rejected_counts_as_completed": false,
+    "infer_completion_from_resolution_field": false
+  },
+  "duration_rules": {
+    "output_units": [
+      "elapsed_hours",
+      "business_hours"
+    ],
+    "use_same_verified_intervals_for_both_units": true,
+    "business_hours_require": [
+      "configured_work_calendar",
+      "verified_interval_boundaries"
+    ],
+    "missing_calendar_or_interval_data": "mark_affected_duration_unavailable",
+    "primary_process_duration_display": "business_hours",
+    "secondary_process_duration_display": "elapsed_hours",
+    "actual_labor_hours": "separate_from_process_durations"
+  },
+  "task_metrics": {
+    "actual_start_at": {
+      "label": "Actual Start",
+      "calculation": "first_verified_entry_into_In_Progress_at_or_before_cutoff",
+      "requires": [
+        "history_complete_enough_to_establish_first_start"
+      ],
+      "no_entry_with_complete_history": "not_started",
+      "use_planned_start_as_fallback": false
+    },
+    "completed_at": {
+      "label": "Completion Timestamp",
+      "calculation": "apply_completion_rules"
+    },
+    "execution_duration": {
+      "label": "Execution Duration",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "completed_at_cutoff",
+      "interval": "actual_start_at_to_completed_at",
+      "requires": [
+        "actual_start_at",
+        "completed_at"
+      ],
+      "interpretation": "process_duration_including_review_waiting_and_returns"
+    },
+    "lead_time": {
+      "label": "Lead Time",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "completed_at_cutoff",
+      "interval": "created_at_to_completed_at",
+      "requires": [
+        "created_at",
+        "completed_at"
+      ]
+    },
+    "time_to_start": {
+      "label": "Time to Start",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "tasks_with_verified_actual_start",
+      "interval": "created_at_to_actual_start_at",
+      "requires": [
+        "created_at",
+        "actual_start_at"
+      ]
+    },
+    "task_age": {
+      "label": "Open Task Age",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "open_at_cutoff",
+      "interval": "created_at_to_evaluation_cutoff",
+      "requires": [
+        "created_at"
+      ]
+    },
+    "ongoing_execution_age": {
+      "label": "Ongoing Execution Age",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "open_at_cutoff_with_verified_actual_start",
+      "interval": "actual_start_at_to_evaluation_cutoff",
+      "requires": [
+        "actual_start_at"
+      ]
+    },
+    "time_in_status": {
+      "label": "Time in Status",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "output": "durations_per_workflow_status",
+      "calculation": "sum_verified_intervals_for_each_status_through_cutoff",
+      "requires": [
+        "complete_status_interval_coverage"
+      ],
+      "terminal_status_time": "reported_separately_from_process_time"
+    },
+    "in_progress_duration": {
+      "label": "Time in Progress",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "calculation": "time_in_status_for_In_Progress",
+      "interpretation": "status_residence_time_not_logged_labor"
+    },
+    "review_duration": {
+      "label": "Time in Review",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "calculation": "time_in_status_for_In_Review"
+    },
+    "current_status_age": {
+      "label": "Current Status Age",
+      "units": [
+        "elapsed_hours",
+        "business_hours"
+      ],
+      "eligible_tasks": "open_at_cutoff",
+      "interval": "verified_current_status_interval_start_to_evaluation_cutoff",
+      "requires": [
+        "verified_current_status_interval_start"
+      ]
+    },
+    "rework_count": {
+      "label": "Rework Count",
+      "unit": "count",
+      "calculation": "count_transitions_matching_workflow_exception_type_rework",
+      "requires": [
+        "complete_status_history_through_cutoff"
+      ]
+    },
+    "replanning_count": {
+      "label": "Replanning Count",
+      "unit": "count",
+      "calculation": "count_transitions_matching_workflow_exception_type_replanning",
+      "requires": [
+        "complete_status_history_through_cutoff"
+      ]
+    },
+    "re_evaluation_count": {
+      "label": "Re-evaluation Count",
+      "unit": "count",
+      "calculation": "count_transitions_matching_workflow_exception_type_re_evaluation",
+      "requires": [
+        "complete_status_history_through_cutoff"
+      ]
+    },
+    "reopen_count": {
+      "label": "Reopen Count",
+      "unit": "count",
+      "calculation": "count_verified_transitions_from_Done_to_an_open_status",
+      "requires": [
+        "complete_status_history_through_cutoff"
+      ]
+    },
+    "on_time_completion": {
+      "label": "Completed on Time",
+      "output_type": "boolean_or_null",
+      "eligible_tasks": "completed_at_cutoff",
+      "calculation": "local_calendar_date_of_completed_at_less_than_or_equal_to_due_date",
+      "requires": [
+        "completed_at",
+        "due_date_valid_at_cutoff"
+      ]
+    },
+    "schedule_variance": {
+      "label": "Completion Schedule Variance",
+      "unit": "calendar_days",
+      "eligible_tasks": "completed_at_cutoff",
+      "calculation": "local_calendar_date_of_completed_at_minus_due_date",
+      "requires": [
+        "completed_at",
+        "due_date_valid_at_cutoff"
+      ],
+      "positive_means": "completed_late",
+      "negative_means": "completed_early",
+      "zero_means": "completed_on_due_date"
+    },
+    "overdue_days": {
+      "label": "Overdue Days",
+      "unit": "calendar_days",
+      "completed_task_calculation": "maximum_of_zero_and_schedule_variance",
+      "open_task_calculation": "maximum_of_zero_and_local_cutoff_date_minus_due_date",
+      "rejected_task_result": null,
+      "requires": [
+        "due_date_valid_at_cutoff"
+      ],
+      "completed_task_additional_requirement": "completed_at"
+    },
+    "start_schedule_variance": {
+      "label": "Start Schedule Variance",
+      "unit": "calendar_days",
+      "eligible_tasks": "tasks_with_verified_actual_start",
+      "calculation": "local_calendar_date_of_actual_start_at_minus_planned_start_date",
+      "requires": [
+        "actual_start_at",
+        "planned_start_date_valid_at_cutoff"
+      ],
+      "positive_means": "started_late",
+      "negative_means": "started_early"
+    }
+  },
+  "schedule_rules": {
+    "timezone": "Asia/Damascus",
+    "due_date_is_inclusive": true,
+    "date_only_due_deadline": "end_of_due_calendar_date",
+    "automatically_treat_17_00_as_due_deadline": false,
+    "overdue_begins": "next_calendar_date_after_due_date",
+    "due_date_on_nonworking_day": "preserve_original_date_and_flag",
+    "automatically_shift_due_dates": false,
+    "missing_due_date": "exclude_from_schedule_metrics_and_report_missing_count",
+    "historical_evaluation": "require_schedule_field_values_valid_at_cutoff",
+    "schedule_reference": "dates_valid_at_cutoff",
+    "original_baseline_adherence": "unavailable_without_verified_baseline_dates",
+    "changed_dates": "flag_when_verified_changes_exist",
+    "infer_original_dates": false
+  },
+  "recorded_work_rules": {
+    "enabled_when_data_available": true,
+    "accepted_sources": [
+      "jira_worklogs",
+      "verified_time_tracking_records"
+    ],
+    "purpose": "report_recorded_labor_separately_from_process_duration",
+    "required_fields": [
+      "record_id",
+      "issue_key",
+      "worker_id",
+      "recorded_duration_seconds",
+      "work_date_or_started_at"
+    ],
+    "validate_task_worker_duration_and_cutoff": true,
+    "deduplicate_by": [
+      "source",
+      "record_id"
+    ],
+    "multiple_sources_for_same_work": "resolve_overlap_before_summing",
+    "historical_cutoff": "require_records_and_values_valid_for_evaluation_scope",
+    "records_crossing_cutoff": "split_only_with_verified_work_intervals_otherwise_flag",
+    "reported_hours_label": "Recorded Work Hours",
+    "treat_recorded_hours_as_independently_verified_productivity": false,
+    "within_outside_split_requires": "verified_actual_work_intervals",
+    "infer_continuous_work_from_start_plus_duration": false,
+    "duration_only_records": "include_in_recorded_total_with_time_distribution_unknown",
+    "interval_based_split": "intersect_verified_work_intervals_with_work_calendar",
+    "outside_calendar_categories": [
+      "before_09_00_on_working_days",
+      "after_17_00_on_working_days",
+      "weekend",
+      "configured_holiday"
+    ],
+    "category_overlap": "assign_each_interval_once",
+    "missing_records": "unavailable_not_zero",
+    "infer_labor_from_status_residence": false,
+    "infer_labor_from_transition_timestamp": false,
+    "outside_hours_label": "Recorded Work Outside Standard Hours",
+    "infer_approved_or_payable_overtime": false,
+    "automatic_performance_bonus_for_outside_hours": false
+  },
+  "aggregate_metrics": {
+    "total_tasks": {
+      "calculation": "count_distinct_in_scope_tasks"
+    },
+    "completed_tasks": {
+      "calculation": "count_distinct_tasks_in_completed_status_at_cutoff"
+    },
+    "rejected_tasks": {
+      "calculation": "count_distinct_tasks_in_rejected_status_at_cutoff"
+    },
+    "open_tasks": {
+      "calculation": "count_distinct_tasks_in_open_status_group_at_cutoff"
+    },
+    "wip_tasks": {
+      "calculation": "count_distinct_tasks_in_wip_status_group_at_cutoff",
+      "relationship": "subset_of_open_tasks"
+    },
+    "completion_rate": {
+      "unit": "percent",
+      "numerator": "completed_tasks",
+      "denominator": "total_tasks",
+      "multiplier": 100,
+      "interpretation": "completed_share_of_uploaded_task_scope_at_cutoff"
+    },
+    "rejection_rate": {
+      "unit": "percent",
+      "numerator": "rejected_tasks",
+      "denominator": "total_tasks",
+      "multiplier": 100
+    },
+    "on_time_completion_rate": {
+      "unit": "percent",
+      "numerator": "completed_tasks_with_on_time_completion_true",
+      "denominator": "completed_tasks_with_non_null_on_time_completion",
+      "multiplier": 100
+    },
+    "open_overdue_rate": {
+      "unit": "percent",
+      "numerator": "open_tasks_with_overdue_days_greater_than_zero",
+      "denominator": "open_tasks_with_non_null_overdue_days",
+      "multiplier": 100
+    },
+    "tasks_with_rework_rate": {
+      "unit": "percent",
+      "numerator": "tasks_with_rework_count_greater_than_zero",
+      "denominator": "distinct_reviewed_tasks_with_complete_history",
+      "multiplier": 100
+    },
+    "rework_rate": {
+      "unit": "percent",
+      "numerator": "distinct_reviewed_tasks_with_rework",
+      "denominator": "distinct_reviewed_tasks_with_complete_history",
+      "zero_denominator": null,
+      "multiplier": 100
+    },
+    "replanning_rate": {
+      "unit": "percent",
+      "numerator": "distinct_reviewed_tasks_with_replanning",
+      "denominator": "distinct_reviewed_tasks_with_complete_history",
+      "zero_denominator": null,
+      "multiplier": 100
+    },
+    "re_evaluation_rate": {
+      "unit": "percent",
+      "numerator": "distinct_reviewed_tasks_with_re_evaluation",
+      "denominator": "distinct_reviewed_tasks_with_complete_history",
+      "zero_denominator": null,
+      "multiplier": 100
+    },
+    "review_exception_rate": {
+      "unit": "percent",
+      "numerator": "distinct_reviewed_tasks_with_review_exception",
+      "denominator": "distinct_reviewed_tasks_with_complete_history",
+      "zero_denominator": null,
+      "multiplier": 100
+    }
+  },
+  "aggregation_rules": {
+    "duration_metrics": [
+      "execution_duration",
+      "lead_time",
+      "time_to_start",
+      "task_age",
+      "ongoing_execution_age",
+      "in_progress_duration",
+      "review_duration",
+      "current_status_age"
+    ],
+    "duration_statistics": [
+      "mean",
+      "median",
+      "minimum",
+      "maximum"
+    ],
+    "aggregate_each_duration_unit_separately": true,
+    "transition_count_metrics": [
+      "rework_count",
+      "replanning_count",
+      "re_evaluation_count",
+      "reopen_count"
+    ],
+    "transition_count_statistics": [
+      "sum",
+      "tasks_with_at_least_one",
+      "valid_task_count"
+    ],
+    "recorded_work_totals": [
+      "recorded_total_hours",
+      "recorded_within_standard_hours",
+      "recorded_outside_standard_hours",
+      "recorded_hours_with_unknown_time_distribution"
+    ],
+    "partial_recorded_work_coverage": "label_totals_as_partial_and_show_coverage",
+    "exclude_nulls_from_calculation": true,
+    "show_eligible_task_count": true,
+    "show_valid_task_count": true,
+    "show_unavailable_task_count": true,
+    "show_rate_numerator_and_denominator": true,
+    "no_valid_values_result": null,
+    "pooled_means": "calculate_from_task_values_not_average_of_group_means"
+  },
+  "analysis_dimensions": {
+    "enabled": [
+      "assignee",
+      "issue_type",
+      "labels"
+    ],
+    "allow_combined_filters": true,
+    "apply_filters_before_aggregation": true,
+    "default_assignee_reference": "verified_assignee_at_evaluation_cutoff",
+    "assignee_group_key": "assignee_id_with_warned_name_fallback",
+    "confirmed_unassigned_label": "Unassigned",
+    "unknown_assignee_label": "Assignee unavailable",
+    "issue_type_reference": "verified_issue_type_at_evaluation_cutoff",
+    "preserve_all_issue_types": true,
+    "example_issue_types": [
+      "Task",
+      "Bug"
+    ],
+    "labels_reference": "verified_labels_at_evaluation_cutoff",
+    "multiple_selected_labels_default_match": "any",
+    "allow_all_selected_labels_match": true,
+    "multi_label_tasks": "include_once_in_each_applicable_label_group",
+    "overall_count": "count_distinct_task_identity",
+    "sum_label_groups_to_get_overall": false,
+    "missing_dimensions": "show_explicit_unavailable_group"
+  },
+  "individual_attribution": {
+    "completed_task_owner": "verified_assignee_at_selected_completion_timestamp",
+    "open_task_owner": "verified_assignee_at_evaluation_cutoff",
+    "recorded_work_owner": "verified_worker_on_work_record",
+    "required_additional_history": [
+      "assignee_changes_with_timestamps"
+    ],
+    "assignee_history_incomplete": "completion_owner_unavailable_unless_independently_verified",
+    "fallback_to_current_assignee_for_completed_achievement": false,
+    "completion_owner_meaning": "responsible_assignee_at_completion_not_sole_contributor",
+    "contributors": "show_only_when_supported_by_records",
+    "shared_task_counting": "count_once_overall_and_separate_owner_from_contributor_views",
+    "attribute_all_task_duration_to_one_employee": false,
+    "attribute_rework_blame_to_assignee": false,
+    "unknown_completion_owner": "retain_in_overall_results_and_show_attribution_unavailable"
+  },
+  "output_requirements": {
+    "dashboard": {
+      "audience": "executives",
+      "purpose": "support_delivery_oversight_and_management_decisions",
+      "sections": [
+        "executive_summary",
+        "completion_and_on_time_delivery",
+        "open_overdue_tasks_and_wip",
+        "process_duration_and_waiting",
+        "rework_replanning_and_re_evaluation",
+        "work_distribution_by_assignee_and_issue_type",
+        "recorded_outside_hours_when_available",
+        "exceptions_and_decisions_required",
+        "data_coverage_and_limitations"
+      ],
+      "filters": [
+        "assignee",
+        "issue_type",
+        "labels"
+      ],
+      "task_detail_drilldown": true,
+      "show_evaluation_cutoff_and_work_calendar": true,
+      "show_attribution_basis": true,
+      "trends": "show_only_when_comparable_historical_data_exists",
+      "invent_targets_or_trends": false
+    },
+    "report": {
+      "format": "docx",
+      "language": "English",
+      "primary_focus": "process_execution_performance",
+      "sections": [
+        "process_context",
+        "overall_metrics",
+        "process_timing",
+        "stage_residence",
+        "bottlenecks_and_follow_up",
+        "assignment_distribution_snapshot",
+        "per_task_evaluation",
+        "data_quality",
+        "metric_definitions"
+      ],
+      "individual_profile_contents": [
+        "employee_identity",
+        "completed_tasks_with_verified_completion_ownership",
+        "achievement_descriptions_supported_by_task_records",
+        "task_bug_and_label_breakdown",
+        "on_time_delivery_with_valid_denominators",
+        "task_process_durations_in_business_and_elapsed_hours",
+        "rework_replanning_and_re_evaluation_context",
+        "verified_contributions_to_shared_tasks",
+        "recorded_work_inside_and_outside_standard_hours_when_available",
+        "currently_assigned_open_and_overdue_tasks",
+        "evidence_based_recommendations",
+        "attribution_and_data_limitations"
+      ],
+      "per_task_fields": [
+        "issue_key",
+        "task_name",
+        "issue_type",
+        "labels",
+        "status_at_cutoff",
+        "assignee_at_cutoff",
+        "assignee_at_completion",
+        "actual_start_at",
+        "completed_at",
+        "due_date",
+        "duration_metrics",
+        "schedule_metrics",
+        "transition_counts",
+        "recorded_work_when_available",
+        "evaluation_notes_and_data_gaps"
+      ],
+      "invent_achievement_impact": false,
+      "preserve_overall_and_per_task_analysis": true
+    }
+  },
+  "interpretation_rules": {
+    "automatic_employee_ranking": false,
+    "automatic_performance_score": false,
+    "infer_effort_or_quality_from_duration_alone": false,
+    "compare_issue_types_separately": true,
+    "infer_task_complexity_from_issue_type_alone": false,
+    "higher_task_count_alone_means_better_performance": false,
+    "outside_hours_alone_means_better_performance": false,
+    "status_duration_meaning": "elapsed_time_in_status_not_proof_of_a_bottleneck",
+    "bottleneck_candidates": "highlight_observed_waiting_and_repeated_returns_with_task_counts",
+    "unsupported_thresholds": "do_not_invent",
+    "report_data_limitations": true
+  },
+  "process_evaluation": {
+    "scope": "cumulative_from_creation_through_explicit_cutoff",
+    "status_requires": "complete_covered_consistent_history",
+    "unknown_status": "retain_task_and_report_unknown",
+    "schedule_basis": "uploaded_snapshot_not_verified_historical_baseline",
+    "assignee_basis": "uploaded_snapshot_not_completion_ownership",
+    "no_transition_history": "valid_only_when_complete_coverage_confirmed_and_initial_status_known",
+    "stage_population": "distinct_tasks_visiting_status_sum_repeated_visits",
+    "exclude_terminal_stages": [
+      "Done",
+      "Rejected"
+    ]
+  }
+}
