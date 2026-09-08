@@ -9,6 +9,7 @@ from jira_export import collect_data
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
+from collection_store import CollectionStore
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 from clickup_export import collect_data as collect_clickup_data
 
