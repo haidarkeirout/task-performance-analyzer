@@ -82,11 +82,13 @@ class ResumeTests(unittest.TestCase):
             store=store, owner_key=OWNER_KEY,
         )
         first.start()
-        # List + project + one issue are collected per first bounded step.
         first.step()
         self.assertEqual(first.snapshot()["completed"], 1)
         job_id = first.id
 
+        # Simulate a process/browser loss before the retry boundary is reached.
+        # The new process must not inherit transient in-memory retry/failure state.
+        ResumeGateway.fail_once = False
         payload = store.load_job(OWNER_KEY, job_id)
         restored = CollectionJob.from_persisted(
             SETTINGS, payload, ResumeGateway, store=store, owner_key=OWNER_KEY,
@@ -95,8 +97,8 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(restored.snapshot()["completed"], 1)
         restored.start()
         drive(restored)
-        # TEST-1 came only from the first process, never recollected after restore.
         self.assertEqual(ResumeGateway.visited.count("TEST-1"), 1)
+        self.assertIsNotNone(restored.result)
         self.assertEqual(restored.result.count, 24)
 
     def test_persistence_acknowledges_item_before_ram_checkpoint(self):
