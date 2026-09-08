@@ -9,7 +9,8 @@ from jira_export import collect_data
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
-from collection_store import CollectionStore
+from collection_store import CollectionStore, persistence_owner_key
+from collection_job import CollectionJob
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 from clickup_export import collect_data as collect_clickup_data
 
@@ -70,6 +71,54 @@ def _reset_connection():
     invalidate_selection()
     for key in ("jira_spaces", "jira_fields", "jira_identity", "jira_reference", "catalog_space", "suggestion_cache"):
         st.session_state.pop(key, None)
+
+def _collection_store(settings):
+    if "_collection_store" not in st.session_state:
+        st.session_state["_collection_store"] = CollectionStore.configured()
+    return st.session_state["_collection_store"]
+
+def _restore_collection_prompt(settings):
+    if "collection_job" in st.session_state:
+        return
+    store = _collection_store(settings)
+    if store is None:
+        return
+    payload = store.latest_resumable(persistence_owner_key(settings))
+    if not payload:
+        return
+    st.info("A previous Jira collection is available.")
+    if st.button("Resume Previous Collection", key="resume_previous_collection"):
+        st.session_state["collection_job"] = CollectionJob.from_persisted(
+            settings, payload, JiraGateway, store=store,
+            owner_key=persistence_owner_key(settings))
+        st.rerun()
+
+def _advance_collection_job(settings):
+    job = st.session_state.get("collection_job")
+    if job is None:
+        return False
+    if job.result is not None:
+        st.session_state["prepared_data"] = job.result
+        return False
+    if job.error:
+        st.error(job.error)
+        if st.button("Retry Collection", key="retry_collection"):
+            job.start()
+            job.step()
+            st.rerun()
+        return True
+    if job.running:
+        job.step()
+        snap = job.snapshot()
+        st.info(f"{snap['message']} ({snap['completed']} of {snap['total']})")
+        if job.result is not None:
+            st.session_state["prepared_data"] = job.result
+        return job.result is None
+    if st.button("Resume Collection", key="resume_collection"):
+        job.start()
+        job.step()
+        st.rerun()
+    return True
 
 
 def _render_clickup_collection(settings):
@@ -296,6 +345,9 @@ def render_collection(settings):
 
 
 def _render_collection(gateway, settings):
+    _restore_collection_prompt(settings)
+    if _advance_collection_job(settings):
+        return st.session_state.get("prepared_data"), False
     header = st.columns([5, 1])
     header[0].caption("Select a space → Choose filters → Done → Run Analysis")
     header[1].button("Sign Out", on_click=_logout, use_container_width=True)
@@ -394,13 +446,15 @@ def _render_collection(gateway, settings):
     if st.button("Done", type="primary", disabled=not can_collect, help="Collect all matching work items and prepare their Excel file."):
         invalidate_selection()
         try:
-            with st.status("Collecting your data...", expanded=True) as status:
-                prepared = collect_data(gateway, space, query, fingerprint, st.session_state["jira_fields"],
-                                         progress=lambda message: status.update(label=message))
-                st.session_state["prepared_data"] = prepared
-                status.update(label="Data collection completed.", state="complete", expanded=False)
-        except (CollectionError, ValueError) as exc:
-            st.session_state["collection_error"] = str(exc)
+            store = _collection_store(settings)
+            job = CollectionJob(settings, space, query, fingerprint,
+                                st.session_state["jira_fields"], JiraGateway,
+                                store=store, owner_key=persistence_owner_key(settings))
+            st.session_state["collection_job"] = job
+            job.start()
+            job.step()
+            if job.result is not None:
+                st.session_state["prepared_data"] = job.result
         except Exception:
             st.session_state["collection_error"] = "Data collection could not be completed. Please try again or contact the administrator."
     if st.session_state.get("collection_error"):
