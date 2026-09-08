@@ -1,122 +1,173 @@
-# Jira process performance analyzer — v2.0
+# Jira Performance — Automation v3
 
-Streamlit application for cumulative process evaluation through an explicit cutoff.
-This update retains native Streamlit bar charts (no Plotly dependency).
+Select a Jira space, apply filters, and prepare its data for the existing process
+performance analysis. All application controls and messages are in English.
 
-## Deploy this update
+## Daily use
 
-Extract the ZIP. Upload **its contents** to the existing repository root, preserving
-`app.py`, `src/`, `configs/`, `requirements.txt`, `tests/`, and this README.
-Commit the upload to the branch used by Streamlit (`main`). The entry point remains
-`app.py`. The app caption should show **Process analysis v2.0** after the update.
+1. **Sign In** with the single application account.
+2. **Select a Space** from the spaces visible to the connected Jira account.
+3. Review **All work items** and select filters. Use **More filters** to add other
+   searchable Jira fields, including your custom fields. **JQL** is also available.
+4. Click **Done**. The app collects every matching page and each task's full
+   accessible history, then generates a real `.xlsx` workbook.
+5. The message **Your data has been collected and is ready for analysis.** appears.
+   **Download Source Excel** is optional; the file is already held by the app.
+6. Click **Run Analysis**. The existing five dashboard tabs and the analysis Excel
+   and Word downloads appear. No file download/reupload is required.
 
-Do not upload a wrapper directory around these files: `src` and `configs` must be
-siblings of `app.py`. No credentials or user datasets are included in this bundle.
+Changing the space or filters clears the previous prepared data and results.
+Click Done again to collect the new selection. Sign Out clears the session.
 
-## Run an analysis
+## Set up once on the existing Streamlit app
 
-1. Upload the Jira workbook.
-2. Select a history source:
-   - **Jira API**: enter site URL, email and API token. The client fetches the
-     changelog pages and records coverage metadata. Credentials are not exported.
-   - **Workbook transitions**: use the workbook's `Workflow_Events` sheet. Enter
-     the history coverage end, and confirm completeness only if the log includes
-     all transitions from creation through that moment and `Status` is its snapshot.
-   - **History JSON**: use JSON produced by the updated `src/jira_client.py`.
-     Legacy JSON without coverage metadata is considered unverified. Retrieve new
-     history from Jira instead of labeling an unknown partial log complete.
-3. Enter the exact evaluation cutoff (including time and timezone). Coverage must
-   reach it. The default is the session's initial current time, not automatically
-   the date in `Process_Context`. That original date is displayed for reference.
-4. Review the process name, scope and dataset type, then run analysis.
-5. Use Process Analysis for stage times, review-return rates, open work, evidence,
-   definitions and transition audit trail. Download Excel and Word from Downloads.
+**First save the connection settings, then upload the source update.** This lets
+the new sign-in screen work as soon as the updated application starts.
 
-Dates without times in source context are ambiguous. For testing the original
-September 1–3 simulation, local reconciliation used `2026-09-03T23:59:59+03:00`
-for cutoff and declared coverage. This is an explicit test assumption, not an
-inferred timestamp or an assertion about later Jira activity.
+### 1. Save the account and Jira connection
 
-## What changed
+Open your app's **Manage app → Settings → Secrets**. Paste the following and
+replace all five example values. If other secrets already exist, keep them and
+add or update these keys without duplicate definitions.
 
-- One shared aggregation for dashboard, Excel and Word.
-- Review-return denominators are distinct reviewed tasks with complete history.
-  Rework, replanning, re-evaluation, and their union expose numerator/denominator.
-- Open overdue rate counts only open tasks with known due dates.
-- Stage statistics sum repeat visits per task and include elapsed and business time.
-- Terminal-state residence is excluded from stage bottleneck comparisons.
-- Open task age, current status age, overdue days and evidence-linked follow-up.
-- Verified no-transition histories are valid; absent/partial/invalid histories
-  produce unavailable metrics and explicit unknown status counts.
-- Cutoff reconstruction uses initial status even before the first transition;
-  future-created tasks are excluded and listed in Data Quality.
-- Excel includes process context, transition log, stage summary, open work,
-  definitions, quality findings, and recommendations in addition to task metrics
-  and aggregate views. It contains static calculated values; rerun the app to update.
-- Word focuses on process outcomes and includes a snapshot assignment distribution.
-  Unassigned is a task group, never an individual achievement profile.
-- The dashboard adds an `Open Tasks by Due Status` native chart and table for
-  overdue, within-due-date, and missing-due-date open tasks. It separately shows
-  tasks whose status cannot be verified, plus a separate count/table for completed
-  tasks that finished after the supplied due date.
-- The Executive Dashboard adds a native `Weekly Task Flow` line chart with
-  `Tasks Opened` and `Tasks Completed`, grouped into Monday-starting weeks. The
-  view supports all available weeks, the last 4 weeks, the last 12 weeks
-  (quarter), and the last 52 weeks (year), and exports the weekly table with
-  net and cumulative flow values.
-- The Executive Dashboard shows leadership-level averages for completed work
-  (execution time, lead time, and time to start) and delay/planning risk (late
-  completion days, open overdue days, and start variance days). Averages with
-  no qualifying tasks are shown as unavailable rather than misleading zeros.
-- Assignment Summary and Task Detail show created date, planned start date,
-  actual start date, start schedule variance in days, due date, completion date,
-  priority, current-status age, and overdue days. Positive start variance means
-  the verified start was later than the planned date; negative means earlier.
-- Overdue work is shown as a task-level table with assignee, priority, status,
-  dates, and current age so leadership can identify follow-up items immediately.
-
-## Definitions and boundaries
-
-All rates use 0–100. Zero denominators are unavailable. Unknown-status tasks stay
-in the uploaded in-scope total but not known-open/completed/rejected counts.
-History-invalid tasks are excluded from transition metrics; coverage is disclosed.
-
-This is a cumulative analysis from creation to cutoff, **not** a period-only event
-filter. The original observation period remains source context, clearly separated
-from the actual cutoff used.
-
-Durations are process residence, not worklogs, productivity, or proof of labor.
-Due dates, planned starts and assignees use the uploaded snapshot. Historical
-schedule changes and completion ownership are **not reconstructed**; timeliness
-must be read against that snapshot rather than an original baseline. No targets,
-causes, employee rankings or performance scores are inferred.
-
-The standard calendar remains Sunday–Thursday 09:00–17:00 Asia/Damascus, with
-configured holidays. This update uses the existing workflow names: Idea, In Triage,
-To Do, In Progress, In Review, Done, Rejected. Review returns are direct status
-pairs; transition names such as "Request Changes" are not extra status nodes.
-
-## Verification
-
-Run with project dependencies installed:
-
-```bash
-python -m unittest discover -s tests -v
+```toml
+APP_USERNAME = "<choose the application username>"
+APP_PASSWORD = "<choose the application password>"
+JIRA_BASE_URL = "https://your-site.atlassian.net"
+JIRA_EMAIL = "<the connected Jira account email>"
+JIRA_API_TOKEN = "<that Jira account's API token>"
 ```
 
-Set `JIRA_TEST_WORKBOOK` to the original six-sheet `Raw_Data_Jira(3).xlsx` to run
-reconciliation and the offline application/export tests. Otherwise those tests
-are skipped. No tests call Jira or require credentials.
+The first two values define your one application account. They are separate from
+your Jira sign-in. The last three values connect the backend to Jira and are never
+requested from dashboard users. Store the real values in Streamlit Secrets only;
+do not place them in a GitHub file or send them in a screenshot.
 
-Reconciliation at the declared test cutoff:
+There is a placeholder template at `config_examples/streamlit_secrets.example.toml`.
+It is documentation, and is not automatically loaded as a real configuration.
 
-- 20 tasks; 10 done, 8 open, 2 rejected; WIP 4.
-- 13 reviewed tasks; 2 rework events on 1 task (7.6923%).
-- 2 replanning events on 2 tasks (15.3846%).
-- 1 re-evaluation event on 1 task (7.6923%).
-- 3 distinct tasks with any review exception (23.0769%).
-- 87 actual transition records; SCRUM-27 has a blank event placeholder, not a transition.
-- Mean elapsed execution 14.0845278h; mean elapsed lead time 30.6909167h.
+Use the Jira site root URL, with `https://` and no `/issues` or `/projects` suffix.
+If your token has scopes and requires Atlassian's API gateway, also add:
 
-Local tests cover calculations and both exports. A live Jira call and browser
-rendering on Streamlit are deployment checks, not covered by the offline tests.
+```toml
+JIRA_CLOUD_ID = "<the cloud ID for the same Jira site>"
+```
+
+The app then uses `api.atlassian.com/ex/jira/{cloudId}` for API requests while
+keeping the normal site URL for task links. The connected account must be able
+to browse the intended spaces and issues. API access is limited to the records
+and fields that account can read. Replace the stored token when it expires or
+is revoked; dashboard users never enter it.
+
+### 2. Upload the update
+
+Extract `jira_automation_v3.zip`. Upload its **contents** to the existing repository
+root using **Add file → Upload files**, preserving all subfolders. Drag folders
+as folders so file paths stay intact.
+
+At the root you should have `app.py`, `README.md`, `requirements.txt`, `src/`,
+`configs/`, `tests/`, `docs/`, and `config_examples/`. The archive also includes
+the repository ignore rules. Do not place everything inside an extra parent folder.
+
+Commit to the existing deployment branch, `main`. The Streamlit entry point stays
+`app.py`. Wait for its normal redeployment, then open the app and sign in using
+the application account configured in step 1. The new caption says
+**Data collection v3.0** after sign-in.
+
+### 3. Check the live connection
+
+Select your existing Performance Analysis space. Check its basic filters and
+**More filters**, collect a small known selection with **Done**, and run analysis.
+The source Excel contains the selected JQL, task count, and collection timestamps
+so you can reconcile the scope. The app does not create or edit Jira tasks.
+
+## Optional administrator settings
+
+These stay in Secrets; there is no settings sidebar for dashboard users.
+
+| Setting | Default / purpose |
+| --- | --- |
+| `SOURCE_TIMEZONE` | `Asia/Damascus`; interpretation of source data and exported transition times. The existing business calendar remains configured in `configs/`. |
+| `JIRA_START_DATE_FIELD_ID` | Auto-detect a field named Start date. Set its exact ID, such as `customfield_10015`, if your site has multiple populated fields with that name. |
+| `JIRA_CLOUD_ID` | Empty; provide it for a scoped API token that uses the Atlassian gateway. |
+| `APP_PASSWORD_HASH` | Optional PBKDF2 alternative to `APP_PASSWORD`; see `src/automation_auth.py`. The simple setup above does not require this. |
+
+Changing the server account or connection configuration invalidates existing
+authenticated sessions. Data and results are held per Streamlit session, with
+no cross-user data cache. A new session requires sign-in and collection again.
+
+## Filters and collection
+
+- Basic controls are Space, Search work, Assignee, Type, Status, and Created.
+- More filters is populated from Jira's project-scoped searchable-field metadata.
+  It includes the other returned system/custom fields and their supported
+  comparisons, rather than a fixed hand-written shortlist.
+- Value suggestions come from Jira. Search values by name or enter an exact value.
+  Numeric fields accept numbers; date fields offer ranges. The JQL option supports
+  additional conditions and functions. The selected space always stays applied.
+- These controls are implemented inside this application. Jira-specific app
+  widgets or behaviors may require JQL; native Jira menus are not embedded or
+  screen-scraped. Live parity of a tenant's custom fields must be checked on that site.
+- Created/date filters select **tasks**. They do not truncate the selected tasks'
+  status histories. Existing analysis still evaluates cumulatively through cutoff.
+- Date filters follow the connected Jira account's time zone, shown above the list.
+- Preview can load more pages. Done collects all matching pages, including those
+  not yet displayed. Results use a cutoff frozen when collection starts.
+- Incomplete pages, duplicate records, or a detected concurrent edit stop collection
+  with an English message. Partial exports are not marked ready for analysis.
+
+## Source Excel
+
+The workbook is created from Jira REST API data. It is a genuine XLSX file, not a
+CSV renamed to `.xlsx`. It contains all returned accessible fields. Its layout is
+adapted to the existing analysis contract and is not a byte-for-byte recreation
+of Jira's native CSV export.
+
+| Sheet | Contents |
+| --- | --- |
+| `Jira_Data` | Task fields, using the headers required by the existing analyzer. |
+| `Workflow_Events` | All retrieved status transitions for the selected tasks. |
+| `History_Coverage` | Per-task completeness, coverage time, and initial status. |
+| `Field_Changes` | Retrieved changes to all fields. |
+| `Field_Catalog` | Jira field IDs, names, schemas, and corresponding Excel headers. |
+| `Raw_JSON` | Structured task/history data preserved in numbered chunks, including full comments/worklogs available to the account. |
+| `Process_Context` | Space, selected query, collection time, and evaluation cutoff. |
+
+Attachment fields contain metadata and links; attachment binaries are not downloaded.
+Long values are split into columns/chunks to respect Excel's cell limits. Source
+text is written as text, including values that start with an equals sign.
+
+## Existing analysis retained
+
+The analysis engines, configuration files, report builder, and all original
+dashboard functions are unchanged. The new collection adapter supplies an Excel
+buffer and verified history JSON to the same `run_analysis` function.
+
+Executive Dashboard, Process Analysis, Individual Achievements, Task Detail,
+Data Quality, management averages, Weekly Task Flow, and both output reports use
+the existing calculation rules. See `docs/ANALYSIS_REFERENCE.md` for definitions.
+
+The existing calendar is Sunday–Thursday 09:00–17:00 Asia/Damascus. Its existing
+workflow uses Idea, In Triage, To Do, In Progress, In Review, Done, and Rejected.
+This automation release does not remap different workflows or change those rules.
+
+## Verification and local development
+
+```bash
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python -m streamlit run app.py
+```
+
+For local development, put the five real configuration values in
+`.streamlit/secrets.toml`, which is ignored by Git. The Cloud deployment uses the
+Secrets setting described above.
+
+Set `JIRA_TEST_WORKBOOK` to the original `Raw_Data_Jira(3).xlsx` to additionally run
+the source-data reconciliation tests. Tests use simulated Jira responses and never
+send requests to Jira. See `docs/VERIFICATION.md` for the release checks and limits.
+
+Official references: [Streamlit Secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management),
+[Jira authentication](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/),
+[Jira search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/),
+[Jira filter metadata and validation](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-jql/).

@@ -734,137 +734,46 @@ def show_data_quality(
     )
 
 
-st.title(
-    "Jira Process Performance Dashboard"
-)
+from automation_ui import require_sign_in, render_collection
 
-st.caption(
-    "Process analysis v2.0 — delivery, stage residence, review returns, and data coverage"
-)
+settings = require_sign_in()
 
-with st.sidebar:
-    st.header("Analysis Setup")
+st.title("Jira Process Performance Dashboard")
+st.caption("Data collection v3.0 — select your Jira work items and run the existing process analysis")
 
-    uploaded_excel = st.file_uploader(
-        "Upload Jira Excel export",
-        type=["xlsx", "xls"],
-    )
+prepared_data, run_button = render_collection(settings)
+cutoff_text = prepared_data.cutoff if prepared_data else ""
 
-    uploaded_history = st.file_uploader(
-        "Optional Jira history JSON",
-        type=["json"],
-        help=(
-            "Select History JSON below to use this file. New JSON exports include history coverage metadata."
-        ),
-    )
-
-    history_source = st.selectbox("History source", ["Jira API", "Workbook transitions", "History JSON"])
-    st.caption("Workbook transitions reads Workflow_Events without a Jira connection. JSON must include history_complete and history_through metadata.")
-    st.subheader("Jira Connection")
-
-    base_url = st.text_input(
-        "Jira site URL",
-        placeholder="https://your-domain.atlassian.net",
-    )
-
-    email = st.text_input(
-        "Jira email",
-        placeholder="your-email@example.com",
-    )
-
-    token = st.text_input(
-        "Jira API token",
-        type="password",
-    )
-
-    st.subheader("Evaluation Context")
-
-    source_timezone = st.text_input(
-        "Source timezone",
-        value="Asia/Damascus",
-    )
-
-    default_cutoff = datetime.now(
-        ZoneInfo("Asia/Damascus")
-    ).replace(
-        second=0,
-        microsecond=0,
-    ).isoformat()
-
-    st.session_state.setdefault("evaluation_cutoff_input", default_cutoff)
-    cutoff_text = st.text_input(
-        "Evaluation cutoff",
-        key="evaluation_cutoff_input",
-        help=(
-            "Example: 2026-09-06T17:00:00+03:00"
-        ),
-    )
-
-    context_defaults = {}
-    if uploaded_excel is not None:
-        try:
-            context_defaults = workbook_context(read_workbook(uploaded_excel))
-        except Exception:
-            pass
-    if context_defaults.get("Evaluation Cutoff Date"):
-        st.caption("Workbook cutoff: " + context_defaults["Evaluation Cutoff Date"] +
-                   ". Enter the intended exact time above; a date alone does not specify end of day.")
-    process_name = st.text_input("Process name", value=context_defaults.get("Process Name", "Jira task process"))
-    process_scope = st.text_input("Evaluation scope", value=context_defaults.get("Evaluation Scope", "Process execution performance"))
-    dataset_type = st.text_input("Dataset type", value=context_defaults.get("Dataset Type", "Not specified"))
-    coverage_through = cutoff_text
-    coverage_confirmed = False
-    if history_source == "Workbook transitions":
-        coverage_through = st.text_input("History coverage ends at", value=cutoff_text,
-            help="The moment up to which the workbook status snapshot and complete transition log are valid. Must cover the evaluation cutoff.")
-        coverage_confirmed = st.checkbox("I confirm the workbook includes all status transitions from creation through this coverage time, and Status is the snapshot at that time.")
-    run_button = st.button(
-        "Run Analysis",
-        type="primary",
-        use_container_width=True,
-    )
-
-if run_button:
-    if uploaded_excel is None:
-        st.session_state.pop("task_metrics", None)
-        st.session_state.pop("process_data", None)
-        st.error(
-            "Upload the Jira Excel export first."
-        )
-    else:
-        try:
-            with st.spinner(
-                "Reading data and calculating Jira metrics..."
-            ):
-                task_metrics, validation_log, process_data = run_analysis(
-                    uploaded_excel,
-                    uploaded_history,
-                    base_url,
-                    email,
-                    token,
-                    cutoff_text,
-                    source_timezone,
-                    history_source=history_source,
-                    coverage_through=coverage_through,
-                    coverage_confirmed=coverage_confirmed,
-                    context_overrides={"Process Name": process_name, "Evaluation Scope": process_scope, "Dataset Type": dataset_type},
-                )
-
+if run_button and prepared_data is not None:
+    try:
+        with st.spinner("Reading data and calculating Jira metrics..."):
+            task_metrics, validation_log, process_data = run_analysis(
+                BytesIO(prepared_data.xlsx),
+                BytesIO(prepared_data.history_json),
+                "", "", "",
+                prepared_data.cutoff,
+                prepared_data.source_timezone,
+                history_source="History JSON",
+                context_overrides={
+                    "Process Name": prepared_data.space_name,
+                    "Evaluation Scope": "Selected Jira work items",
+                    "Dataset Type": "Jira API collection",
+                },
+            )
+        if task_metrics.empty:
+            st.session_state.pop("task_metrics", None)
+            st.session_state.pop("process_data", None)
+            st.info("No selected work items existed at the evaluation cutoff. Click Done to collect a newer snapshot.")
+        else:
             st.session_state["process_data"] = process_data
             st.session_state["task_metrics"] = task_metrics
             st.session_state["validation_log"] = validation_log
-            st.session_state["cutoff_text"] = cutoff_text
-
-            st.success(
-                "Analysis completed successfully."
-            )
-
-        except Exception as exc:
-            st.session_state.pop("task_metrics", None)
-            st.session_state.pop("process_data", None)
-            st.error(
-                f"Analysis failed: {exc}"
-            )
+            st.session_state["cutoff_text"] = prepared_data.cutoff
+            st.success("Analysis completed successfully.")
+    except Exception:
+        st.session_state.pop("task_metrics", None)
+        st.session_state.pop("process_data", None)
+        st.error("Analysis could not be completed for this dataset. Check the source data or contact the administrator.")
 
 if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
     st.session_state.pop("task_metrics", None)
@@ -985,8 +894,7 @@ if "task_metrics" in st.session_state:
 else:
     st.info(
         (
-            "Upload the Jira Excel export, enter Jira credentials, "
-            "or provide a previously retrieved history JSON file, "
-            "then click Run Analysis."
+            "Select a Jira space, choose filters, and click Done. "
+            "When your data is ready, click Run Analysis."
         )
     )
