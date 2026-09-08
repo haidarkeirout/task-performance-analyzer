@@ -262,7 +262,11 @@ def _preview(gateway, query, site_url):
 
 
 def render_collection(settings):
-    source = st.session_state.get("data_source", "Jira")
+    # Keep the source selector outside either connector branch. Streamlit reruns
+    # the script after every widget interaction; rendering the selector only in
+    # the Jira branch could make a ClickUp selection fall back to Jira.
+    source = st.radio("Data source", ["Jira", "ClickUp"], horizontal=True,
+                      key="data_source", on_change=invalidate_selection)
     if source == "ClickUp":
         return _render_clickup_collection(settings)
     gateway = JiraGateway(settings)
@@ -273,10 +277,6 @@ def render_collection(settings):
 
 
 def _render_collection(gateway, settings):
-    source = st.radio("Data source", ["Jira", "ClickUp"], horizontal=True,
-                      key="data_source", on_change=invalidate_selection)
-    if source == "ClickUp":
-        return _render_clickup_collection(settings)
     header = st.columns([5, 1])
     header[0].caption("Select a space → Choose filters → Done → Run Analysis")
     header[1].button("Sign Out", on_click=_logout, use_container_width=True)
