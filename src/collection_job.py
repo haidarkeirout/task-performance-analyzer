@@ -13,14 +13,34 @@ LOGGER.propagate = False
 class CollectionCancelled(Exception): pass
 
 class CollectionJob:
-    def __init__(self, settings, space, query, fingerprint, definitions, gateway_factory, store=None):
+    def __init__(self, settings, space, query, fingerprint, definitions, gateway_factory, store=None, owner_key=None):
         self.settings, self.space, self.query = settings, dict(space), query
         self.fingerprint, self.definitions, self.gateway_factory = fingerprint, list(definitions), gateway_factory
         # Optional persistence hook; existing Jira behavior is unchanged when omitted.
         self.store = store
+        self.owner_key = owner_key
         self.checkpoint, self.id = {}, uuid.uuid4().hex[:12]
         self.cancelled = False; self.running = False; self.result = None; self.error = None
         self.message = "Ready to collect."; self.started = None
+    @classmethod
+    def from_persisted(cls, settings, payload, gateway_factory, store=None, owner_key=None):
+        job = cls(settings, payload["space"], payload["query"], payload["fingerprint"],
+                  payload.get("definitions", []), gateway_factory, store=store, owner_key=owner_key)
+        job.id = payload["job_id"]
+        job.message = payload.get("message", "Restored collection.")
+        job.checkpoint = {"cutoff": payload["cutoff"], "fingerprint": payload["fingerprint"],
+                          "issues": [row["seed_item"] for row in payload.get("items", [])]}
+        job.checkpoint["completed"] = {}
+        for row in payload.get("items", []):
+            if row.get("completed"):
+                job.checkpoint["completed"][row["issue_key"]] = (row["item_data"], row["history_data"])
+        return job
+
+    def _persist_update(self, status=None, stage=None, current_issue=None, error_detail=None, result_meta=None):
+        if self.store is not None and self.owner_key is not None:
+            self.store.update_job(self.owner_key, self.id, status or ("running" if self.running else "error"),
+                                  stage or self.message, current_issue, self.message, error_detail, result_meta)
+
     def cancel(self): self.cancelled = True; self.running = False
     def snapshot(self):
         return dict(running=self.running, result=self.result, error=self.error, message=self.message, id=self.id,
@@ -52,6 +72,9 @@ class CollectionJob:
                 if not issues: raise CollectionError("No work items match these filters. Change the filters and click Done again.")
                 if any(not k for k in keys) or len(set(keys)) != len(keys): raise CollectionError("The selected work item list is incomplete or contains duplicates.")
                 self.checkpoint["issues"] = issues
+                if self.store is not None and self.owner_key is not None:
+                    self.store.begin(self.owner_key, self.id, self.fingerprint, self.space, self.query, self.definitions, cutoff)
+                    self.store.seed_items(self.owner_key, self.id, issues)
             issues = self.checkpoint["issues"]
             if "project" not in self.checkpoint:
                 self.progress("Reading project details..."); self.checkpoint["project"] = gateway.project_details(self.space["id"]) if hasattr(gateway, "project_details") else self.space
@@ -63,6 +86,8 @@ class CollectionJob:
                 if history.get("history_complete") is not True or not history.get("history_through"): raise CollectionError("A task history is incomplete. No partial export was prepared.")
                 if datetime.fromisoformat(history["history_through"].replace("Z", "+00:00")) < datetime.fromisoformat(cutoff.replace("Z", "+00:00")): raise CollectionError("A task history does not cover the evaluation cutoff.")
                 item["fields"]["project"] = {**self.checkpoint["project"], **(item["fields"].get("project") or {})}; completed[pending["key"]] = (item, history)
+                if self.store is not None and self.owner_key is not None:
+                    self.store.save_item(self.owner_key, self.id, pending["key"], item, history)
                 self.progress(f"Completed {len(completed)} of {len(issues)} work items."); return
             self.progress("Preparing your Excel file..."); full = [completed[i["key"]][0] for i in issues]; histories = {i["key"]: completed[i["key"]][1] for i in issues}; collected_at = datetime.now(timezone.utc).isoformat()
             data = build_workbook(full, histories, self.definitions, cutoff=cutoff, collected_at=collected_at, query=self.query, space_name=self.space["name"], source_timezone=self.settings.source_timezone, preferred_start=self.settings.start_date_field)
