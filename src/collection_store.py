@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from typing import Any
 
 import requests
@@ -36,11 +37,15 @@ def persistence_owner_key(settings) -> str:
 
 
 class CollectionStore:
-    def __init__(self, url: str, publishable_key: str, *, session=None, timeout=(10, 45)):
+    MAX_ATTEMPTS = 4
+
+    def __init__(self, url: str, publishable_key: str, *, session=None,
+                 timeout=(10, 45), sleep=time.sleep):
         self.url = url.rstrip("/")
         self.key = publishable_key
         self.session = session or requests.Session()
         self.timeout = timeout
+        self.sleep = sleep
         self.session.headers.update({
             "apikey": self.key,
             "Authorization": f"Bearer {self.key}",
@@ -59,35 +64,73 @@ class CollectionStore:
     def close(self):
         self.session.close()
 
-    def _rpc(self, name: str, payload: dict[str, Any]):
+    @staticmethod
+    def _safe_error_detail(response):
         try:
-            response = self.session.post(
-                f"{self.url}/rest/v1/rpc/{name}", json=payload,
-                timeout=self.timeout, allow_redirects=False,
-            )
-        except requests.RequestException as exc:
-            raise PersistenceError(
-                "The persistent collection store could not be reached. Your Jira request was not marked complete."
-            ) from exc
+            body = response.json()
+            detail = body.get("message") or body.get("details") or body.get("hint")
+        except ValueError:
+            detail = None
+        if detail and len(str(detail)) < 240:
+            return f" ({detail})"
+        return ""
 
-        if response.status_code < 200 or response.status_code >= 300:
-            retryable = response.status_code == 429 or response.status_code >= 500
+    def _rpc(self, name: str, payload: dict[str, Any]):
+        last_error = None
+        for attempt in range(self.MAX_ATTEMPTS):
             try:
-                body = response.json()
-                detail = body.get("message") or body.get("details") or body.get("hint")
-            except ValueError:
-                detail = None
-            safe = f" ({detail})" if detail and len(str(detail)) < 240 else ""
-            raise PersistenceError(
-                f"The persistent collection store rejected the request (HTTP {response.status_code}).{safe}",
-                retryable=retryable,
-            )
-        if not response.content:
-            return None
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise PersistenceError("The persistent collection store returned an unreadable response.") from exc
+                response = self.session.post(
+                    f"{self.url}/rest/v1/rpc/{name}", json=payload,
+                    timeout=self.timeout, allow_redirects=False,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt + 1 < self.MAX_ATTEMPTS:
+                    self.sleep(min(2 ** attempt, 4))
+                    continue
+                raise PersistenceError(
+                    "The persistent collection store could not be reached after repeated attempts. "
+                    "Your Jira request was not marked complete."
+                ) from exc
+
+            status = response.status_code
+            if status == 429 or 500 <= status <= 599:
+                last_error = PersistenceError(
+                    f"The persistent collection store is temporarily unavailable (HTTP {status}).",
+                    retryable=True,
+                )
+                if attempt + 1 < self.MAX_ATTEMPTS:
+                    try:
+                        delay = float(response.headers.get("Retry-After", min(2 ** attempt, 4)))
+                    except (TypeError, ValueError):
+                        delay = float(min(2 ** attempt, 4))
+                    self.sleep(max(0.0, min(delay, 8.0)))
+                    continue
+                raise last_error
+
+            if status < 200 or status >= 300:
+                raise PersistenceError(
+                    f"The persistent collection store rejected the request (HTTP {status})."
+                    f"{self._safe_error_detail(response)}",
+                    retryable=False,
+                )
+
+            if not response.content:
+                return None
+            try:
+                return response.json()
+            except ValueError as exc:
+                last_error = exc
+                if attempt + 1 < self.MAX_ATTEMPTS:
+                    self.sleep(min(2 ** attempt, 4))
+                    continue
+                raise PersistenceError(
+                    "The persistent collection store returned an unreadable response after repeated attempts."
+                ) from exc
+
+        raise PersistenceError(
+            "The persistent collection store could not complete the request."
+        ) from last_error
 
     def begin(self, owner_key, job_id, fingerprint, space, query, definitions, cutoff):
         return self._rpc("collection_begin", {
