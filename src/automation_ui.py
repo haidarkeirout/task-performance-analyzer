@@ -216,8 +216,11 @@ def _preview(gateway, query, site_url):
 
 @st.fragment(run_every=1)
 def _collection_monitor(job):
-    """Polling does not interrupt the worker or re-run the filter widgets."""
+    """Advance one collection unit per fragment tick; safe across reruns."""
     snapshot = job.snapshot()
+    if snapshot["running"]:
+        job.step()
+        snapshot = job.snapshot()
     total = snapshot["total"]
     st.progress(snapshot["completed"] / total if total else 0,
                 text=f"{snapshot['completed']} of {total} tasks completed" if total else "Reading task list...")
