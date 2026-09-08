@@ -142,7 +142,13 @@ def _render_clickup_collection(settings):
         st.error(st.session_state["clickup_error"])
     prepared = st.session_state.get("clickup_prepared_data")
     if prepared:
-        st.success(f"ClickUp data collected for Space ID {selected}. History IDs are included in the Activity sheet.")
+        if getattr(prepared, "clickup_activity_available", True):
+            st.success(f"ClickUp data collected for Space ID {selected}. History IDs are included in the Activity sheet.")
+        else:
+            st.warning(
+                "Task data was collected for this Space, but ClickUp did not expose its full Activity History "
+                "endpoint for this account. The Activity and History ID columns are empty; Jira was not used or changed."
+            )
         st.download_button("Download ClickUp Source Excel", prepared.xlsx, prepared.filename,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
     return prepared, False
