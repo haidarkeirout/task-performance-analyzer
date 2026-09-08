@@ -18,7 +18,8 @@ def invalidate_selection():
     job = st.session_state.pop("collection_job", None)
     if job is not None:
         job.cancel()
-    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", "collection_notice", *RESULT_KEYS):
+    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query",
+                "collection_error", "collection_notice", *RESULT_KEYS):
         st.session_state.pop(key, None)
 
 
@@ -60,7 +61,7 @@ def require_sign_in():
             with st.form("sign_in"):
                 st.text_input("Username", key="login_username")
                 st.text_input("Password", type="password", key="login_password")
-                st.form_submit_button("Sign In", type="primary", use_container_width=True,
+                st.form_submit_button("Sign In", type="primary", width="stretch",
                                       on_click=_login, args=(settings,))
             if st.session_state.get("login_error"):
                 st.error(st.session_state["login_error"])
@@ -70,7 +71,8 @@ def require_sign_in():
 
 def _reset_connection():
     invalidate_selection()
-    for key in ("jira_spaces", "jira_fields", "jira_identity", "jira_reference", "catalog_space", "suggestion_cache"):
+    for key in ("jira_spaces", "jira_fields", "jira_identity", "jira_reference",
+                "catalog_space", "suggestion_cache"):
         st.session_state.pop(key, None)
 
 
@@ -135,9 +137,12 @@ def _generic_filter(gateway, field):
 
 def _date_filter(gateway, field):
     prefix = "filter_" + field.id + "_"
-    modes = ["Any time", "On", "Before", "After", "Between", "Within the last", "This week", "This month", "This year"]
-    if "is" in field.operators: modes.append("Is empty")
-    if "is not" in field.operators: modes.append("Is not empty")
+    modes = ["Any time", "On", "Before", "After", "Between", "Within the last",
+             "This week", "This month", "This year"]
+    if "is" in field.operators:
+        modes.append("Is empty")
+    if "is not" in field.operators:
+        modes.append("Is not empty")
     modes.append("Advanced comparison")
     mode = st.selectbox("Date range", modes, key=prefix + "date_mode", on_change=invalidate_selection)
     if mode == "Advanced comparison":
@@ -151,12 +156,12 @@ def _date_filter(gateway, field):
         end = st.date_input("To date", value=None, key=prefix + "to", on_change=invalidate_selection)
     if mode == "Within the last":
         days = st.number_input("Days", min_value=1, value=7, step=1,
-                                key=prefix + "days", on_change=invalidate_selection)
+                               key=prefix + "days", on_change=invalidate_selection)
     return date_clause(field, mode, start, end, days)
 
 
 def _filter_popover(gateway, field, target):
-    with target.popover(field.label, use_container_width=True):
+    with target.popover(field.label, width="stretch"):
         st.caption(field.label)
         return _date_filter(gateway, field) if field.kind == "date" else _generic_filter(gateway, field)
 
@@ -187,20 +192,25 @@ def _preview(gateway, query, site_url):
             st.error(str(exc))
             return False
     preview = st.session_state.get("preview")
-    if preview is None: return False
+    if preview is None:
+        return False
     items = preview["issues"]
     if items:
-        st.dataframe(_work_items_frame(items, site_url), hide_index=True, use_container_width=True,
-                      column_config={"Work item": st.column_config.LinkColumn("Work item", display_text=r".*/browse/(.*)")})
+        st.dataframe(_work_items_frame(items, site_url), hide_index=True, width="stretch",
+                     column_config={"Work item": st.column_config.LinkColumn(
+                         "Work item", display_text=r".*/browse/(.*)")})
     else:
         st.info("No work items match the selected filters.")
     cols = st.columns([3, 1, 1])
-    cols[0].caption(f"{len(items)} work items shown. " +
-                    ("All matching work items are shown." if preview.get("isLast") else "Done collects all matching work items, including later pages."))
-    if cols[1].button("Refresh list", use_container_width=True):
+    cols[0].caption(
+        f"{len(items)} work items shown. " +
+        ("All matching work items are shown." if preview.get("isLast")
+         else "Done collects all matching work items, including later pages.")
+    )
+    if cols[1].button("Refresh list", width="stretch"):
         st.session_state.pop("preview_query", None)
         st.rerun()
-    if cols[2].button("Load more", disabled=preview.get("isLast", False), use_container_width=True):
+    if cols[2].button("Load more", disabled=preview.get("isLast", False), width="stretch"):
         try:
             page = gateway.search_page(query, preview.get("nextPageToken"))
             keys = {item["key"] for item in items}
@@ -214,31 +224,96 @@ def _preview(gateway, query, site_url):
     return True
 
 
+def _render_collection_error(job, snapshot):
+    detail = snapshot.get("error_detail") or {}
+    completed = detail.get("completed", snapshot.get("completed", 0))
+    total = detail.get("total", snapshot.get("total", 0))
+    failed_issue = detail.get("failed_issue")
+    stage = detail.get("stage") or snapshot.get("stage") or "Unknown stage"
+    error_type = detail.get("type") or "CollectionError"
+    message = detail.get("message") or snapshot.get("error") or "Unknown collection error."
+    status = detail.get("http_status")
+    reference = detail.get("reference") or snapshot.get("id")
+
+    notice = (reference, failed_issue, stage, message, completed, total)
+    if st.session_state.get("collection_notice") != notice:
+        st.session_state["collection_notice"] = notice
+        st.toast(
+            f"Collection stopped at {stage}. {completed} of {total} work items are saved."
+            if total else f"Collection stopped at {stage}.",
+            icon="⚠️",
+        )
+
+    st.error("Collection stopped before all selected work items were collected.")
+    st.markdown(f"**Problem:** {message}")
+    details = [
+        f"**Stage:** {stage}",
+        f"**Progress saved:** {completed} / {total}" if total else f"**Progress saved:** {completed}",
+        f"**Error type:** {error_type}",
+    ]
+    if failed_issue:
+        details.insert(1, f"**Failed work item:** `{failed_issue}`")
+    if status is not None:
+        details.append(f"**Jira HTTP status:** `{status}`")
+    details.append(f"**Reference:** `{reference}`")
+    st.markdown("  \n".join(details))
+    st.info("Completed work is preserved. Retry continues from the first unfinished work item; it does not restart from task 1.")
+
+    retry_col, reset_col = st.columns(2)
+    if retry_col.button("Retry Collection", type="primary", width="stretch",
+                        key=f"retry_collection_{reference}"):
+        job.start()
+        st.session_state.pop("collection_notice", None)
+        st.rerun()
+    if reset_col.button("Start New Collection", width="stretch",
+                        key=f"new_collection_{reference}"):
+        invalidate_selection()
+        st.rerun()
+
+
 @st.fragment(run_every=1)
 def _collection_monitor(job):
-    """Advance one collection unit per fragment tick; safe across reruns."""
+    """Advance one collection unit per fragment tick and keep the UI state explicit."""
     snapshot = job.snapshot()
     if snapshot["running"]:
         job.step()
         snapshot = job.snapshot()
+
     total = snapshot["total"]
-    st.progress(snapshot["completed"] / total if total else 0,
-                text=f"{snapshot['completed']} of {total} tasks completed" if total else "Reading task list...")
+    completed = snapshot["completed"]
+    st.progress(
+        completed / total if total else 0,
+        text=f"{completed} of {total} tasks completed" if total else "Reading task list...",
+    )
     st.caption(snapshot["message"])
+
     if snapshot["running"]:
-        st.info(f"Collection is running. Elapsed: {snapshot['elapsed']} seconds. Reference: {snapshot['id']}.")
+        current = snapshot.get("current_issue")
+        retry_attempt = snapshot.get("retry_attempt", 0)
+        status_text = f"Collection is running. Elapsed: {snapshot['elapsed']} seconds."
+        if current:
+            status_text += f" Current work item: {current}."
+        if retry_attempt:
+            status_text += (
+                f" Automatic retry {retry_attempt} of "
+                f"{snapshot.get('max_auto_retries', 3)} is active."
+            )
+        status_text += f" Reference: {snapshot['id']}."
+        st.info(status_text)
     elif snapshot["error"]:
-        notice = (snapshot["id"], snapshot["error"])
-        if st.session_state.get("collection_notice") != notice:
-            st.session_state["collection_notice"] = notice
-            st.rerun()
-        st.error(snapshot["error"])
+        _render_collection_error(job, snapshot)
     elif snapshot["result"] is not None:
         if st.session_state.get("prepared_data") is not snapshot["result"]:
             st.session_state["prepared_data"] = snapshot["result"]
+            st.session_state.pop("collection_notice", None)
+            st.rerun()
+        st.success("Collection complete. All selected work items were collected.")
+        if st.button("Start New Collection", width="stretch",
+                     key=f"new_collection_complete_{snapshot['id']}"):
+            invalidate_selection()
             st.rerun()
     else:
-        st.warning("Collection stopped. Click Done to resume the saved progress.")
+        st.warning("Collection is paused. Start a new collection if you want to change the selected data.")
 
 
 def render_collection(settings):
@@ -252,7 +327,7 @@ def render_collection(settings):
 def _render_collection(gateway, settings):
     header = st.columns([5, 1])
     header[0].caption("Select a space → Choose filters → Done → Run Analysis")
-    header[1].button("Sign Out", on_click=_logout, use_container_width=True)
+    header[1].button("Sign Out", on_click=_logout, width="stretch")
     st.subheader("Select a Space")
     try:
         if "jira_spaces" not in st.session_state:
@@ -268,14 +343,17 @@ def _render_collection(gateway, settings):
             st.rerun()
         return None, False
     spaces = {str(s["id"]): s for s in st.session_state["jira_spaces"]}
-    if st.session_state.get("selected_space") is not None and st.session_state["selected_space"] not in spaces:
+    if (st.session_state.get("selected_space") is not None and
+            st.session_state["selected_space"] not in spaces):
         invalidate_selection()
         st.session_state["selected_space"] = None
     cols = st.columns([5, 1])
-    selected = cols[0].selectbox("Space", [None, *spaces],
-                                 format_func=lambda x: "Choose a space" if x is None else f"{spaces[x]['name']} ({spaces[x]['key']})",
-                                 key="selected_space", on_change=invalidate_selection)
-    if cols[1].button("Refresh spaces", use_container_width=True):
+    selected = cols[0].selectbox(
+        "Space", [None, *spaces],
+        format_func=lambda x: "Choose a space" if x is None else f"{spaces[x]['name']} ({spaces[x]['key']})",
+        key="selected_space", on_change=invalidate_selection,
+    )
+    if cols[1].button("Refresh spaces", width="stretch"):
         _reset_connection()
         st.rerun()
     if not spaces:
@@ -297,9 +375,12 @@ def _render_collection(gateway, settings):
             return None, False
     catalog = field_catalog(st.session_state["jira_reference"], st.session_state["jira_fields"])
     st.subheader("All work items")
-    st.caption(f"Selected space: {space['name']}. Date filters use the Jira account time zone: " +
-               str(st.session_state["jira_identity"].get("timeZone", "Jira account default")) + ".")
-    mode = st.radio("Search mode", ["Basic", "JQL"], horizontal=True, key="query_mode", on_change=invalidate_selection)
+    st.caption(
+        f"Selected space: {space['name']}. Date filters use the Jira account time zone: " +
+        str(st.session_state["jira_identity"].get("timeZone", "Jira account default")) + "."
+    )
+    mode = st.radio("Search mode", ["Basic", "JQL"], horizontal=True,
+                    key="query_mode", on_change=invalidate_selection)
     clauses, errors, query = [], [], None
     try:
         if mode == "Basic":
@@ -310,30 +391,37 @@ def _render_collection(gateway, settings):
                     clauses.append(_filter_popover(gateway, catalog[fid], cols[index]))
                 except FilterError as exc:
                     errors.append(str(exc))
-            extras = sorted([fid for fid in catalog if fid not in {*BASIC_IDS, "project", "text"}], key=lambda fid: catalog[fid].label.casefold())
-            with cols[4].popover("More filters", use_container_width=True):
-                chosen = st.multiselect("Add filters", extras, format_func=lambda fid: catalog[fid].label,
+            extras = sorted(
+                [fid for fid in catalog if fid not in {*BASIC_IDS, "project", "text"}],
+                key=lambda fid: catalog[fid].label.casefold(),
+            )
+            with cols[4].popover("More filters", width="stretch"):
+                chosen = st.multiselect("Add filters", extras,
+                                        format_func=lambda fid: catalog[fid].label,
                                         key="more_filters", on_change=invalidate_selection)
                 st.caption("Available searchable fields are loaded from Jira for this space, including custom fields.")
             if chosen:
                 for start in range(0, len(chosen), 3):
                     extra_cols = st.columns(3)
-                    for index, fid in enumerate(chosen[start:start+3]):
+                    for index, fid in enumerate(chosen[start:start + 3]):
                         try:
                             clauses.append(_filter_popover(gateway, catalog[fid], extra_cols[index]))
                         except FilterError as exc:
                             errors.append(str(exc))
             query = build_query(space["key"], clauses, text=text)
         else:
-            advanced = st.text_area("JQL filter condition", key="query_text", on_change=invalidate_selection,
-                                     placeholder='status = "In Progress" AND priority = High',
-                                     help="The selected space is applied automatically. Enter a condition without ORDER BY.")
+            advanced = st.text_area(
+                "JQL filter condition", key="query_text", on_change=invalidate_selection,
+                placeholder='status = "In Progress" AND priority = High',
+                help="The selected space is applied automatically. Enter a condition without ORDER BY.",
+            )
             query = build_query(space["key"], advanced=advanced)
     except FilterError as exc:
         errors.append(str(exc))
     if errors:
         invalidate_selection()
-        for error in errors: st.info(error)
+        for error in errors:
+            st.info(error)
         query = None
     fingerprint = query_fingerprint(selected, query, settings.revision) if query else None
     previous = st.session_state.get("prepared_data")
@@ -345,31 +433,41 @@ def _render_collection(gateway, settings):
             st.code(query, language="sql")
         can_collect = _preview(gateway, query, settings.jira_url)
     st.divider()
+
     job = st.session_state.get("collection_job")
     if job is not None and job.fingerprint != fingerprint:
         invalidate_selection()
         job = None
-    running = job.snapshot()["running"] if job else False
-    if st.button("Done", type="primary", disabled=not can_collect or running,
-                 help="Collect all selected tasks, or resume a stopped collection."):
-        if job is None or job.snapshot()["result"] is not None:
+
+    # Done is only the initial confirmation action. Once a collection job exists,
+    # its own explicit Running / Error / Complete state owns the controls.
+    if job is None:
+        if st.button("Done", type="primary", disabled=not can_collect, width="stretch",
+                     help="Confirm the selected filters and collect all matching Jira work items."):
             invalidate_selection()
-            job = CollectionJob(settings, space, query, fingerprint,
-                                st.session_state["jira_fields"], JiraGateway)
+            job = CollectionJob(
+                settings, space, query, fingerprint,
+                st.session_state["jira_fields"], JiraGateway,
+            )
             st.session_state["collection_job"] = job
-        job.start()
-    if job is not None:
-        if st.button("Start new collection", disabled=job.snapshot()["running"]):
-            invalidate_selection()
+            job.start()
             st.rerun()
+    else:
         _collection_monitor(job)
+
     prepared = st.session_state.get("prepared_data")
     if prepared:
         st.success("Your data has been collected and is ready for analysis.")
         st.caption(f"{prepared.count} work items · {prepared.space_name} · Collected at {prepared.collected_at}")
         st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           on_click="ignore")
     run_clicked = st.button("Run Analysis", type="primary", disabled=prepared is None)
     if prepared is None:
-        st.caption("Choose your filters and click Done to prepare the data before running analysis.")
+        if job is None:
+            st.caption("Choose your filters and click Done to prepare the data before running analysis.")
+        elif job.snapshot()["running"]:
+            st.caption("Data collection is still running. Run Analysis will unlock when the Excel source is complete.")
+        elif job.snapshot()["error"]:
+            st.caption("Resolve the collection error above. Your saved progress will be reused when you retry.")
     return prepared, run_clicked
