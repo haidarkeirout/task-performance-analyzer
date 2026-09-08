@@ -1,4 +1,4 @@
-"""English-only sign-in, space selection, filters, and collection screens."""
+"""English-only sign-in, space selection, filters, and persistent collection screens."""
 from __future__ import annotations
 
 import pandas as pd
@@ -6,6 +6,7 @@ import streamlit as st
 
 from automation_auth import SetupError, credentials_match, read_settings
 from collection_job import CollectionJob
+from collection_store import CollectionStore, PersistenceError, persistence_owner_key
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
@@ -15,11 +16,19 @@ RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
 
 
 def invalidate_selection():
+    """Invalidate an intentionally changed selection and cancel its persistent job."""
     job = st.session_state.pop("collection_job", None)
     if job is not None:
         job.cancel()
     for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query",
                 "collection_error", "collection_notice", *RESULT_KEYS):
+        st.session_state.pop(key, None)
+
+
+def _detach_session_job():
+    """Forget local UI objects without cancelling the durable collection checkpoint."""
+    st.session_state.pop("collection_job", None)
+    for key in ("prepared_data", "prepared_fingerprint", "collection_notice", *RESULT_KEYS):
         st.session_state.pop(key, None)
 
 
@@ -35,7 +44,7 @@ def _login(settings):
 
 
 def _logout():
-    invalidate_selection()
+    # Logging out must never cancel a durable collection. A later login can resume it.
     st.session_state.clear()
 
 
@@ -52,7 +61,7 @@ def require_sign_in():
         st.stop()
     if st.session_state.get("auth_revision") != settings.revision:
         if st.session_state.get("auth_revision"):
-            invalidate_selection()
+            _detach_session_job()
             st.session_state.clear()
         _, center, _ = st.columns([1, 1.3, 1])
         with center:
@@ -76,6 +85,60 @@ def _reset_connection():
         st.session_state.pop(key, None)
 
 
+def _load_persistent_candidate(settings):
+    if st.session_state.get("persistent_candidate_checked"):
+        return st.session_state.get("persistent_candidate")
+    st.session_state["persistent_candidate_checked"] = True
+    store = CollectionStore.configured()
+    if store is None:
+        st.session_state["persistent_store_error"] = "Persistent collection storage is not configured."
+        return None
+    try:
+        payload = store.latest_resumable(persistence_owner_key(settings))
+        st.session_state["persistent_candidate"] = payload
+        return payload
+    except PersistenceError as exc:
+        st.session_state["persistent_store_error"] = str(exc)
+        return None
+    finally:
+        store.close()
+
+
+def _resume_persistent_candidate(settings, payload):
+    store = CollectionStore.configured()
+    if store is None:
+        st.session_state["persistent_store_error"] = "Persistent collection storage is not configured."
+        return
+    job = CollectionJob.from_persisted(
+        settings, payload, JiraGateway,
+        store=store, owner_key=persistence_owner_key(settings),
+    )
+    if job is None:
+        store.close()
+        return
+    st.session_state["collection_job"] = job
+    st.session_state.pop("persistent_candidate", None)
+    st.session_state["persistent_candidate_checked"] = True
+    st.session_state.pop("persistent_store_error", None)
+
+
+def _cancel_persistent_candidate(settings, payload):
+    store = CollectionStore.configured()
+    if store is None:
+        return
+    try:
+        store.update_job(
+            persistence_owner_key(settings), payload["job_id"], "cancelled",
+            payload.get("stage") or "Cancelled", None,
+            "Previous collection was cancelled to start a new selection.",
+            None, payload.get("result_meta"),
+        )
+    finally:
+        store.close()
+    st.session_state.pop("persistent_candidate", None)
+    st.session_state["persistent_candidate_checked"] = True
+
+
 OPERATOR_LABELS = {"=": "Is", "!=": "Is not", "in": "Is any of", "not in": "Is none of",
                    "~": "Contains", "!~": "Does not contain", ">": "Greater than", "<": "Less than",
                    ">=": "At least", "<=": "At most", "is": "Is empty", "is not": "Is not empty",
@@ -95,7 +158,6 @@ def _suggestions(gateway, field, search):
 
 def _generic_filter(gateway, field):
     prefix = "filter_" + field.id + "_"
-    # Favor multi-select comparison without changing the server-advertised operator set.
     operators = list(field.operators)
     if "in" in operators:
         operators.insert(0, operators.pop(operators.index("in")))
@@ -239,9 +301,8 @@ def _render_collection_error(job, snapshot):
     if st.session_state.get("collection_notice") != notice:
         st.session_state["collection_notice"] = notice
         st.toast(
-            f"Collection stopped at {stage}. {completed} of {total} work items are saved."
-            if total else f"Collection stopped at {stage}.",
-            icon="⚠️",
+            f"Collection stopped at {stage}. {completed} of {total} work items are saved persistently."
+            if total else f"Collection stopped at {stage}.", icon="⚠️",
         )
 
     st.error("Collection stopped before all selected work items were collected.")
@@ -257,7 +318,7 @@ def _render_collection_error(job, snapshot):
         details.append(f"**Jira HTTP status:** `{status}`")
     details.append(f"**Reference:** `{reference}`")
     st.markdown("  \n".join(details))
-    st.info("Completed work is preserved. Retry continues from the first unfinished work item; it does not restart from task 1.")
+    st.info("Completed work is stored outside this Streamlit session. Retry continues from the first unfinished work item even after reopening the app.")
 
     retry_col, reset_col = st.columns(2)
     if retry_col.button("Retry Collection", type="primary", width="stretch",
@@ -268,12 +329,13 @@ def _render_collection_error(job, snapshot):
     if reset_col.button("Start New Collection", width="stretch",
                         key=f"new_collection_{reference}"):
         invalidate_selection()
+        st.session_state.pop("persistent_candidate_checked", None)
+        st.session_state.pop("persistent_candidate", None)
         st.rerun()
 
 
 @st.fragment(run_every=1)
 def _collection_monitor(job):
-    """Advance one collection unit per fragment tick and keep the UI state explicit."""
     snapshot = job.snapshot()
     if snapshot["running"]:
         job.step()
@@ -281,10 +343,8 @@ def _collection_monitor(job):
 
     total = snapshot["total"]
     completed = snapshot["completed"]
-    st.progress(
-        completed / total if total else 0,
-        text=f"{completed} of {total} tasks completed" if total else "Reading task list...",
-    )
+    st.progress(completed / total if total else 0,
+                text=f"{completed} of {total} tasks completed" if total else "Reading task list...")
     st.caption(snapshot["message"])
 
     if snapshot["running"]:
@@ -294,10 +354,7 @@ def _collection_monitor(job):
         if current:
             status_text += f" Current work item: {current}."
         if retry_attempt:
-            status_text += (
-                f" Automatic retry {retry_attempt} of "
-                f"{snapshot.get('max_auto_retries', 3)} is active."
-            )
+            status_text += f" Automatic retry {retry_attempt} of {snapshot.get('max_auto_retries', 3)} is active."
         status_text += f" Reference: {snapshot['id']}."
         st.info(status_text)
     elif snapshot["error"]:
@@ -307,13 +364,57 @@ def _collection_monitor(job):
             st.session_state["prepared_data"] = snapshot["result"]
             st.session_state.pop("collection_notice", None)
             st.rerun()
-        st.success("Collection complete. All selected work items were collected.")
+        st.success("Collection complete. All selected work items were collected and checkpointed.")
         if st.button("Start New Collection", width="stretch",
                      key=f"new_collection_complete_{snapshot['id']}"):
             invalidate_selection()
+            st.session_state.pop("persistent_candidate_checked", None)
+            st.session_state.pop("persistent_candidate", None)
+            st.rerun()
+    elif snapshot["status"] == "paused":
+        st.info(
+            f"A persistent collection was restored. {completed} of {total} work items are already saved. "
+            "Resume continues from the first unfinished work item."
+            if total else "A persistent collection was restored and is ready to resume."
+        )
+        resume_col, reset_col = st.columns(2)
+        if resume_col.button("Resume Collection", type="primary", width="stretch",
+                             key=f"resume_restored_{snapshot['id']}"):
+            job.start()
+            st.rerun()
+        if reset_col.button("Start New Collection", width="stretch",
+                            key=f"new_restored_{snapshot['id']}"):
+            invalidate_selection()
+            st.session_state.pop("persistent_candidate_checked", None)
+            st.session_state.pop("persistent_candidate", None)
             st.rerun()
     else:
-        st.warning("Collection is paused. Start a new collection if you want to change the selected data.")
+        st.warning("Collection is paused.")
+
+
+def _render_active_job(job):
+    st.subheader("Data Collection")
+    space_name = job.space.get("name") or job.space.get("key") or "Jira space"
+    st.caption(f"Persistent collection for {space_name} · Reference: {job.id}")
+    _collection_monitor(job)
+
+    prepared = st.session_state.get("prepared_data")
+    if prepared:
+        st.success("Your data has been collected and is ready for analysis.")
+        st.caption(f"{prepared.count} work items · {prepared.space_name} · Collected at {prepared.collected_at}")
+        st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           on_click="ignore")
+    run_clicked = st.button("Run Analysis", type="primary", disabled=prepared is None)
+    if prepared is None:
+        snapshot = job.snapshot()
+        if snapshot["running"]:
+            st.caption("Data collection is still running. Run Analysis will unlock when the Excel source is complete.")
+        elif snapshot["error"]:
+            st.caption("Resolve the collection error above. Saved progress will be reused when you retry.")
+        elif snapshot["status"] == "paused":
+            st.caption("Resume the saved collection to rebuild or finish the analysis source.")
+    return prepared, run_clicked
 
 
 def render_collection(settings):
@@ -328,6 +429,39 @@ def _render_collection(gateway, settings):
     header = st.columns([5, 1])
     header[0].caption("Select a space → Choose filters → Done → Run Analysis")
     header[1].button("Sign Out", on_click=_logout, width="stretch")
+
+    active_job = st.session_state.get("collection_job")
+    if active_job is not None:
+        return _render_active_job(active_job)
+
+    candidate = _load_persistent_candidate(settings)
+    if st.session_state.get("persistent_store_error"):
+        st.warning("Persistent resume storage is temporarily unavailable: " + st.session_state["persistent_store_error"])
+    if candidate:
+        space = candidate.get("space") or {}
+        completed = candidate.get("completed_count", 0)
+        total = candidate.get("total_count", 0)
+        status = candidate.get("status", "running")
+        st.subheader("Previous Collection Found")
+        st.info(
+            f"{space.get('name') or space.get('key') or 'Jira space'} · {completed} of {total} work items saved · Status: {status}. "
+            "This checkpoint is stored outside Streamlit and survives browser, laptop, and app-session restarts."
+        )
+        resume_col, fresh_col = st.columns(2)
+        if resume_col.button("Resume Previous Collection", type="primary", width="stretch"):
+            try:
+                _resume_persistent_candidate(settings, candidate)
+                st.rerun()
+            except PersistenceError as exc:
+                st.error(str(exc))
+        if fresh_col.button("Start Fresh Instead", width="stretch"):
+            try:
+                _cancel_persistent_candidate(settings, candidate)
+                st.rerun()
+            except PersistenceError as exc:
+                st.error(str(exc))
+        return None, False
+
     st.subheader("Select a Space")
     try:
         if "jira_spaces" not in st.session_state:
@@ -342,9 +476,9 @@ def _render_collection(gateway, settings):
             _reset_connection()
             st.rerun()
         return None, False
+
     spaces = {str(s["id"]): s for s in st.session_state["jira_spaces"]}
-    if (st.session_state.get("selected_space") is not None and
-            st.session_state["selected_space"] not in spaces):
+    if st.session_state.get("selected_space") is not None and st.session_state["selected_space"] not in spaces:
         invalidate_selection()
         st.session_state["selected_space"] = None
     cols = st.columns([5, 1])
@@ -361,6 +495,7 @@ def _render_collection(gateway, settings):
     if selected is None:
         return None, False
     space = spaces[selected]
+
     if st.session_state.get("catalog_space") != selected:
         invalidate_selection()
         for key in list(st.session_state):
@@ -373,12 +508,11 @@ def _render_collection(gateway, settings):
         except CollectionError as exc:
             st.error(str(exc))
             return None, False
+
     catalog = field_catalog(st.session_state["jira_reference"], st.session_state["jira_fields"])
     st.subheader("All work items")
-    st.caption(
-        f"Selected space: {space['name']}. Date filters use the Jira account time zone: " +
-        str(st.session_state["jira_identity"].get("timeZone", "Jira account default")) + "."
-    )
+    st.caption(f"Selected space: {space['name']}. Date filters use the Jira account time zone: " +
+               str(st.session_state["jira_identity"].get("timeZone", "Jira account default")) + ".")
     mode = st.radio("Search mode", ["Basic", "JQL"], horizontal=True,
                     key="query_mode", on_change=invalidate_selection)
     clauses, errors, query = [], [], None
@@ -391,13 +525,10 @@ def _render_collection(gateway, settings):
                     clauses.append(_filter_popover(gateway, catalog[fid], cols[index]))
                 except FilterError as exc:
                     errors.append(str(exc))
-            extras = sorted(
-                [fid for fid in catalog if fid not in {*BASIC_IDS, "project", "text"}],
-                key=lambda fid: catalog[fid].label.casefold(),
-            )
+            extras = sorted([fid for fid in catalog if fid not in {*BASIC_IDS, "project", "text"}],
+                            key=lambda fid: catalog[fid].label.casefold())
             with cols[4].popover("More filters", width="stretch"):
-                chosen = st.multiselect("Add filters", extras,
-                                        format_func=lambda fid: catalog[fid].label,
+                chosen = st.multiselect("Add filters", extras, format_func=lambda fid: catalog[fid].label,
                                         key="more_filters", on_change=invalidate_selection)
                 st.caption("Available searchable fields are loaded from Jira for this space, including custom fields.")
             if chosen:
@@ -418,11 +549,13 @@ def _render_collection(gateway, settings):
             query = build_query(space["key"], advanced=advanced)
     except FilterError as exc:
         errors.append(str(exc))
+
     if errors:
         invalidate_selection()
         for error in errors:
             st.info(error)
         query = None
+
     fingerprint = query_fingerprint(selected, query, settings.revision) if query else None
     previous = st.session_state.get("prepared_data")
     if previous is not None and previous.fingerprint != fingerprint:
@@ -434,40 +567,23 @@ def _render_collection(gateway, settings):
         can_collect = _preview(gateway, query, settings.jira_url)
     st.divider()
 
-    job = st.session_state.get("collection_job")
-    if job is not None and job.fingerprint != fingerprint:
+    if st.button("Done", type="primary", disabled=not can_collect, width="stretch",
+                 help="Confirm the selected filters and collect all matching Jira work items."):
         invalidate_selection()
-        job = None
-
-    # Done is only the initial confirmation action. Once a collection job exists,
-    # its own explicit Running / Error / Complete state owns the controls.
-    if job is None:
-        if st.button("Done", type="primary", disabled=not can_collect, width="stretch",
-                     help="Confirm the selected filters and collect all matching Jira work items."):
-            invalidate_selection()
-            job = CollectionJob(
-                settings, space, query, fingerprint,
-                st.session_state["jira_fields"], JiraGateway,
-            )
-            st.session_state["collection_job"] = job
-            job.start()
-            st.rerun()
-    else:
-        _collection_monitor(job)
+        store = CollectionStore.configured()
+        job = CollectionJob(
+            settings, space, query, fingerprint,
+            st.session_state["jira_fields"], JiraGateway,
+            store=store, owner_key=persistence_owner_key(settings),
+        )
+        st.session_state["collection_job"] = job
+        st.session_state["persistent_candidate_checked"] = True
+        st.session_state.pop("persistent_candidate", None)
+        job.start()
+        st.rerun()
 
     prepared = st.session_state.get("prepared_data")
-    if prepared:
-        st.success("Your data has been collected and is ready for analysis.")
-        st.caption(f"{prepared.count} work items · {prepared.space_name} · Collected at {prepared.collected_at}")
-        st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           on_click="ignore")
     run_clicked = st.button("Run Analysis", type="primary", disabled=prepared is None)
     if prepared is None:
-        if job is None:
-            st.caption("Choose your filters and click Done to prepare the data before running analysis.")
-        elif job.snapshot()["running"]:
-            st.caption("Data collection is still running. Run Analysis will unlock when the Excel source is complete.")
-        elif job.snapshot()["error"]:
-            st.caption("Resolve the collection error above. Your saved progress will be reused when you retry.")
+        st.caption("Choose your filters and click Done to prepare the data before running analysis.")
     return prepared, run_clicked
