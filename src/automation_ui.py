@@ -10,6 +10,7 @@ from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, fiel
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
+from clickup_export import collect_data as collect_clickup_data
 
 
 RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
@@ -116,9 +117,26 @@ def _render_clickup_collection(settings):
     st.caption(f"Selected space: {space_map[selected].get('name', selected)} · {len(rows)} work items shown")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     st.divider()
-    st.info("ClickUp collection is connected and ready for the next implementation stage: Activity collection and XLSX export.")
-    st.button("Done", disabled=True, help="Activity collection and export will be enabled after the read-only connector is verified.")
-    return None, False
+    fingerprint = f"clickup:{selected}:{len(tasks)}"
+    if st.button("Done", type="primary", key="clickup_done"):
+        st.session_state.pop("clickup_error", None)
+        try:
+            with st.status("Collecting ClickUp Activity...", expanded=True) as status:
+                prepared = collect_clickup_data(ClickUpGateway(settings.clickup_token), tasks,
+                    space_map[selected].get("name", selected), fingerprint, settings.source_timezone,
+                    progress=lambda message: status.update(label=message))
+                st.session_state["prepared_data"] = prepared
+                status.update(label="ClickUp data collection completed.", state="complete", expanded=False)
+        except Exception as exc:
+            st.session_state["clickup_error"] = str(exc)
+    if st.session_state.get("clickup_error"):
+        st.error(st.session_state["clickup_error"])
+    prepared = st.session_state.get("prepared_data")
+    if prepared:
+        st.success("ClickUp data has been collected and is ready for analysis.")
+        st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
+    return prepared, False
 
 
 OPERATOR_LABELS = {"=": "Is", "!=": "Is not", "in": "Is any of", "not in": "Is none of",
