@@ -1,4 +1,4 @@
-"""Exercise the Streamlit flow with deterministic Jira and persistent-store fakes."""
+"""Exercise the real Streamlit flow with a deterministic Jira transport."""
 import copy
 from datetime import datetime, timezone
 import unittest
@@ -22,67 +22,97 @@ class FakeStore:
 
     def begin(self, owner_key, job_id, fingerprint, space, query, definitions, cutoff):
         self.jobs.setdefault(job_id, {
-            "job_id": job_id, "owner_key": owner_key, "fingerprint": fingerprint,
-            "space": copy.deepcopy(space), "query": query,
-            "definitions": copy.deepcopy(definitions), "cutoff": cutoff,
-            "status": "running", "stage": "Ready", "current_issue": None,
-            "last_successful_issue": None, "message": "Persistent checkpoint created.",
-            "error_detail": None, "result_meta": None, "total_count": 0,
-            "completed_count": 0, "items": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "job_id": job_id,
+            "owner_key": owner_key,
+            "fingerprint": fingerprint,
+            "space": copy.deepcopy(space),
+            "query": query,
+            "definitions": copy.deepcopy(definitions),
+            "cutoff": cutoff,
+            "status": "running",
+            "stage": "Ready",
+            "current_issue": None,
+            "last_successful_issue": None,
+            "message": "Persistent checkpoint created.",
+            "error_detail": None,
+            "result_meta": None,
+            "items": [],
+            "total_count": 0,
+            "completed_count": 0,
         })
-        return {"job_id": job_id, "status": "running"}
+        return copy.deepcopy(self.jobs[job_id])
 
     def seed_items(self, owner_key, job_id, items):
         job = self.jobs[job_id]
-        if not job["items"]:
-            job["items"] = [
-                {"position": i, "issue_key": item["key"], "seed_item": copy.deepcopy(item),
-                 "item_data": None, "history_data": None, "completed": False,
-                 "collected_at": None}
-                for i, item in enumerate(items)
-            ]
-        job["total_count"] = len(job["items"])
-        return {"total_count": job["total_count"]}
+        if job["owner_key"] != owner_key:
+            raise RuntimeError("wrong owner")
+        existing = {row["issue_key"]: row for row in job["items"]}
+        rows = []
+        for position, item in enumerate(items):
+            key = item["key"]
+            row = existing.get(key, {
+                "position": position,
+                "issue_key": key,
+                "seed_item": copy.deepcopy(item),
+                "item_data": None,
+                "history_data": None,
+                "completed": False,
+            })
+            row["position"] = position
+            row["seed_item"] = copy.deepcopy(item)
+            rows.append(row)
+        job["items"] = rows
+        job["total_count"] = len(rows)
+        return {"total_count": len(rows)}
 
     def save_item(self, owner_key, job_id, issue_key, item, history):
         job = self.jobs[job_id]
-        row = next(r for r in job["items"] if r["issue_key"] == issue_key)
-        row.update(item_data=copy.deepcopy(item), history_data=copy.deepcopy(history),
-                   completed=True, collected_at=datetime.now(timezone.utc).isoformat())
-        job["completed_count"] = sum(1 for r in job["items"] if r["completed"])
+        if job["owner_key"] != owner_key:
+            raise RuntimeError("wrong owner")
+        for row in job["items"]:
+            if row["issue_key"] == issue_key:
+                row.update(item_data=copy.deepcopy(item), history_data=copy.deepcopy(history), completed=True)
+                break
+        job["completed_count"] = sum(row["completed"] for row in job["items"])
         job["last_successful_issue"] = issue_key
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        job["current_issue"] = None
+        job["message"] = f"Completed {job['completed_count']} of {job['total_count']} work items."
         return {"completed_count": job["completed_count"], "total_count": job["total_count"]}
 
     def update_job(self, owner_key, job_id, status, stage, current_issue, message,
                    error_detail=None, result_meta=None):
         job = self.jobs[job_id]
-        job.update(status=status, stage=stage, current_issue=current_issue,
-                   message=message, error_detail=copy.deepcopy(error_detail),
-                   updated_at=datetime.now(timezone.utc).isoformat())
+        if job["owner_key"] != owner_key:
+            raise RuntimeError("wrong owner")
+        job.update(status=status, stage=stage, current_issue=current_issue, message=message,
+                   error_detail=copy.deepcopy(error_detail))
         if result_meta is not None:
             job["result_meta"] = copy.deepcopy(result_meta)
-        job["completed_count"] = sum(1 for r in job["items"] if r["completed"])
-        job["total_count"] = len(job["items"])
         return {"status": status, "completed_count": job["completed_count"],
                 "total_count": job["total_count"]}
 
     def load_job(self, owner_key, job_id):
         job = self.jobs.get(job_id)
-        return copy.deepcopy(job) if job and job["owner_key"] == owner_key else None
+        if not job or job["owner_key"] != owner_key:
+            return None
+        return copy.deepcopy({k: v for k, v in job.items() if k != "owner_key"})
 
     def latest_resumable(self, owner_key):
-        matches = [j for j in self.jobs.values()
-                   if j["owner_key"] == owner_key and j["status"] in {"running", "error", "complete"}]
-        return copy.deepcopy(matches[-1]) if matches else None
+        matches = [job for job in self.jobs.values()
+                   if job["owner_key"] == owner_key and job["status"] in {"running", "error", "complete"}]
+        if not matches:
+            return None
+        job = matches[-1]
+        return copy.deepcopy({k: v for k, v in job.items() if k != "owner_key"})
 
     def latest_for_fingerprint(self, owner_key, fingerprint):
-        matches = [j for j in self.jobs.values()
-                   if j["owner_key"] == owner_key and j["fingerprint"] == fingerprint
-                   and j["status"] in {"running", "error", "complete"}]
-        return copy.deepcopy(matches[-1]) if matches else None
+        matches = [job for job in self.jobs.values()
+                   if job["owner_key"] == owner_key and job["fingerprint"] == fingerprint
+                   and job["status"] in {"running", "error", "complete"}]
+        if not matches:
+            return None
+        job = matches[-1]
+        return copy.deepcopy({k: v for k, v in job.items() if k != "owner_key"})
 
 
 class FakeJira:
@@ -124,7 +154,7 @@ class FakeJira:
 
     def all_issues(self, query, progress=None):
         if self.fail_collection:
-            raise automation_ui.CollectionError("Simulated permanent collection failure")
+            raise automation_ui.CollectionError("Jira is busy. Please try again.")
         return [example_issue(status="Done")]
 
     def project_details(self, project_id):
@@ -145,7 +175,7 @@ def finish_collection(at, limit=20):
         at.run()
         if "prepared_data" in at.session_state:
             return
-        job = at.session_state.get("collection_job")
+        job = at.session_state["collection_job"] if "collection_job" in at.session_state else None
         if job is not None and job.snapshot()["error"]:
             return
     raise AssertionError("Test collection did not finish")
@@ -254,7 +284,6 @@ class UserJourneyTests(unittest.TestCase):
         self.sign_in(at)
         self.select_space(at)
         button(at, "Done").click().run()
-        # One full run is enough to persist at least the issue list / first item.
         at.run()
         job_id = at.session_state["collection_job"].id
 
