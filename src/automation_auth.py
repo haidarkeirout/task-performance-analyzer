@@ -26,6 +26,8 @@ class Settings:
     jira_email: str = field(repr=False)
     jira_token: str = field(repr=False)
     jira_cloud_id: str = ""
+    clickup_token: str = field(default="", repr=False)
+    clickup_workspace_id: str = ""
     source_timezone: str = "Asia/Damascus"
     start_date_field: str = ""
 
@@ -46,16 +48,20 @@ def read_settings(values: Mapping, environment: Mapping | None = None) -> Settin
     password, password_hash = get("APP_PASSWORD"), get("APP_PASSWORD_HASH")
     url = get("JIRA_BASE_URL").strip().rstrip("/")
     email, token = get("JIRA_EMAIL").strip(), get("JIRA_API_TOKEN").strip()
-    if not username or not (password or password_hash) or not all([url, email, token]):
+    clickup_token = get("CLICKUP_API_TOKEN").strip()
+    clickup_workspace_id = get("CLICKUP_WORKSPACE_ID").strip()
+    if not username or not (password or password_hash) or (not all([url, email, token]) and not clickup_token):
         raise SetupError("This application is not configured yet. Please contact the administrator.")
-    parsed = urlsplit(url)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.query or parsed.fragment or parsed.path or parsed.port not in (None, 443)):
-        raise SetupError("The Jira connection configuration is invalid. Please contact the administrator.")
+    if url:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+                or parsed.query or parsed.fragment or parsed.path or parsed.port not in (None, 443)):
+            raise SetupError("The Jira connection configuration is invalid. Please contact the administrator.")
     cloud_id = get("JIRA_CLOUD_ID").strip()
     if cloud_id and any(c not in "0123456789abcdefABCDEF-" for c in cloud_id):
         raise SetupError("The Jira connection configuration is invalid. Please contact the administrator.")
     return Settings(username, password, password_hash, url, email, token, cloud_id,
+                    clickup_token, clickup_workspace_id,
                     get("SOURCE_TIMEZONE", "Asia/Damascus"), get("JIRA_START_DATE_FIELD_ID").strip())
 
 
@@ -81,3 +87,4 @@ def credentials_match(username: str, password: str, settings: Settings) -> bool:
         # The simple setup stores the password in Streamlit Secrets, never in code.
         password_ok = hmac.compare_digest(password.encode(), settings.password.encode())
     return user_ok and password_ok
+
