@@ -13,9 +13,11 @@ LOGGER.propagate = False
 class CollectionCancelled(Exception): pass
 
 class CollectionJob:
-    def __init__(self, settings, space, query, fingerprint, definitions, gateway_factory):
+    def __init__(self, settings, space, query, fingerprint, definitions, gateway_factory, store=None):
         self.settings, self.space, self.query = settings, dict(space), query
         self.fingerprint, self.definitions, self.gateway_factory = fingerprint, list(definitions), gateway_factory
+        # Optional persistence hook; existing Jira behavior is unchanged when omitted.
+        self.store = store
         self.checkpoint, self.id = {}, uuid.uuid4().hex[:12]
         self.cancelled = False; self.running = False; self.result = None; self.error = None
         self.message = "Ready to collect."; self.started = None
