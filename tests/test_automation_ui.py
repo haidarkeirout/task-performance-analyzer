@@ -61,6 +61,13 @@ class FakeJira:
         return copy.deepcopy(issue), history
 
 
+def finish_collection(at):
+    job = at.session_state["collection_job"]
+    job.thread.join(10)
+    assert not job.thread.is_alive(), "Test collection did not finish"
+    at.run()
+
+
 def button(at, label):
     return next(b for b in at.button if b.label == label)
 
@@ -104,6 +111,7 @@ class UserJourneyTests(unittest.TestCase):
         at.text_input(key="filter_cf[12345]_number").input("5").run()
         self.assertIn('(cf[12345] = 5)', at.session_state["preview_query"])
         button(at, "Done").click().run()
+        finish_collection(at)
         self.assertEqual(len(at.exception), 0)
         self.assertEqual(at.session_state["prepared_data"].count, 1)
         self.assertFalse(button(at, "Run Analysis").disabled)
@@ -142,11 +150,13 @@ class UserJourneyTests(unittest.TestCase):
         self.select_space(at)
         FakeJira.fail_collection = True
         button(at, "Done").click().run()
+        finish_collection(at)
         self.assertEqual(len(at.exception), 0)
         self.assertTrue(button(at, "Run Analysis").disabled)
         self.assertNotIn("prepared_data", at.session_state)
         FakeJira.fail_collection = False
         button(at, "Done").click().run()
+        finish_collection(at)
         self.assertIn("prepared_data", at.session_state)
         at.secrets["APP_PASSWORD"] = "new-password"
         at.run()

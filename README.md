@@ -1,7 +1,34 @@
-# Jira Performance — Automation v3
+# Jira Performance — Automation v3.1
 
 Select a Jira space, apply filters, and prepare its data for the existing process
 performance analysis. All application controls and messages are in English.
+
+## Collection reliability update
+
+Collection now runs in a session-owned background worker. Interface reruns do not
+interrupt its HTTP requests. Completed task/history pairs are checkpointed in
+server memory, and the progress counter counts completed tasks only. Each stage
+and retry is shown with a diagnostic reference and recorded in server logs without
+credentials or raw response bodies.
+
+After a temporary failure, **Done** resumes the same selection. **Start new
+collection** discards its checkpoints. A change of filters, space, or credentials
+cancels the old job. Checkpoints older than 30 minutes are discarded on retry.
+Checkpoints survive interface reruns within the same session; they do not survive
+a server restart, a lost browser session, or Sign Out. After such an event, start a
+new collection. This release does not add an external database.
+
+The agreed Excel columns are fixed in `src/export_columns.py`. Required analysis
+columns and full histories remain included. Missing/empty fields are listed in
+`Source_Data_Quality`; values are never invented. Duplicate custom-field names
+are distinguished by field ID when available. Filtering still selects tasks; it
+does not control which columns are collected. Project metadata is fetched once.
+Watcher identities are collected when Jira grants access, otherwise left blank
+with a source-quality note; this does not block unrelated task analysis.
+
+For an existing v3 installation, keep the existing Secrets and upload all contents
+of this update, preserving the folder paths. No new credentials or dependencies
+are needed. The sign-in page and analysis calculations are preserved.
 
 ## Daily use
 
@@ -61,7 +88,7 @@ is revoked; dashboard users never enter it.
 
 ### 2. Upload the update
 
-Extract `jira_automation_v3.zip`. Upload its **contents** to the existing repository
+Extract `jira_automation_v3_1.zip`. Upload its **contents** to the existing repository
 root using **Add file → Upload files**, preserving all subfolders. Drag folders
 as folders so file paths stay intact.
 
@@ -72,7 +99,7 @@ the repository ignore rules. Do not place everything inside an extra parent fold
 Commit to the existing deployment branch, `main`. The Streamlit entry point stays
 `app.py`. Wait for its normal redeployment, then open the app and sign in using
 the application account configured in step 1. The new caption says
-**Data collection v3.0** after sign-in.
+**Data collection v3.1** after sign-in.
 
 ### 3. Check the live connection
 
@@ -127,6 +154,7 @@ of Jira's native CSV export.
 | --- | --- |
 | `Jira_Data` | Task fields, using the headers required by the existing analyzer. |
 | `Workflow_Events` | All retrieved status transitions for the selected tasks. |
+| `Source_Data_Quality` | Missing or empty fixed source columns. |
 | `History_Coverage` | Per-task completeness, coverage time, and initial status. |
 | `Field_Changes` | Retrieved changes to all fields. |
 | `Field_Catalog` | Jira field IDs, names, schemas, and corresponding Excel headers. |

@@ -739,7 +739,7 @@ from automation_ui import require_sign_in, render_collection
 settings = require_sign_in()
 
 st.title("Jira Process Performance Dashboard")
-st.caption("Data collection v3.0 — select your Jira work items and run the existing process analysis")
+st.caption("Data collection v3.1 — select your Jira work items and run the existing process analysis")
 
 prepared_data, run_button = render_collection(settings)
 cutoff_text = prepared_data.cutoff if prepared_data else ""

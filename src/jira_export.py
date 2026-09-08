@@ -13,6 +13,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 from jira_gateway import CollectionError
+from export_columns import DIRECT, fixed_headers
 
 
 @dataclass
@@ -76,10 +77,14 @@ def issue_rows(issues, definitions, preferred_start=""):
         for fid in issue.get("fields", {}):
             if fid not in catalog:
                 catalog[fid] = {"id": fid, "name": (issue.get("names") or {}).get(fid, fid)}
-    mapping = dict(DIRECT_COLUMNS)
+    mapping = {**DIRECT_COLUMNS, **DIRECT}
+    for fid, definition in catalog.items():
+        if definition.get("name", "").casefold() == "sprint":
+            mapping[fid] = "Sprint"
     if start:
         mapping[start] = "Custom field (Start date)"
-    headers, field_rows, used = list(CANONICAL), [], {h.casefold() for h in CANONICAL}
+    headers = list(dict.fromkeys([*CANONICAL, *mapping.values()]))
+    field_rows, used = [], {h.casefold() for h in headers}
     for fid, definition in catalog.items():
         if fid not in mapping:
             label = definition.get("name") or fid
@@ -101,11 +106,24 @@ def issue_rows(issues, definitions, preferred_start=""):
                "Resolution": _named(fields.get("resolution")), "Created": fields.get("created"),
                "Due date": fields.get("duedate"), "Custom field (Start date)": fields.get(start) if start else None,
                "Labels": _json(fields.get("labels") or [])}
+        project = fields.get("project") or {}
+        lead = project.get("lead") or {}
+        row.update({"Project key": project.get("key"), "Project name": project.get("name"),
+                    "Project type": project.get("projectTypeKey"), "Project lead": lead.get("displayName"),
+                    "Project lead id": lead.get("accountId"), "Project description": project.get("description"),
+                    "Status Category": ((fields.get("status") or {}).get("statusCategory") or {}).get("name"),
+                    "Votes": (fields.get("votes") or {}).get("votes"),
+                    "Watchers": _json([w.get("displayName") for w in fields["watches"]["watchers"]]) if isinstance((fields.get("watches") or {}).get("watchers"), list) else None,
+                    "Watchers Id": _json([w.get("accountId") for w in fields["watches"]["watchers"]]) if isinstance((fields.get("watches") or {}).get("watchers"), list) else None})
+        for person, title in [("reporter", "Reporter"), ("creator", "Creator")]:
+            value = fields.get(person) or {}
+            row[title] = value.get("displayName")
+            row[title + " Id"] = value.get("accountId")
         for fid, header in mapping.items():
             if header not in row:
                 row[header] = _display(fields.get(fid))
         rows.append(row)
-    return headers, rows, field_rows
+    return fixed_headers(mapping, headers), rows, field_rows
 
 
 def _write_cell(ws, row, col, value):
@@ -158,6 +176,9 @@ def build_workbook(issues, histories, definitions, *, cutoff, collected_at, quer
     wb = Workbook()
     wb.remove(wb.active)
     _sheet(wb, "Jira_Data", expanded_headers, [[row.get(h) for h in expanded_headers] for row in rows])
+    missing = [[h, "No value returned for this selection. This may be an empty, unavailable, or inaccessible field."]
+               for h in headers if all(row.get(h) is None for row in rows)]
+    _sheet(wb, "Source_Data_Quality", ["Column", "Note"], missing)
     events, coverage, changes, raw = [], [], [], []
     local_tz = ZoneInfo(source_timezone)
     for issue in issues:
@@ -201,22 +222,46 @@ def build_workbook(issues, histories, definitions, *, cutoff, collected_at, quer
     return stream.getvalue()
 
 
-def collect_data(gateway, space, query, fingerprint, definitions, progress=None, clock=None):
+def collect_data(gateway, space, query, fingerprint, definitions, progress=None, clock=None, checkpoint=None):
     clock = clock or (lambda: datetime.now(timezone.utc))
-    # Freeze evaluation BEFORE fetching any page. Every history covers this point.
-    cutoff = clock().isoformat()
-    issues = gateway.all_issues(query, progress=progress)
-    if not issues:
-        raise CollectionError("No work items match these filters. Change the filters and click Done again.")
-    full, histories = [], {}
+    checkpoint = {} if checkpoint is None else checkpoint
+    if checkpoint and checkpoint.get("fingerprint") != fingerprint:
+        raise CollectionError("The selection changed. Start a new collection.")
+    checkpoint.setdefault("fingerprint", fingerprint)
+    checkpoint.setdefault("cutoff", clock().isoformat())
+    checkpoint.setdefault("completed", {})
+    cutoff = checkpoint["cutoff"]
+    if "issues" not in checkpoint:
+        issues = gateway.all_issues(query, progress=progress)
+        keys = [item.get("key") for item in issues]
+        if not issues:
+            raise CollectionError("No work items match these filters. Change the filters and click Done again.")
+        if any(not key for key in keys) or len(set(keys)) != len(keys):
+            raise CollectionError("The selected work item list is incomplete or contains duplicates.")
+        checkpoint["issues"] = issues
+    issues = checkpoint["issues"]
+    if "project" not in checkpoint:
+        if progress: progress("Reading project details...")
+        checkpoint["project"] = gateway.project_details(space["id"]) if hasattr(gateway, "project_details") else space
+    completed = checkpoint["completed"]
     for number, issue in enumerate(issues, 1):
-        if progress: progress(f"Collecting fields and complete history: {number} of {len(issues)} work items...")
+        if issue["key"] in completed:
+            continue
+        if progress: progress(f"Completed {len(completed)} of {len(issues)}; reading {issue['key']}...")
         item, history = gateway.complete_issue(issue)
         actual_project = str((item.get("fields", {}).get("project") or {}).get("id", ""))
-        if actual_project != str(space["id"]):
-            raise CollectionError("A work item changed spaces during collection. Please click Done again.")
-        full.append(item)
-        histories[issue["key"]] = history
+        if actual_project != str(space["id"]) or item.get("key") != issue["key"]:
+            raise CollectionError("A work item changed spaces or keys during collection. Start a new collection.")
+        if history.get("history_complete") is not True or not history.get("history_through"):
+            raise CollectionError("A task history is incomplete. No partial export was prepared.")
+        if datetime.fromisoformat(history["history_through"].replace("Z", "+00:00")) < datetime.fromisoformat(cutoff.replace("Z", "+00:00")):
+            raise CollectionError("A task history does not cover the evaluation cutoff.")
+        item["fields"]["project"] = {**checkpoint["project"], **(item["fields"].get("project") or {})}
+        # Commit the pair only AFTER both fields and history have been verified.
+        completed[issue["key"]] = (item, history)
+        if progress: progress(f"Completed {len(completed)} of {len(issues)} work items.")
+    full = [completed[issue["key"]][0] for issue in issues]
+    histories = {issue["key"]: completed[issue["key"]][1] for issue in issues}
     collected_at = clock().isoformat()
     if progress: progress("Preparing your Excel file...")
     data = build_workbook(full, histories, definitions, cutoff=cutoff, collected_at=collected_at,

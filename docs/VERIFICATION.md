@@ -1,11 +1,11 @@
-# Automation v3 — verification
+# Automation v3.1 — verification
 
 Verified locally on 2026-09-08. This package has not been deployed to the user's
 Streamlit app and contains no live Jira credentials.
 
 ## Results
 
-**30 tests passed**, including the original workbook regression tests.
+**34 tests passed**, including the original workbook regression tests.
 
 Runtime: Python 3.12.13, Streamlit 1.63.0, pandas 2.2.3, openpyxl 3.1.5,
 requests 2.34.2, python-docx 1.2.0.
@@ -70,3 +70,20 @@ which tasks Jira returns. Recollect after such changes.
 Existing Streamlit dashboard code emits deprecation notices for
 `use_container_width` under this runtime. These did not fail the tests and that
 original dashboard code was preserved.
+
+
+## v3.1 collection regression
+
+New tests simulate an interruption at task 17 of 24 and verify that retry completes
+all 24 tasks without fetching the first 16 again. The resulting workbook contains
+24 task rows and 24 history-coverage rows, preserving the original cutoff.
+Streamlit AppTest also verifies that an interface rerun during a blocked request
+keeps the same worker, and that changing a filter cancels that worker and cannot
+publish its old result. Fixed requested headers, duplicate custom-field names,
+project lead metadata, reporter IDs, and existing analytics regression are covered.
+
+The user's original cloud interruption was not reproduced against live credentials.
+The prior button-scoped implementation could lose local progress on a script rerun;
+that lifecycle failure is now covered by tests. Live errors now include a stage
+and reference with corresponding server logs, allowing remaining causes to be
+identified. No change is deployed by generating this archive.

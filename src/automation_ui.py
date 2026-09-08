@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from automation_auth import SetupError, credentials_match, read_settings
-from jira_export import collect_data
+from collection_job import CollectionJob
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
@@ -15,7 +15,10 @@ RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
 
 
 def invalidate_selection():
-    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", *RESULT_KEYS):
+    job = st.session_state.pop("collection_job", None)
+    if job is not None:
+        job.cancel()
+    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", "collection_notice", *RESULT_KEYS):
         st.session_state.pop(key, None)
 
 
@@ -31,6 +34,7 @@ def _login(settings):
 
 
 def _logout():
+    invalidate_selection()
     st.session_state.clear()
 
 
@@ -47,6 +51,7 @@ def require_sign_in():
         st.stop()
     if st.session_state.get("auth_revision") != settings.revision:
         if st.session_state.get("auth_revision"):
+            invalidate_selection()
             st.session_state.clear()
         _, center, _ = st.columns([1, 1.3, 1])
         with center:
@@ -209,6 +214,30 @@ def _preview(gateway, query, site_url):
     return True
 
 
+@st.fragment(run_every=1)
+def _collection_monitor(job):
+    """Polling does not interrupt the worker or re-run the filter widgets."""
+    snapshot = job.snapshot()
+    total = snapshot["total"]
+    st.progress(snapshot["completed"] / total if total else 0,
+                text=f"{snapshot['completed']} of {total} tasks completed" if total else "Reading task list...")
+    st.caption(snapshot["message"])
+    if snapshot["running"]:
+        st.info(f"Collection is running. Elapsed: {snapshot['elapsed']} seconds. Reference: {snapshot['id']}.")
+    elif snapshot["error"]:
+        notice = (snapshot["id"], snapshot["error"])
+        if st.session_state.get("collection_notice") != notice:
+            st.session_state["collection_notice"] = notice
+            st.rerun()
+        st.error(snapshot["error"])
+    elif snapshot["result"] is not None:
+        if st.session_state.get("prepared_data") is not snapshot["result"]:
+            st.session_state["prepared_data"] = snapshot["result"]
+            st.rerun()
+    else:
+        st.warning("Collection stopped. Click Done to resume the saved progress.")
+
+
 def render_collection(settings):
     gateway = JiraGateway(settings)
     try:
@@ -313,20 +342,24 @@ def _render_collection(gateway, settings):
             st.code(query, language="sql")
         can_collect = _preview(gateway, query, settings.jira_url)
     st.divider()
-    if st.button("Done", type="primary", disabled=not can_collect, help="Collect all matching work items and prepare their Excel file."):
+    job = st.session_state.get("collection_job")
+    if job is not None and job.fingerprint != fingerprint:
         invalidate_selection()
-        try:
-            with st.status("Collecting your data...", expanded=True) as status:
-                prepared = collect_data(gateway, space, query, fingerprint, st.session_state["jira_fields"],
-                                         progress=lambda message: status.update(label=message))
-                st.session_state["prepared_data"] = prepared
-                status.update(label="Data collection completed.", state="complete", expanded=False)
-        except (CollectionError, ValueError) as exc:
-            st.session_state["collection_error"] = str(exc)
-        except Exception:
-            st.session_state["collection_error"] = "Data collection could not be completed. Please try again or contact the administrator."
-    if st.session_state.get("collection_error"):
-        st.error(st.session_state["collection_error"])
+        job = None
+    running = job.snapshot()["running"] if job else False
+    if st.button("Done", type="primary", disabled=not can_collect or running,
+                 help="Collect all selected tasks, or resume a stopped collection."):
+        if job is None or job.snapshot()["result"] is not None:
+            invalidate_selection()
+            job = CollectionJob(settings, space, query, fingerprint,
+                                st.session_state["jira_fields"], JiraGateway)
+            st.session_state["collection_job"] = job
+        job.start()
+    if job is not None:
+        if st.button("Start new collection", disabled=job.snapshot()["running"]):
+            invalidate_selection()
+            st.rerun()
+        _collection_monitor(job)
     prepared = st.session_state.get("prepared_data")
     if prepared:
         st.success("Your data has been collected and is ready for analysis.")
