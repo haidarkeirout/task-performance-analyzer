@@ -9,6 +9,10 @@ class ClickUpCollectionError(RuntimeError):
     pass
 
 
+class ClickUpActivityUnavailable(ClickUpCollectionError):
+    """The public ClickUp account does not expose the task Activity History endpoint."""
+
+
 class ClickUpGateway:
     base = "https://api.clickup.com/api/v2"
 
@@ -102,6 +106,16 @@ class ClickUpGateway:
         return result
 
     def activity(self, task_id: str):
-        data = self.request(f"/task/{task_id}/activity")
+        try:
+            data = self.request(f"/task/{task_id}/activity")
+        except ClickUpCollectionError as exc:
+            # ClickUp's public v2 API may return 404 for the web-only Activity
+            # History endpoint. Keep this failure distinguishable so task
+            # collection can finish with an explicit data-quality warning.
+            if str(exc) == "مورد ClickUp المطلوب غير متاح لهذا الحساب.":
+                raise ClickUpActivityUnavailable(
+                    "ClickUp public API does not expose Activity History for this account."
+                ) from exc
+            raise
         return data.get("activity", data.get("events", [])) if isinstance(data, dict) else []
 
