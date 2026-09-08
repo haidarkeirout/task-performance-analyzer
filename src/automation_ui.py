@@ -5,20 +5,18 @@ import pandas as pd
 import streamlit as st
 
 from automation_auth import SetupError, credentials_match, read_settings
-from collection_job import CollectionJob
+from jira_export import collect_data
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
+from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 
 
 RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
 
 
 def invalidate_selection():
-    job = st.session_state.pop("collection_job", None)
-    if job is not None:
-        job.cancel()
-    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", "collection_notice", *RESULT_KEYS):
+    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", *RESULT_KEYS):
         st.session_state.pop(key, None)
 
 
@@ -34,7 +32,6 @@ def _login(settings):
 
 
 def _logout():
-    invalidate_selection()
     st.session_state.clear()
 
 
@@ -51,7 +48,6 @@ def require_sign_in():
         st.stop()
     if st.session_state.get("auth_revision") != settings.revision:
         if st.session_state.get("auth_revision"):
-            invalidate_selection()
             st.session_state.clear()
         _, center, _ = st.columns([1, 1.3, 1])
         with center:
@@ -72,6 +68,57 @@ def _reset_connection():
     invalidate_selection()
     for key in ("jira_spaces", "jira_fields", "jira_identity", "jira_reference", "catalog_space", "suggestion_cache"):
         st.session_state.pop(key, None)
+
+
+def _render_clickup_collection(settings):
+    st.caption("Select a ClickUp Space → review its tasks → Done")
+    try:
+        gateway = ClickUpGateway(settings.clickup_token)
+        try:
+            workspaces = gateway.workspaces()
+            workspace_id = settings.clickup_workspace_id or (str(workspaces[0]["id"]) if workspaces else "")
+            if not workspace_id:
+                st.error("لم يتم العثور على Workspace في ClickUp.")
+                return None, False
+            spaces = gateway.spaces(workspace_id)
+        finally:
+            gateway.close()
+    except ClickUpCollectionError as exc:
+        st.error(str(exc))
+        return None, False
+    space_map = {str(item["id"]): item for item in spaces}
+    selected = st.selectbox("Space", [None, *space_map],
+                            format_func=lambda value: "Choose a space" if value is None else space_map[value].get("name", value),
+                            key="clickup_selected_space")
+    if selected is None:
+        return None, False
+    try:
+        gateway = ClickUpGateway(settings.clickup_token)
+        try:
+            with st.spinner("جاري تحميل مهام ClickUp..."):
+                tasks = gateway.all_tasks_for_space(selected)
+        finally:
+            gateway.close()
+    except ClickUpCollectionError as exc:
+        st.error(str(exc))
+        return None, False
+    rows = []
+    for task in tasks:
+        status = task.get("status") or {}
+        priority = task.get("priority") or {}
+        assignees = task.get("assignees") or []
+        rows.append({"Task ID": task.get("id"), "Task Name": task.get("name"),
+                     "Assignee": ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
+                     "Priority": priority.get("priority") if isinstance(priority, dict) else None,
+                     "Status": status.get("status") if isinstance(status, dict) else None,
+                     "Due date": task.get("due_date")})
+    st.subheader("All work items")
+    st.caption(f"Selected space: {space_map[selected].get('name', selected)} · {len(rows)} work items shown")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.divider()
+    st.info("ClickUp collection is connected and ready for the next implementation stage: Activity collection and XLSX export.")
+    st.button("Done", disabled=True, help="Activity collection and export will be enabled after the read-only connector is verified.")
+    return None, False
 
 
 OPERATOR_LABELS = {"=": "Is", "!=": "Is not", "in": "Is any of", "not in": "Is none of",
@@ -214,34 +261,10 @@ def _preview(gateway, query, site_url):
     return True
 
 
-@st.fragment(run_every=1)
-def _collection_monitor(job):
-    """Advance one collection unit per fragment tick; safe across reruns."""
-    snapshot = job.snapshot()
-    if snapshot["running"]:
-        job.step()
-        snapshot = job.snapshot()
-    total = snapshot["total"]
-    st.progress(snapshot["completed"] / total if total else 0,
-                text=f"{snapshot['completed']} of {total} tasks completed" if total else "Reading task list...")
-    st.caption(snapshot["message"])
-    if snapshot["running"]:
-        st.info(f"Collection is running. Elapsed: {snapshot['elapsed']} seconds. Reference: {snapshot['id']}.")
-    elif snapshot["error"]:
-        notice = (snapshot["id"], snapshot["error"])
-        if st.session_state.get("collection_notice") != notice:
-            st.session_state["collection_notice"] = notice
-            st.rerun()
-        st.error(snapshot["error"])
-    elif snapshot["result"] is not None:
-        if st.session_state.get("prepared_data") is not snapshot["result"]:
-            st.session_state["prepared_data"] = snapshot["result"]
-            st.rerun()
-    else:
-        st.warning("Collection stopped. Click Done to resume the saved progress.")
-
-
 def render_collection(settings):
+    source = st.session_state.get("data_source", "Jira")
+    if source == "ClickUp":
+        return _render_clickup_collection(settings)
     gateway = JiraGateway(settings)
     try:
         return _render_collection(gateway, settings)
@@ -250,6 +273,10 @@ def render_collection(settings):
 
 
 def _render_collection(gateway, settings):
+    source = st.radio("Data source", ["Jira", "ClickUp"], horizontal=True,
+                      key="data_source", on_change=invalidate_selection)
+    if source == "ClickUp":
+        return _render_clickup_collection(settings)
     header = st.columns([5, 1])
     header[0].caption("Select a space → Choose filters → Done → Run Analysis")
     header[1].button("Sign Out", on_click=_logout, use_container_width=True)
@@ -345,24 +372,20 @@ def _render_collection(gateway, settings):
             st.code(query, language="sql")
         can_collect = _preview(gateway, query, settings.jira_url)
     st.divider()
-    job = st.session_state.get("collection_job")
-    if job is not None and job.fingerprint != fingerprint:
+    if st.button("Done", type="primary", disabled=not can_collect, help="Collect all matching work items and prepare their Excel file."):
         invalidate_selection()
-        job = None
-    running = job.snapshot()["running"] if job else False
-    if st.button("Done", type="primary", disabled=not can_collect or running,
-                 help="Collect all selected tasks, or resume a stopped collection."):
-        if job is None or job.snapshot()["result"] is not None:
-            invalidate_selection()
-            job = CollectionJob(settings, space, query, fingerprint,
-                                st.session_state["jira_fields"], JiraGateway)
-            st.session_state["collection_job"] = job
-        job.start()
-    if job is not None:
-        if st.button("Start new collection", disabled=job.snapshot()["running"]):
-            invalidate_selection()
-            st.rerun()
-        _collection_monitor(job)
+        try:
+            with st.status("Collecting your data...", expanded=True) as status:
+                prepared = collect_data(gateway, space, query, fingerprint, st.session_state["jira_fields"],
+                                         progress=lambda message: status.update(label=message))
+                st.session_state["prepared_data"] = prepared
+                status.update(label="Data collection completed.", state="complete", expanded=False)
+        except (CollectionError, ValueError) as exc:
+            st.session_state["collection_error"] = str(exc)
+        except Exception:
+            st.session_state["collection_error"] = "Data collection could not be completed. Please try again or contact the administrator."
+    if st.session_state.get("collection_error"):
+        st.error(st.session_state["collection_error"])
     prepared = st.session_state.get("prepared_data")
     if prepared:
         st.success("Your data has been collected and is ready for analysis.")
@@ -373,3 +396,4 @@ def _render_collection(gateway, settings):
     if prepared is None:
         st.caption("Choose your filters and click Done to prepare the data before running analysis.")
     return prepared, run_clicked
+
