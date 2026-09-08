@@ -114,27 +114,36 @@ def _render_clickup_collection(settings):
                      "Status": status.get("status") if isinstance(status, dict) else None,
                      "Due date": task.get("due_date")})
     st.subheader("All work items")
-    st.caption(f"Selected space: {space_map[selected].get('name', selected)} · {len(rows)} work items shown")
+    selected_name = space_map[selected].get("name", selected)
+    st.caption(f"Selected space: {selected_name} · Space ID: {selected} · {len(rows)} work items shown")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     st.divider()
     fingerprint = f"clickup:{selected}:{len(tasks)}"
     if st.button("Done", type="primary", key="clickup_done"):
         st.session_state.pop("clickup_error", None)
+        st.session_state.pop("clickup_prepared_data", None)
         try:
             with st.status("Collecting ClickUp Activity...", expanded=True) as status:
-                prepared = collect_clickup_data(ClickUpGateway(settings.clickup_token), tasks,
-                    space_map[selected].get("name", selected), fingerprint, settings.source_timezone,
-                    progress=lambda message: status.update(label=message))
-                st.session_state["prepared_data"] = prepared
+                collector = ClickUpGateway(settings.clickup_token)
+                try:
+                    prepared = collect_clickup_data(
+                        collector, tasks, selected_name, fingerprint,
+                        settings.source_timezone,
+                        progress=lambda message: status.update(label=message),
+                        space_id=selected,
+                    )
+                finally:
+                    collector.close()
+                st.session_state["clickup_prepared_data"] = prepared
                 status.update(label="ClickUp data collection completed.", state="complete", expanded=False)
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
     if st.session_state.get("clickup_error"):
         st.error(st.session_state["clickup_error"])
-    prepared = st.session_state.get("prepared_data")
+    prepared = st.session_state.get("clickup_prepared_data")
     if prepared:
-        st.success("ClickUp data has been collected and is ready for analysis.")
-        st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
+        st.success(f"ClickUp data collected for Space ID {selected}. History IDs are included in the Activity sheet.")
+        st.download_button("Download ClickUp Source Excel", prepared.xlsx, prepared.filename,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
     return prepared, False
 
