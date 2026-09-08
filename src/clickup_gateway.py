@@ -101,3 +101,7 @@ class ClickUpGateway:
                 page += 1
         return result
 
+    def activity(self, task_id: str):
+        data = self.request(f"/task/{task_id}/activity")
+        return data.get("activity", data.get("events", [])) if isinstance(data, dict) else []
+
