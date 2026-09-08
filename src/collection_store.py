@@ -10,6 +10,9 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+import json
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -55,11 +58,8 @@ class CollectionStore:
 
     @classmethod
     def configured(cls):
-        url = os.getenv("SUPABASE_COLLECTION_URL", DEFAULT_SUPABASE_URL).strip()
-        key = os.getenv("SUPABASE_COLLECTION_PUBLISHABLE_KEY", DEFAULT_SUPABASE_PUBLISHABLE_KEY).strip()
-        if not url or not key:
-            return None
-        return cls(url, key)
+        # Local-only persistence by default. Jira payloads never leave this server.
+        return LocalCollectionStore(os.getenv("COLLECTION_STATE_DB", ".collection_state.sqlite3"))
 
     def close(self):
         self.session.close()
@@ -186,3 +186,78 @@ class CollectionStore:
             "p_owner_key": owner_key,
             "p_fingerprint": fingerprint,
         })
+
+class LocalCollectionStore:
+    """SQLite checkpoint store kept on the application host."""
+    def __init__(self, path):
+        self.path = str(Path(path))
+        parent = Path(self.path).parent
+        if str(parent) not in ("", "."):
+            parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
+        self.db.execute("CREATE TABLE IF NOT EXISTS collection_jobs (job_id TEXT PRIMARY KEY, owner_key TEXT NOT NULL, payload TEXT NOT NULL)")
+        self.db.commit()
+
+    def close(self):
+        self.db.close()
+
+    def _read(self, job_id):
+        row = self.db.execute("SELECT owner_key,payload FROM collection_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row[1]); payload["owner_key"] = row[0]; return payload
+
+    def _write(self, payload):
+        owner = payload["owner_key"]; data = dict(payload); data.pop("owner_key", None)
+        self.db.execute("INSERT INTO collection_jobs(job_id,owner_key,payload) VALUES(?,?,?) ON CONFLICT(job_id) DO UPDATE SET owner_key=excluded.owner_key,payload=excluded.payload",
+                        (payload["job_id"], owner, json.dumps(data, default=str)))
+        self.db.commit()
+
+    def begin(self, owner_key, job_id, fingerprint, space, query, definitions, cutoff):
+        existing = self._read(job_id)
+        if existing:
+            return {k:v for k,v in existing.items() if k != "owner_key"}
+        payload = {"job_id":job_id,"owner_key":owner_key,"fingerprint":fingerprint,"space":space,"query":query,"definitions":definitions,"cutoff":cutoff,"status":"running","stage":"Ready","current_issue":None,"last_successful_issue":None,"message":"Persistent checkpoint created.","error_detail":None,"result_meta":None,"items":[],"total_count":0,"completed_count":0}
+        self._write(payload); return {k:v for k,v in payload.items() if k != "owner_key"}
+
+    def seed_items(self, owner_key, job_id, items):
+        payload = self._read(job_id)
+        if not payload or payload["owner_key"] != owner_key: raise RuntimeError("wrong owner")
+        existing = {r["issue_key"]:r for r in payload.get("items",[])}; rows=[]
+        for pos,item in enumerate(items):
+            key=item["key"]; row=existing.get(key,{"position":pos,"issue_key":key,"seed_item":item,"item_data":None,"history_data":None,"completed":False})
+            row["position"]=pos; row["seed_item"]=item; rows.append(row)
+        payload["items"]=rows; payload["total_count"]=len(rows); self._write(payload); return {"total_count":len(rows)}
+
+    def save_item(self, owner_key, job_id, issue_key, item, history):
+        payload=self._read(job_id)
+        if not payload or payload["owner_key"] != owner_key: raise RuntimeError("wrong owner")
+        for row in payload["items"]:
+            if row["issue_key"] == issue_key: row.update(item_data=item, history_data=history, completed=True); break
+        payload["completed_count"]=sum(bool(r.get("completed")) for r in payload["items"]); payload["last_successful_issue"]=issue_key; payload["current_issue"]=None
+        payload["message"]=f"Completed {payload['completed_count']} of {payload['total_count']} work items."; self._write(payload)
+        return {"completed_count":payload["completed_count"],"total_count":payload["total_count"]}
+
+    def update_job(self, owner_key, job_id, status, stage, current_issue, message, error_detail=None, result_meta=None):
+        payload=self._read(job_id)
+        if not payload or payload["owner_key"] != owner_key: raise RuntimeError("wrong owner")
+        payload.update(status=status,stage=stage,current_issue=current_issue,message=message,error_detail=error_detail)
+        if result_meta is not None: payload["result_meta"]=result_meta
+        self._write(payload); return {"status":status,"completed_count":payload["completed_count"],"total_count":payload["total_count"]}
+
+    def load_job(self, owner_key, job_id):
+        payload=self._read(job_id)
+        return None if not payload or payload["owner_key"] != owner_key else {k:v for k,v in payload.items() if k != "owner_key"}
+
+    def _latest(self, owner_key, fingerprint=None):
+        rows=self.db.execute("SELECT owner_key,payload FROM collection_jobs ORDER BY rowid").fetchall(); matches=[]
+        for owner,raw in rows:
+            if owner != owner_key: continue
+            payload=json.loads(raw)
+            if payload.get("status") not in {"running","error","complete"}: continue
+            if fingerprint is not None and payload.get("fingerprint") != fingerprint: continue
+            matches.append(payload)
+        return matches[-1] if matches else None
+
+    def latest_resumable(self, owner_key): return self._latest(owner_key)
+    def latest_for_fingerprint(self, owner_key, fingerprint): return self._latest(owner_key, fingerprint)
