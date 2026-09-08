@@ -154,7 +154,7 @@ class FakeJira:
 
     def all_issues(self, query, progress=None):
         if self.fail_collection:
-            raise automation_ui.CollectionError("Jira is busy. Please try again.")
+            raise automation_ui.CollectionError("Simulated permanent collection failure.", status=400)
         return [example_issue(status="Done")]
 
     def project_details(self, project_id):
