@@ -75,7 +75,7 @@ def _auto_restore_running_jira_job(settings):
 
 
 def _render_monitor_snapshot(job, snapshot):
-    """Render one live collection snapshot for the session-owned job."""
+    """Render one collection snapshot for the canonical session job."""
     total = snapshot["total"]
     completed = snapshot["completed"]
     st.progress(
@@ -143,37 +143,42 @@ def _render_monitor_snapshot(job, snapshot):
         st.warning("Collection is paused.")
 
 
-@st.fragment(run_every=1)
-def _session_collection_monitor():
-    """Advance the canonical session job; never receive a mutable job argument.
+def _full_rerun_collection_monitor(job):
+    """Advance exactly one durable Jira step per full Streamlit script rerun.
 
-    Streamlit fragments can rerun independently of their parent script. Reading the
-    job from session_state on every fragment tick prevents the fragment from using a
-    stale serialized/captured job while the parent page sees a newer live object.
+    Streamlit Cloud fragment reruns proved unreliable for long-lived mutable
+    CollectionJob objects. A full-script rerun keeps one canonical session_state,
+    checkpoints every completed work item first, then immediately continues with
+    the next unfinished work item without requiring any user interaction.
     """
-    job = st.session_state.get("collection_job")
-    if job is None:
-        st.warning("Collection session is being restored...")
-        return
-
-    snapshot = job.snapshot()
-    if snapshot["running"]:
-        job.step()
-        snapshot = job.snapshot()
-
-    _render_monitor_snapshot(job, snapshot)
-
-
-def _render_active_job_session(job):
-    """Render Jira collection using the session-owned job and argument-free fragment."""
     live_job = st.session_state.get("collection_job") or job
+    if st.session_state.get("collection_job") is None:
+        st.session_state["collection_job"] = live_job
+
+    snapshot = live_job.snapshot()
+    if snapshot["running"]:
+        live_job.step()
+        snapshot = live_job.snapshot()
+
+    _render_monitor_snapshot(live_job, snapshot)
+
+    # Continue automatically with the same persistent job. Because each step is
+    # checkpointed before this rerun, a process/browser interruption can rehydrate
+    # and continue from the first unfinished Jira work item.
+    if snapshot["running"]:
+        st.rerun()
+
+
+def _render_active_job_full_rerun(job):
+    """Render Jira collection without st.fragment; use full-script reruns instead."""
+    live_job = st.session_state.get("collection_job") or job
+    st.session_state["collection_job"] = live_job
+
     st.subheader("Data Collection")
     space_name = live_job.space.get("name") or live_job.space.get("key") or "Jira space"
     st.caption(f"Persistent collection for {space_name} · Reference: {live_job.id}")
 
-    # Critical: do not pass CollectionJob into st.fragment. The fragment reads the
-    # canonical object directly from session_state on every tick.
-    _session_collection_monitor()
+    _full_rerun_collection_monitor(live_job)
 
     prepared = st.session_state.get("prepared_data")
     if prepared:
@@ -219,7 +224,7 @@ def render_collection(settings):
     _jira_ui.JiraGateway = JiraGateway
     _jira_ui.CollectionStore = CollectionStore
     _jira_ui.CollectionJob = CollectionJob
-    _jira_ui._render_active_job = _render_active_job_session
+    _jira_ui._render_active_job = _render_active_job_full_rerun
 
     _auto_restore_running_jira_job(settings)
     return _jira_ui.render_collection(settings)
