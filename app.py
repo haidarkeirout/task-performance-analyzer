@@ -787,7 +787,7 @@ def show_clickup_analysis(result) -> None:
         st.subheader("Management Averages")
         st.caption(
             "Execution, lead-time, and time-to-start averages are measured in elapsed hours. "
-            "Due Variance and overdue measures use calendar days. Unavailable means no qualifying task exists."
+            "Timing values stay unavailable when ClickUp dates conflict. Due Variance and overdue measures use calendar days."
         )
         completed_cards = st.columns(3)
         completed_cards[0].metric("Avg Execution Time (Completed)", average("Average execution hours", "h"))
@@ -936,7 +936,7 @@ def show_clickup_analysis(result) -> None:
             "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
             "Current Status", "Created", "Updated", "Start Date", "Due Date", "Completed", "Completed?", "Open?",
             "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category", "Overdue Days",
-            "Execution Hours", "Lead Time Hours", "Time to Start Hours", "Time Estimate Hours", "Time Tracked Hours",
+            "Execution Hours", "Lead Time Hours", "Time to Start Hours", "Timing Data Status", "Time Estimate Hours", "Time Tracked Hours",
             "Current Status Time (min)", "Total Time in Status (min)",
         ]
         st.dataframe(filtered[[column for column in detail_columns if column in filtered]], hide_index=True, use_container_width=True)

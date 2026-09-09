@@ -69,6 +69,30 @@ def _duration_hours(start, end):
     return (end - start).total_seconds() / 3600.0
 
 
+def _timing_values(created, start, end, end_label: str):
+    """Return trustworthy task-timing values without inventing negative time.
+
+    ClickUp start dates are frequently date-only values.  A same-day start
+    timestamp can therefore precede the creation timestamp by a few hours.
+    In that case the effective start is the creation time.  A start date after
+    the completion/cutoff, however, is a chronology conflict and the derived
+    timing metrics must remain unavailable.
+    """
+    if pd.isna(start):
+        return None, None, "No start date"
+    if pd.notna(end) and start > end:
+        return None, None, f"Start date after {end_label}"
+    if pd.notna(created) and start.normalize() < created.normalize():
+        return None, None, "Start date before creation date"
+
+    effective_start = max(start, created) if pd.notna(created) and start < created else start
+    return (
+        _duration_hours(effective_start, end),
+        _duration_hours(created, effective_start),
+        "Available",
+    )
+
+
 def _first_location(task: dict) -> str:
     values = location_values(task)
     return values[-1] if values else "Unavailable"
@@ -207,8 +231,11 @@ def analyze_clickup(prepared_data):
         wip_flag = open_flag and status_key not in NOT_STARTED_STATUSES
         end = completed if pd.notna(completed) else cutoff
         lead_time_hours = _duration_hours(created, end)
-        execution_hours = _duration_hours(start, completed) if completed_flag else _duration_hours(start, cutoff)
-        time_to_start_hours = _duration_hours(created, start)
+        timing_end = completed if completed_flag else cutoff
+        timing_label = "completion date" if completed_flag else "evaluation cutoff"
+        execution_hours, time_to_start_hours, timing_data_status = _timing_values(
+            created, start, timing_end, timing_label
+        )
         due_variance_days = None
         due_basis = "Unavailable"
         if pd.notna(due) and pd.notna(completed) and completed_flag:
@@ -257,6 +284,7 @@ def analyze_clickup(prepared_data):
             "Lead Time Hours": lead_time_hours,
             "Execution Hours": execution_hours,
             "Time to Start Hours": time_to_start_hours,
+            "Timing Data Status": timing_data_status,
             "On Time?": on_time,
             "Due Variance (days)": due_variance_days,
             "Due Variance Basis": due_basis,
@@ -277,7 +305,7 @@ def analyze_clickup(prepared_data):
         "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
         "Current Status", "Status State", "Created", "Updated", "Start Date", "Due Date", "Completed",
         "Completed?", "Cancelled?", "Open?", "WIP?", "Elapsed Hours", "Lead Time Hours", "Execution Hours",
-        "Time to Start Hours", "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category",
+        "Time to Start Hours", "Timing Data Status", "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category",
         "Overdue Days", "Time Estimate Hours", "Time Tracked Hours", "Current Status Time (min)",
         "Current Status Since", "Total Time in Status (min)", "Time in Status",
     ]
@@ -305,6 +333,16 @@ def analyze_clickup(prepared_data):
     overdue_open = open_tasks[open_tasks["Due Variance (days)"] > 0].copy() if total else task_frame
     missing_due = task_frame[task_frame["Due Date"].isna()].copy() if total else task_frame
     status_duration_available = int(task_frame["Total Time in Status (min)"].notna().sum()) if total else 0
+    future_start_tasks = (
+        int(task_frame["Timing Data Status"].eq("Start date after evaluation cutoff").sum())
+        if total else 0
+    )
+    timing_conflicts = (
+        int(task_frame["Timing Data Status"].isin({
+            "Start date after completion date", "Start date before creation date",
+        }).sum())
+        if total else 0
+    )
 
     overall_values = [
         ("Total tasks", total),
@@ -346,10 +384,15 @@ def analyze_clickup(prepared_data):
          "Review" if total and task_frame["Due Date"].isna().any() else "OK"),
         ("Completed tasks missing completion date", int((task_frame["Completed?"] & task_frame["Completed"].isna()).sum()) if total else 0,
          "Review" if total and (task_frame["Completed?"] & task_frame["Completed"].isna()).any() else "OK"),
+        ("Tasks scheduled after the evaluation cutoff", future_start_tasks,
+         "Info" if future_start_tasks else "OK"),
+        ("Tasks with timing chronology conflicts", timing_conflicts,
+         "Review" if timing_conflicts else "OK"),
     ], columns=["Check", "Value", "Status"])
     metric_definitions = pd.DataFrame([
         ("Due Variance (days)", "Completed task: Completed date minus Due date. Open task: Evaluation cutoff minus Due date. Positive is late/overdue; negative is early/time remaining."),
         ("On-time completion rate", "Share of completed tasks with both a due date and a completion date where completion was on or before the due date."),
+        ("Execution and time to start", "Calculated only when the recorded start date is on or before the completion date or evaluation cutoff. Date-only starts on the creation day use creation time as the effective start. Chronology conflicts remain unavailable."),
         ("WIP tasks", "Open tasks whose current status is not a common not-started status (Backlog, To Do, Planning, Ready, or Open)."),
         ("Status-duration data", "Read only from ClickUp Total time in Status when the ClickApp/API exposes it. Missing values stay unavailable."),
         ("Individual assignment", "Uses the assignee snapshot returned by ClickUp. It does not establish individual contribution or ownership at completion."),
@@ -358,6 +401,7 @@ def analyze_clickup(prepared_data):
         ("Completed late tasks", int(len(late_completed)), "Review deadlines, task estimates, and dependencies for these completed tasks."),
         ("Open overdue tasks", int(len(overdue_open)), "Prioritize current blockers and agree a recovery plan for open overdue work."),
         ("Tasks without due dates", int(len(missing_due)), "Add due dates where delivery timeliness is expected to be evaluated."),
+        ("Tasks with timing chronology conflicts", timing_conflicts, "Review the task start and completion dates. Conflicting timing values are excluded from duration averages."),
         ("Tasks without status-duration data", total - status_duration_available, "Enable or verify Total time in Status only when the ClickUp plan and permissions support it."),
     ], columns=["Finding", "Tasks", "Recommended Follow-up"])
     return {

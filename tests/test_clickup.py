@@ -3,6 +3,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
+import pandas as pd
 from openpyxl import load_workbook
 from docx import Document
 
@@ -115,6 +116,38 @@ class ClickUpCollectionAndAnalysisTests(unittest.TestCase):
         workbook = load_workbook(io.BytesIO(analysis_excel(result)), data_only=True)
         self.assertIn("Due_Variance", workbook.sheetnames)
         self.assertIn("Assignee_Summary", workbook.sheetnames)
+
+    def test_future_or_conflicting_start_dates_do_not_create_negative_durations(self):
+        tasks = [
+            {
+                "id": "valid", "name": "Valid completion", "status": {"status": "COMPLETE", "type": "done"},
+                "date_created": "2026-09-01T09:00:00Z", "start_date": "2026-09-01T09:00:00Z",
+                "date_closed": "2026-09-02T09:00:00Z",
+            },
+            {
+                "id": "future", "name": "Future start", "status": {"status": "IN PROGRESS"},
+                "date_created": "2026-09-01T09:00:00Z", "start_date": "2026-09-12T09:00:00Z",
+            },
+            {
+                "id": "conflict", "name": "Conflicting completion", "status": {"status": "COMPLETE", "type": "done"},
+                "date_created": "2026-09-01T09:00:00Z", "start_date": "2026-09-04T09:00:00Z",
+                "date_closed": "2026-09-02T09:00:00Z",
+            },
+        ]
+        prepared = collect_data(Mock(), tasks, "Performance Analysis", "timing", time_status_data={})
+        prepared.cutoff = "2026-09-09T09:00:00+00:00"
+        result = analyze_clickup(prepared)
+        timing = result["tasks"].set_index("Task ID")
+
+        self.assertEqual(timing.loc["valid", "Execution Hours"], 24.0)
+        self.assertTrue(pd.isna(timing.loc["future", "Execution Hours"]))
+        self.assertTrue(pd.isna(timing.loc["conflict", "Execution Hours"]))
+        self.assertEqual(timing.loc["future", "Timing Data Status"], "Start date after evaluation cutoff")
+        self.assertEqual(timing.loc["conflict", "Timing Data Status"], "Start date after completion date")
+        overall = result["overall"].set_index("Metric")["Value"]
+        self.assertEqual(overall["Average execution hours"], 24.0)
+        quality = result["quality"].set_index("Check")
+        self.assertEqual(quality.loc["Tasks with timing chronology conflicts", "Value"], 1)
 
     def test_word_report_contains_clickup_due_variance_section(self):
         tasks = [{
