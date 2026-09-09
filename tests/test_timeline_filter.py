@@ -1,7 +1,4 @@
-"""Regression tests for cutoff-anchored weekly dashboard filters.
-
-These tests intentionally describe the required behavior before production code is changed.
-"""
+"""Regression tests for cutoff-anchored weekly dashboard filters."""
 from __future__ import annotations
 
 import ast
@@ -15,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from process_analysis import weekly_flow_summary
+from clickup_analysis import _weekly_flow
 
 
 class TimelineWindowTests(unittest.TestCase):
@@ -51,6 +49,33 @@ class TimelineWindowTests(unittest.TestCase):
         )
         self.assertEqual(last_four["tasks_opened"].tolist(), [1, 0, 0, 0])
         self.assertEqual(last_four["tasks_completed"].tolist(), [0, 0, 0, 0])
+
+    def test_clickup_weekly_flow_extends_through_cutoff_with_zero_activity_weeks(self):
+        cutoff = pd.Timestamp("2026-09-09T11:00:00Z")
+        frame = pd.DataFrame([
+            {
+                "Task ID": "C-1",
+                "Created": pd.Timestamp("2026-07-20T08:00:00Z"),
+                "Completed": pd.Timestamp("2026-07-21T08:00:00Z"),
+            },
+            {
+                "Task ID": "C-2",
+                "Created": pd.Timestamp("2026-08-17T08:00:00Z"),
+                "Completed": pd.NaT,
+            },
+        ])
+
+        weekly = _weekly_flow(frame, cutoff)
+        last_four = weekly.tail(4).reset_index(drop=True)
+        expected_weeks = [
+            pd.Timestamp("2026-08-17T00:00:00Z"),
+            pd.Timestamp("2026-08-24T00:00:00Z"),
+            pd.Timestamp("2026-08-31T00:00:00Z"),
+            pd.Timestamp("2026-09-07T00:00:00Z"),
+        ]
+        self.assertEqual(last_four["Week Starting"].tolist(), expected_weeks)
+        self.assertEqual(last_four["Tasks Created"].tolist(), [1, 0, 0, 0])
+        self.assertEqual(last_four["Tasks Completed"].tolist(), [0, 0, 0, 0])
 
     def test_dashboard_supports_4_12_24_36_48_week_filters(self):
         source = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
