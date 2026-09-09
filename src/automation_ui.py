@@ -9,15 +9,17 @@ from jira_export import collect_data
 from jira_filters import (BASIC_IDS, FilterError, build_query, date_clause, field_catalog,
                           field_clause, plain_label, query_fingerprint, unquote_value)
 from jira_gateway import CollectionError, JiraGateway
-from clickup_gateway import ClickUpCollectionError, ClickUpGateway
-from clickup_export import collect_data as collect_clickup_data
+from clickup_gateway import ClickUpCollectionError, ClickUpGateway, ClickUpTimeStatusUnavailable
+from clickup_export import (_current_status_info, _status_minutes,
+                            collect_data as collect_clickup_data)
 
 
 RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
 
 
 def invalidate_selection():
-    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error", *RESULT_KEYS):
+    for key in ("prepared_data", "prepared_fingerprint", "preview", "preview_query", "collection_error",
+                "clickup_prepared_data", "clickup_analysis", "clickup_run_analysis", *RESULT_KEYS):
         st.session_state.pop(key, None)
 
 
@@ -73,31 +75,10 @@ def _reset_connection():
 
 
 def _clickup_gateway(settings, workspace_id=""):
-    """Build a ClickUp-only gateway and optional headless history settings."""
-    values = {}
-    try:
-        values = st.secrets.to_dict()
-    except (FileNotFoundError, AttributeError):
-        pass
-    def secret(name, default=""):
-        return str(values.get(name, default) or "").strip()
-    raw_headless = secret("CLICKUP_BROWSER_HEADLESS", "true").lower()
-    browser_headless = raw_headless not in {"0", "false", "no", "off"}
-    try:
-        browser_wait_ms = max(500, int(secret("CLICKUP_BROWSER_TASK_WAIT_MS", "4500")))
-    except ValueError:
-        browser_wait_ms = 4500
-    storage_state_json = secret("CLICKUP_STORAGE_STATE_JSON") or secret("CLICKUP_STORAGE_STATE")
+    """Build the isolated ClickUp API gateway; no browser session is used."""
     return ClickUpGateway(
         settings.clickup_token,
         workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
-        frontdoor_base_url=secret("CLICKUP_FRONTDOOR_BASE_URL") or None,
-        browser_profile_dir=secret("CLICKUP_BROWSER_PROFILE_DIR"),
-        storage_state_json=storage_state_json,
-        storage_state_path=secret("CLICKUP_STORAGE_STATE_PATH"),
-        browser_history_base_url=secret("CLICKUP_HISTORY_BASE_URL"),
-        browser_headless=browser_headless,
-        browser_task_wait_ms=browser_wait_ms,
     )
 
 def _render_clickup_collection(settings):
@@ -132,38 +113,116 @@ def _render_clickup_collection(settings):
     except ClickUpCollectionError as exc:
         st.error(str(exc))
         return None, False
+    task_ids = [str(task.get("id", "")) for task in tasks if task.get("id")]
+    time_status_key = f"{selected}:{','.join(task_ids)}"
+    if st.session_state.get("clickup_time_status_key") != time_status_key:
+        time_status_map = {}
+        time_status_error = ""
+        try:
+            time_gateway = _clickup_gateway(settings, workspace_id)
+            try:
+                time_status_map = time_gateway.time_in_status(task_ids) or {}
+            finally:
+                time_gateway.close()
+        except ClickUpTimeStatusUnavailable as exc:
+            time_status_error = str(exc)
+        st.session_state["clickup_time_status_key"] = time_status_key
+        st.session_state["clickup_time_status_map"] = time_status_map
+        st.session_state["clickup_time_status_error"] = time_status_error
+    time_status_map = st.session_state.get("clickup_time_status_map", {})
+    time_status_error = st.session_state.get("clickup_time_status_error", "")
+    status_minutes = {task_id: _status_minutes(payload) for task_id, payload in time_status_map.items()}
+    status_options = sorted({status for values in status_minutes.values() for status in values})
+
+    st.subheader("Total time in Status filter")
+    if time_status_error:
+        st.warning(
+            "Total time in Status is unavailable for this ClickUp account. "
+            "Enable the ClickApp (Business+) to use this filter; task collection remains available."
+        )
+        filtered_tasks = tasks
+        filter_label = "unavailable"
+    elif not status_options:
+        st.info("No Total time in Status values were returned; the filter is disabled for this collection.")
+        filtered_tasks = tasks
+        filter_label = "not_available"
+    else:
+        filter_mode = st.selectbox(
+            "Filter mode", ["No filter", "At least (hours)", "At most (hours)", "Between (hours)"],
+            key=f"clickup_tis_mode_{selected}",
+        )
+        if filter_mode == "No filter":
+            filtered_tasks = tasks
+            filter_label = "none"
+        else:
+            selected_status = st.selectbox("Status", status_options, key=f"clickup_tis_status_{selected}")
+            lower = st.number_input("Minimum hours", min_value=0.0, value=0.0, step=1.0,
+                                    key=f"clickup_tis_min_{selected}")
+            upper = None
+            if filter_mode == "At most (hours)":
+                upper = st.number_input("Maximum hours", min_value=0.0, value=lower, step=1.0,
+                                        key=f"clickup_tis_max_{selected}")
+            elif filter_mode == "Between (hours)":
+                upper = st.number_input("Maximum hours", min_value=lower, value=max(lower, 1.0), step=1.0,
+                                        key=f"clickup_tis_max_{selected}")
+            def matches(task):
+                minutes = status_minutes.get(str(task.get("id", "")), {}).get(selected_status)
+                if minutes is None:
+                    return False
+                hours = float(minutes) / 60.0
+                if filter_mode == "At least (hours)":
+                    return hours >= lower
+                if filter_mode == "At most (hours)":
+                    return hours <= upper
+                return lower <= hours <= upper
+            filtered_tasks = [task for task in tasks if matches(task)]
+            filter_label = f"{filter_mode}:{selected_status}:{lower}:{upper}"
+
     rows = []
-    for task in tasks:
+    for task in filtered_tasks:
         status = task.get("status") or {}
         priority = task.get("priority") or {}
         assignees = task.get("assignees") or []
+        current_minutes, _ = _current_status_info(time_status_map.get(str(task.get("id", ""))))
         rows.append({"Task ID": task.get("id"), "Task Name": task.get("name"),
                      "Assignee": ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
                      "Priority": priority.get("priority") if isinstance(priority, dict) else None,
                      "Status": status.get("status") if isinstance(status, dict) else None,
-                     "Due date": task.get("due_date")})
+                     "Due date": task.get("due_date"),
+                     "Current status time (min)": current_minutes})
     st.subheader("All work items")
     selected_name = space_map[selected].get("name", selected)
-    st.caption(f"Selected space: {selected_name} · Space ID: {selected} · {len(rows)} work items shown")
+    st.caption(f"Selected space: {selected_name} · Space ID: {selected} · {len(rows)} of {len(tasks)} work items shown")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     st.divider()
-    fingerprint = f"clickup:{selected}:{len(tasks)}"
-    if st.button("Done", type="primary", key="clickup_done"):
+    fingerprint = f"clickup:{selected}:{','.join(str(t.get('id', '')) for t in filtered_tasks)}:{filter_label}"
+    previous = st.session_state.get("clickup_prepared_data")
+    if previous is not None and previous.fingerprint != fingerprint:
+        st.session_state.pop("clickup_prepared_data", None)
+        st.session_state.pop("clickup_analysis", None)
+    if st.button("Done", type="primary", key="clickup_done", disabled=not filtered_tasks):
         st.session_state.pop("clickup_error", None)
         st.session_state.pop("clickup_prepared_data", None)
         try:
-            with st.status("Collecting ClickUp Activity...", expanded=True) as status:
+            with st.status("Collecting ClickUp tasks and Total time in Status...", expanded=True) as status:
                 collector = _clickup_gateway(settings, workspace_id)
                 try:
                     prepared = collect_clickup_data(
-                        collector, tasks, selected_name, fingerprint,
+                        collector, filtered_tasks, selected_name, fingerprint,
                         settings.source_timezone,
                         progress=lambda message: status.update(label=message),
                         space_id=selected,
+                        time_status_data={
+                            str(task.get("id", "")): time_status_map.get(str(task.get("id", "")))
+                            for task in filtered_tasks
+                            if task.get("id") in time_status_map
+                        },
+                        time_status_error=time_status_error,
                     )
                 finally:
                     collector.close()
                 st.session_state["clickup_prepared_data"] = prepared
+                st.session_state["clickup_run_analysis"] = True
                 status.update(label="ClickUp data collection completed.", state="complete", expanded=False)
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
@@ -171,16 +230,16 @@ def _render_clickup_collection(settings):
         st.error(st.session_state["clickup_error"])
     prepared = st.session_state.get("clickup_prepared_data")
     if prepared:
-        if getattr(prepared, "clickup_activity_available", True):
-            st.success(f"ClickUp data collected for Space ID {selected}. History IDs are included in the Activity sheet.")
+        if getattr(prepared, "clickup_time_status_available", False):
+            st.success(f"ClickUp tasks and Total time in Status collected for Space ID {selected}.")
         else:
             st.warning(
-                "Task data was collected for this Space, but ClickUp did not expose its full Activity History "
-                "endpoint for this account. The Activity and History ID columns are empty; Jira was not used or changed."
+                "Task data was collected, but Total time in Status was unavailable for this account. "
+                "The Activity collector is disabled; Jira was not used or changed."
             )
         st.download_button("Download ClickUp Source Excel", prepared.xlsx, prepared.filename,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
-    return prepared, False
+    return prepared, bool(st.session_state.pop("clickup_run_analysis", False))
 
 
 OPERATOR_LABELS = {"=": "Is", "!=": "Is not", "in": "Is any of", "not in": "Is none of",
@@ -458,4 +517,3 @@ def _render_collection(gateway, settings):
     if prepared is None:
         st.caption("Choose your filters and click Done to prepare the data before running analysis.")
     return prepared, run_clicked
-

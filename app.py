@@ -29,6 +29,7 @@ from metrics_engine import (
 )
 from report_builder import build_report
 from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
+from clickup_analysis import analyze_clickup, analysis_excel
 
 
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -734,6 +735,66 @@ def show_data_quality(
     )
 
 
+def show_clickup_analysis(result) -> None:
+    """Render the isolated ClickUp analysis without using Jira metrics."""
+    st.success("ClickUp analysis completed.")
+    st.caption(
+        f"Space: {result['space_name']} · Cutoff: {result['cutoff']} · "
+        "Status-duration values come from ClickUp Total time in Status API."
+    )
+    tasks = result["tasks"]
+    overall = result["overall"]
+    values = dict(zip(overall["Metric"], overall["Value"]))
+    columns = st.columns(6)
+    columns[0].metric("Total tasks", int(values.get("Total tasks", 0)))
+    columns[1].metric("Completed", int(values.get("Completed tasks", 0)))
+    columns[2].metric("Completion rate", "Unavailable" if pd.isna(values.get("Completion rate (%)")) else f"{values['Completion rate (%)']:.1f}%")
+    columns[3].metric("Open", int(values.get("Open tasks", 0)))
+    columns[4].metric("Open overdue", int(values.get("Open overdue tasks", 0)))
+    columns[5].metric("Avg elapsed", "Unavailable" if pd.isna(values.get("Average elapsed hours")) else f"{values['Average elapsed hours']:.1f} h")
+
+    tab_dashboard, tab_tasks, tab_status, tab_quality = st.tabs(
+        ["Executive Dashboard", "Task Evaluation", "Status Analysis", "Data Quality"]
+    )
+    with tab_dashboard:
+        st.subheader("Overall indicators")
+        st.dataframe(overall, hide_index=True, use_container_width=True)
+        summary = result["status_summary"]
+        if not summary.empty:
+            st.subheader("Total time by status")
+            st.bar_chart(summary.set_index("Status")["Total Hours"], use_container_width=True)
+            st.dataframe(summary, hide_index=True, use_container_width=True)
+    with tab_tasks:
+        st.subheader("Per-task performance evaluation")
+        filtered = tasks.copy()
+        if not filtered.empty:
+            assignees = ["All", *sorted(filtered["Assignee"].fillna("Unassigned").astype(str).unique())]
+            selected_assignee = st.selectbox("Assignee", assignees, key="clickup_analysis_assignee")
+            if selected_assignee != "All":
+                filtered = filtered[filtered["Assignee"].fillna("Unassigned").astype(str).eq(selected_assignee)]
+            statuses = ["All", *sorted(filtered["Current Status"].fillna("Unavailable").astype(str).unique())]
+            selected_status = st.selectbox("Status", statuses, key="clickup_analysis_status")
+            if selected_status != "All":
+                filtered = filtered[filtered["Current Status"].fillna("Unavailable").astype(str).eq(selected_status)]
+        st.dataframe(filtered, hide_index=True, use_container_width=True)
+    with tab_status:
+        st.subheader("Status-duration detail")
+        st.dataframe(result["status_detail"], hide_index=True, use_container_width=True)
+        st.dataframe(result["status_summary"], hide_index=True, use_container_width=True)
+    with tab_quality:
+        st.subheader("Data quality")
+        st.dataframe(result["quality"], hide_index=True, use_container_width=True)
+        st.info("Activity/History browser collection is disabled. Missing Total time in Status values remain unavailable, not zero.")
+
+    st.download_button(
+        "Download ClickUp Analysis Excel",
+        data=analysis_excel(result),
+        file_name="clickup_performance_analysis.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 from automation_ui import require_sign_in, render_collection
 
 settings = require_sign_in()
@@ -745,35 +806,48 @@ prepared_data, run_button = render_collection(settings)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
 
 if run_button and prepared_data is not None:
-    try:
-        with st.spinner("Reading data and calculating Jira metrics..."):
-            task_metrics, validation_log, process_data = run_analysis(
-                BytesIO(prepared_data.xlsx),
-                BytesIO(prepared_data.history_json),
-                "", "", "",
-                prepared_data.cutoff,
-                prepared_data.source_timezone,
-                history_source="History JSON",
-                context_overrides={
-                    "Process Name": prepared_data.space_name,
-                    "Evaluation Scope": "Selected Jira work items",
-                    "Dataset Type": "Jira API collection",
-                },
-            )
-        if task_metrics.empty:
+    if st.session_state.get("data_source") == "ClickUp":
+        try:
+            with st.spinner("Calculating ClickUp performance analysis..."):
+                st.session_state["clickup_analysis"] = analyze_clickup(prepared_data)
+            st.success("ClickUp analysis completed successfully.")
+        except Exception as exc:
+            st.session_state.pop("clickup_analysis", None)
+            st.error(f"ClickUp analysis could not be completed: {exc}")
+    else:
+        try:
+            with st.spinner("Reading data and calculating Jira metrics..."):
+                task_metrics, validation_log, process_data = run_analysis(
+                    BytesIO(prepared_data.xlsx),
+                    BytesIO(prepared_data.history_json),
+                    "", "", "",
+                    prepared_data.cutoff,
+                    prepared_data.source_timezone,
+                    history_source="History JSON",
+                    context_overrides={
+                        "Process Name": prepared_data.space_name,
+                        "Evaluation Scope": "Selected Jira work items",
+                        "Dataset Type": "Jira API collection",
+                    },
+                )
+            if task_metrics.empty:
+                st.session_state.pop("task_metrics", None)
+                st.session_state.pop("process_data", None)
+                st.info("No selected work items existed at the evaluation cutoff. Click Done to collect a newer snapshot.")
+            else:
+                st.session_state["process_data"] = process_data
+                st.session_state["task_metrics"] = task_metrics
+                st.session_state["validation_log"] = validation_log
+                st.session_state["cutoff_text"] = prepared_data.cutoff
+                st.success("Analysis completed successfully.")
+        except Exception:
             st.session_state.pop("task_metrics", None)
             st.session_state.pop("process_data", None)
-            st.info("No selected work items existed at the evaluation cutoff. Click Done to collect a newer snapshot.")
-        else:
-            st.session_state["process_data"] = process_data
-            st.session_state["task_metrics"] = task_metrics
-            st.session_state["validation_log"] = validation_log
-            st.session_state["cutoff_text"] = prepared_data.cutoff
-            st.success("Analysis completed successfully.")
-    except Exception:
-        st.session_state.pop("task_metrics", None)
-        st.session_state.pop("process_data", None)
-        st.error("Analysis could not be completed for this dataset. Check the source data or contact the administrator.")
+            st.error("Analysis could not be completed for this dataset. Check the source data or contact the administrator.")
+
+if "clickup_analysis" in st.session_state:
+    show_clickup_analysis(st.session_state["clickup_analysis"])
+    st.stop()
 
 if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
     st.session_state.pop("task_metrics", None)

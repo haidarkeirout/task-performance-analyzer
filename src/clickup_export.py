@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
-from jira_export import PreparedData
-from clickup_gateway import ClickUpActivityUnavailable
+from clickup_gateway import ClickUpTimeStatusUnavailable
+
+
+@dataclass
+class ClickUpPreparedData:
+    """Prepared ClickUp snapshot; deliberately independent of Jira export types."""
+    xlsx: bytes = field(repr=False)
+    history_json: bytes = field(repr=False)
+    cutoff: str
+    collected_at: str
+    query: str
+    fingerprint: str
+    count: int
+    filename: str
+    space_name: str
+    source_timezone: str
 
 
 def _sheet(wb, name, headers, rows):
@@ -20,65 +35,140 @@ def _sheet(wb, name, headers, rows):
     for r, row in enumerate(rows, 2):
         for c, value in enumerate(row, 1):
             ws.cell(r, c, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
-    ws.freeze_panes = "A2"; ws.auto_filter.ref = ws.dimensions
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
 
 
-def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None, space_id=None):
-    cutoff = datetime.now(timezone.utc).isoformat(); rows=[]; activity_rows=[]; raw=[]
-    activity_unavailable = False
-    activity_notes = []
-    browser_activity = {}
-    browser_errors = {}
-    browser_history_error = ""
-    if getattr(gateway, "browser_history_configured", False):
+def _status_minutes(payload):
+    """Flatten ClickUp's native status-duration payload for filtering/export."""
+    values = {}
+    if not isinstance(payload, dict):
+        return values
+    entries = list(payload.get("status_history") or [])
+    current = payload.get("current_status")
+    if isinstance(current, dict):
+        entries.append(current)
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("status"):
+            continue
+        total_time = entry.get("total_time") or {}
+        minutes = total_time.get("by_minute") if isinstance(total_time, dict) else None
         try:
-            browser_activity = gateway.browser_activity(
-                [str(task.get("id", "")) for task in tasks],
-                progress=progress,
-            ) or {}
-            browser_errors = browser_activity.pop("__errors__", {}) or {}
-        except ClickUpActivityUnavailable as exc:
-            browser_history_error = str(exc)
+            minutes = float(minutes)
+        except (TypeError, ValueError):
+            continue
+        # If a status appears twice, preserve the larger cumulative value.
+        status = str(entry["status"])
+        values[status] = max(minutes, values.get(status, 0.0))
+    return values
+
+
+def _current_status_info(payload):
+    current = payload.get("current_status") if isinstance(payload, dict) else None
+    if not isinstance(current, dict):
+        return None, None
+    total_time = current.get("total_time") or {}
+    minutes = total_time.get("by_minute") if isinstance(total_time, dict) else None
+    try:
+        minutes = float(minutes)
+    except (TypeError, ValueError):
+        minutes = None
+    return minutes, total_time.get("since") if isinstance(total_time, dict) else None
+
+
+def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None,
+                 space_id=None, time_status_data=None, time_status_error=""):
+    """Collect ClickUp tasks plus native Total time in Status data.
+
+    The old browser Activity/History collector is deliberately not called.
+    ClickUp task collection and Total time in Status are read-only API calls;
+    Jira's collector and workbook are untouched.
+    """
+    cutoff = datetime.now(timezone.utc).isoformat()
+    time_status = {}
+    time_status_error = str(time_status_error or "")
+    activity_notes = []
+    task_ids = [str(task.get("id", "")) for task in tasks if task.get("id")]
+    if time_status_data is not None:
+        time_status = dict(time_status_data)
+    else:
+        try:
+            time_status = gateway.time_in_status(task_ids, progress=progress) or {}
+        except ClickUpTimeStatusUnavailable as exc:
+            time_status_error = str(exc)
+            activity_notes.append(["", "Total time in Status unavailable", time_status_error])
+
+    flattened = {task_id: _status_minutes(payload) for task_id, payload in time_status.items()}
+    status_names = sorted({status for values in flattened.values() for status in values})
+    rows = []
+    activity_rows = []
+    raw = []
+    missing_time_status = 0
     for index, task in enumerate(tasks, 1):
         task_id = str(task.get("id", ""))
-        if progress: progress(f"Collecting Activity: {index} of {len(tasks)} tasks...")
-        try:
-            if getattr(gateway, "browser_history_configured", False):
-                if browser_history_error:
-                    raise ClickUpActivityUnavailable(browser_history_error)
-                if task_id in browser_errors:
-                    raise ClickUpActivityUnavailable(str(browser_errors[task_id]))
-                activity = browser_activity.get(task_id, [])
-            else:
-                activity = gateway.activity(task_id)
-        except ClickUpActivityUnavailable as exc:
-            # The task/list API is still valid; only the optional web Activity
-            # History endpoint is unavailable for this account.
-            activity = []
-            activity_unavailable = True
-            activity_notes.append([task_id, "Activity History unavailable", str(exc)])
-        status=task.get("status") or {}; priority=task.get("priority") or {}; assignees=task.get("assignees") or []
-        history_ids = [str(event.get("id") or event.get("history_id") or event.get("event_id") or event.get("activity_id"))
-                       for event in activity
-                       if event.get("id") or event.get("history_id") or event.get("event_id") or event.get("activity_id")]
-        rows.append([space_id or task.get("space_id"), task_id, task.get("name"), ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned", priority.get("priority") if isinstance(priority,dict) else priority, status.get("status") if isinstance(status,dict) else status, task.get("date_created"), task.get("due_date"), task.get("date_closed"), task.get("time_estimate"), task.get("time_spent"), len(activity), ", ".join(history_ids)])
-        for event in activity:
-            event_id = event.get("id") or event.get("history_id") or event.get("event_id") or event.get("activity_id")
-            activity_rows.append([space_id or task.get("space_id"), task_id, event_id, event.get("date") or event.get("timestamp"), event.get("user"), event.get("type"), event.get("field"), event.get("from"), event.get("to"), event.get("comment") or event.get("description")])
-        raw.append([task_id,"task",json.dumps({**task, "selected_space_id": space_id},ensure_ascii=False)])
-        raw.extend([[task_id,"activity",json.dumps(event,ensure_ascii=False)] for event in activity])
-    wb=Workbook(); wb.remove(wb.active)
-    _sheet(wb,"ClickUp_Data",["Space ID","Task ID","Task Name","Assignee","Priority","Current Status","Created","Due Date","Completed","Time Estimate (ms)","Time Spent (ms)","Activity Events","History IDs"],rows)
-    _sheet(wb,"Activity",["Space ID","Task ID","History ID","Timestamp","User","Event Type","Field","From","To","Comment"],activity_rows)
-    _sheet(wb,"Process_Context",["Field","Value"],[["Process Name",space_name],["Space ID",space_id or ""],["Evaluation Scope","Selected ClickUp Space"],["Dataset Type","ClickUp API collection"],["Evaluation Cutoff Date",cutoff],["Source Timezone",source_timezone],["Task Count",len(tasks)],["Activity API","Available (public or web backend)" if not activity_unavailable else "Unavailable for this account"],["Activity Collector","Headless ClickUp web collector" if getattr(gateway, "browser_history_configured", False) else "Public API / web fallback"],["History IDs","Collected from ClickUp Activity events." if not activity_unavailable else "Not returned by the available ClickUp Activity endpoints for this account."],["Activity Errors",len(activity_notes)]])
-    _sheet(wb,"Collection_Notes",["Task ID","Issue","Detail"],activity_notes or [["","None","No ClickUp collection warnings."]])
-    _sheet(wb,"Raw_JSON",["Task ID","Section","JSON"],raw)
-    stream=BytesIO(); wb.save(stream)
-    filename=f"ClickUp_{space_name.replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    prepared = PreparedData(stream.getvalue(),json.dumps({"tasks":tasks},ensure_ascii=False).encode(),cutoff,datetime.now(timezone.utc).isoformat(),space_name,fingerprint,len(tasks),filename,space_name,source_timezone)
-    # PreparedData is shared with Jira; keep this ClickUp-only quality flag
-    # dynamic so no Jira schema or export code needs to change.
-    prepared.clickup_activity_available = not activity_unavailable
+        if progress:
+            progress(f"Preparing ClickUp task {index} of {len(tasks)}...")
+        payload = time_status.get(task_id)
+        values = flattened.get(task_id, {})
+        if payload is None:
+            missing_time_status += 1
+        status = task.get("status") or {}
+        priority = task.get("priority") or {}
+        assignees = task.get("assignees") or []
+        current_minutes, current_since = _current_status_info(payload)
+        history_ids = ""
+        rows.append([
+            space_id or task.get("space_id"), task_id, task.get("name"),
+            ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
+            priority.get("priority") if isinstance(priority, dict) else priority,
+            status.get("status") if isinstance(status, dict) else status,
+            task.get("date_created"), task.get("due_date"), task.get("date_closed"),
+            task.get("time_estimate"), task.get("time_spent"),
+            json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+            current_minutes, current_since, history_ids,
+            *[values.get(name) for name in status_names],
+        ])
+        raw.append([task_id, "task", json.dumps({**task, "selected_space_id": space_id}, ensure_ascii=False)])
+        if payload is not None:
+            raw.append([task_id, "time_in_status", json.dumps(payload, ensure_ascii=False)])
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    data_headers = [
+        "Space ID", "Task ID", "Task Name", "Assignee", "Priority", "Current Status",
+        "Created", "Due Date", "Completed", "Time Estimate (ms)", "Time Spent (ms)",
+        "Total Time in Status (JSON)", "Current Status Time (min)", "Current Status Since", "History IDs",
+        *[f"Time in Status - {name} (min)" for name in status_names],
+    ]
+    _sheet(wb, "ClickUp_Data", data_headers, rows)
+    _sheet(wb, "Activity", ["Space ID", "Task ID", "History ID", "Timestamp", "User", "Event Type", "Field", "From", "To", "Comment"], activity_rows)
+    context_rows = [
+        ["Process Name", space_name], ["Space ID", space_id or ""],
+        ["Evaluation Scope", "Selected ClickUp Space"], ["Dataset Type", "ClickUp API collection"],
+        ["Evaluation Cutoff Date", cutoff], ["Source Timezone", source_timezone], ["Task Count", len(tasks)],
+        ["Activity Collector", "Disabled; replaced by ClickUp Total time in Status API"],
+        ["Activity API", "Not collected"],
+        ["Total time in Status API", "Available" if time_status else "Unavailable for this account"],
+        ["Total time in Status Tasks", len(time_status)], ["Missing Total time in Status Tasks", missing_time_status],
+        ["History IDs", "Not collected; status-duration data is sourced from Total time in Status."],
+    ]
+    _sheet(wb, "Process_Context", ["Field", "Value"], context_rows)
+    if not activity_notes:
+        activity_notes = [["", "Activity collector disabled", "Status-duration analysis uses ClickUp Total time in Status API."]]
+    _sheet(wb, "Collection_Notes", ["Task ID", "Issue", "Detail"], activity_notes)
+    _sheet(wb, "Raw_JSON", ["Task ID", "Section", "JSON"], raw)
+
+    stream = BytesIO()
+    wb.save(stream)
+    filename = f"ClickUp_{space_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    history_payload = {"tasks": tasks, "time_in_status": time_status, "source": "ClickUp API"}
+    prepared = ClickUpPreparedData(
+        stream.getvalue(), json.dumps(history_payload, ensure_ascii=False).encode(), cutoff,
+        datetime.now(timezone.utc).isoformat(), space_name, fingerprint, len(tasks), filename,
+        space_name, source_timezone,
+    )
+    prepared.clickup_activity_available = False
+    prepared.clickup_time_status_available = bool(time_status)
+    prepared.clickup_time_status_error = time_status_error
     prepared.clickup_activity_notes = activity_notes
     return prepared
-
