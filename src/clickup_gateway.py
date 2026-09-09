@@ -14,10 +14,6 @@ class ClickUpCollectionError(RuntimeError):
     pass
 
 
-class ClickUpActivityUnavailable(ClickUpCollectionError):
-    """Compatibility error for the optional public Activity endpoint."""
-
-
 class ClickUpTimeStatusUnavailable(ClickUpCollectionError):
     """The Total time in Status ClickApp/API is unavailable for this account."""
 
@@ -45,23 +41,23 @@ class ClickUpGateway:
                 if attempt < 3:
                     self.sleep(2 ** attempt)
                     continue
-                raise ClickUpCollectionError("تعذر الاتصال بـ ClickUp. تحقق من الاتصال والتوكن.") from None
+                raise ClickUpCollectionError("Could not connect to ClickUp. Check the network connection and API token.") from None
             if response.status_code == 429 or 500 <= response.status_code <= 599:
                 if attempt < 3:
                     self.sleep(min(30, 2 ** attempt))
                     continue
-                raise ClickUpCollectionError("ClickUp مشغول أو تم تجاوز حد الطلبات. حاول مرة أخرى لاحقاً.")
+                raise ClickUpCollectionError("ClickUp is busy or its request limit was reached. Please try again later.")
             if response.status_code in (401, 403):
-                raise ClickUpCollectionError("توكن ClickUp غير صالح أو لا يملك الصلاحية المطلوبة.")
+                raise ClickUpCollectionError("The ClickUp API token is invalid or does not have the required permissions.")
             if response.status_code == 404:
-                raise ClickUpCollectionError("مورد ClickUp المطلوب غير متاح لهذا الحساب.")
+                raise ClickUpCollectionError("The requested ClickUp resource is unavailable for this account.")
             if response.status_code < 200 or response.status_code >= 300:
-                raise ClickUpCollectionError(f"فشل طلب ClickUp (HTTP {response.status_code}).")
+                raise ClickUpCollectionError(f"ClickUp request failed (HTTP {response.status_code}).")
             try:
                 return response.json()
             except ValueError:
-                raise ClickUpCollectionError("ClickUp أعاد استجابة غير قابلة للقراءة.") from None
-        raise ClickUpCollectionError("فشل الاتصال بـ ClickUp.")
+                raise ClickUpCollectionError("ClickUp returned an unreadable response.") from None
+        raise ClickUpCollectionError("Could not connect to ClickUp.")
 
     def _task_time_in_status(self, task_id: str):
         """Read one task's native Total time in Status payload."""
@@ -121,28 +117,18 @@ class ClickUpGateway:
                 )
         return result
 
-    def activity(self, task_id: str):
-        """Read the public Activity endpoint only; no browser fallback exists."""
-        try:
-            data = self.request(f"/task/{task_id}/activity")
-        except ClickUpCollectionError as exc:
-            raise ClickUpActivityUnavailable(
-                "ClickUp public Activity History is unavailable for this account."
-            ) from exc
-        return data.get("activity", data.get("events", [])) if isinstance(data, dict) else []
-
     def workspaces(self):
         data = self.request("/team")
         teams = data.get("teams")
         if not isinstance(teams, list):
-            raise ClickUpCollectionError("لم يتم العثور على Workspaces في ClickUp.")
+            raise ClickUpCollectionError("No ClickUp Workspaces were found for this account.")
         return teams
 
     def spaces(self, workspace_id: str, archived: bool = False):
         data = self.request(f"/team/{workspace_id}/space", params={"archived": str(archived).lower()})
         spaces = data.get("spaces")
         if not isinstance(spaces, list):
-            raise ClickUpCollectionError("لم يتم العثور على Spaces في ClickUp.")
+            raise ClickUpCollectionError("No ClickUp Spaces were found for this Workspace.")
         return spaces
 
     def folders(self, space_id: str, archived: bool = False):
@@ -178,7 +164,7 @@ class ClickUpGateway:
                         seen.add(task_id)
                         result.append(task)
                 if progress:
-                    progress(f"ClickUp: تم جمع {len(result)} مهمة...")
+                    progress(f"ClickUp: collected {len(result)} tasks...")
                 if len(tasks) < 100:
                     break
                 page += 1

@@ -30,6 +30,7 @@ from metrics_engine import (
 from report_builder import build_report
 from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
 from clickup_analysis import analyze_clickup, analysis_excel
+from clickup_report import create_clickup_word_report
 
 
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -38,7 +39,7 @@ METRICS_CONFIG_PATH = CONFIG_DIR / "jira_metrics_config.json"
 
 
 st.set_page_config(
-    page_title="Jira Process Performance Dashboard",
+    page_title="Task Process Performance Dashboard",
     page_icon="📊",
     layout="wide",
 )
@@ -736,71 +737,247 @@ def show_data_quality(
 
 
 def show_clickup_analysis(result) -> None:
-    """Render the isolated ClickUp analysis without using Jira metrics."""
+    """Render a ClickUp-only analytics experience that mirrors the Jira layout.
+
+    It intentionally consumes the independent ClickUp canonical data model, so
+    no Jira history, Jira files, or Jira calculations are used here.
+    """
+    def metric_value(name, default=None):
+        matches = result["overall"].loc[result["overall"]["Metric"].eq(name), "Value"]
+        return default if matches.empty else matches.iloc[0]
+
+    def count(name):
+        value = metric_value(name, 0)
+        return 0 if pd.isna(value) else int(value)
+
+    def percent(name):
+        value = metric_value(name)
+        return "Unavailable" if value is None or pd.isna(value) else f"{float(value):.1f}%"
+
+    def average(name, suffix):
+        value = metric_value(name)
+        return "Unavailable" if value is None or pd.isna(value) else f"{float(value):.1f} {suffix}"
+
+    tasks = result["tasks"].copy()
     st.success("ClickUp analysis completed.")
     st.caption(
         f"Space: {result['space_name']} · Cutoff: {result['cutoff']} · "
-        "Status-duration values come from ClickUp Total time in Status API."
+        f"Scope: {result.get('filter_summary', 'All tasks in the selected ClickUp Space')}"
     )
-    tasks = result["tasks"]
-    overall = result["overall"]
-    values = dict(zip(overall["Metric"], overall["Value"]))
-    columns = st.columns(6)
-    columns[0].metric("Total tasks", int(values.get("Total tasks", 0)))
-    columns[1].metric("Completed", int(values.get("Completed tasks", 0)))
-    columns[2].metric("Completion rate", "Unavailable" if pd.isna(values.get("Completion rate (%)")) else f"{values['Completion rate (%)']:.1f}%")
-    columns[3].metric("Open", int(values.get("Open tasks", 0)))
-    columns[4].metric("Open overdue", int(values.get("Open overdue tasks", 0)))
-    columns[5].metric("Avg elapsed", "Unavailable" if pd.isna(values.get("Average elapsed hours")) else f"{values['Average elapsed hours']:.1f} h")
 
-    tab_dashboard, tab_tasks, tab_status, tab_quality = st.tabs(
-        ["Executive Dashboard", "Task Evaluation", "Status Analysis", "Data Quality"]
-    )
+    tab_dashboard, tab_process, tab_individual, tab_tasks, tab_quality = st.tabs([
+        "Executive Dashboard",
+        "Process Analysis",
+        "Individual Achievements",
+        "Task Detail",
+        "Data Quality",
+    ])
+
     with tab_dashboard:
-        st.subheader("Overall indicators")
-        st.dataframe(overall, hide_index=True, use_container_width=True)
-        summary = result["status_summary"]
-        if not summary.empty:
-            st.subheader("Total time by status")
-            st.bar_chart(summary.set_index("Status")["Total Hours"], use_container_width=True)
-            st.dataframe(summary, hide_index=True, use_container_width=True)
+        st.subheader("Executive Overview")
+        cards = st.columns(6)
+        cards[0].metric("Total Tasks", count("Total tasks"))
+        cards[1].metric("Completed", count("Completed tasks"))
+        cards[2].metric("Completion Rate", percent("Completion rate (%)"))
+        cards[3].metric("On-Time Rate", percent("On-time completion rate (%)"))
+        cards[4].metric("Open Overdue", count("Open overdue tasks"))
+        cards[5].metric("WIP Tasks", count("WIP tasks"))
+
+        st.divider()
+        st.subheader("Management Averages")
+        st.caption(
+            "Execution, lead-time, and time-to-start averages are measured in elapsed hours. "
+            "Due Variance and overdue measures use calendar days. Unavailable means no qualifying task exists."
+        )
+        completed_cards = st.columns(3)
+        completed_cards[0].metric("Avg Execution Time (Completed)", average("Average execution hours", "h"))
+        completed_cards[1].metric("Avg Lead Time (Completed)", average("Average lead time hours", "h"))
+        completed_cards[2].metric("Avg Time to Start", average("Average time to start hours", "h"))
+        variance_cards = st.columns(3)
+        late_tasks = result["late_completed_tasks"]
+        late_mean = None if late_tasks.empty else pd.to_numeric(late_tasks["Due Variance (days)"], errors="coerce").mean()
+        overdue_tasks = result["overdue_tasks"]
+        overdue_mean = None if overdue_tasks.empty else pd.to_numeric(overdue_tasks["Overdue Days"], errors="coerce").mean()
+        variance_cards[0].metric("Avg Late Completion", _format_average(late_mean, "days"))
+        variance_cards[1].metric("Avg Open Overdue", _format_average(overdue_mean, "days"))
+        variance_cards[2].metric("Avg Due Variance (Completed)", average("Average due variance (days)", "days"))
+
+        st.divider()
+        st.subheader("Weekly Task Flow")
+        st.caption("Tasks created and tasks completed are grouped by Monday-starting weeks.")
+        weekly = result["weekly_flow"]
+        if weekly.empty:
+            st.info("No created or completed dates are available for a weekly trend.")
+        else:
+            range_options = {
+                "All available weeks": None,
+                "Last 4 weeks": 4,
+                "Last 12 weeks (quarter)": 12,
+                "Last 52 weeks (year)": 52,
+            }
+            selected_range = st.selectbox("Trend period", list(range_options), key="clickup_weekly_flow_period")
+            visible_weekly = weekly.tail(range_options[selected_range]).copy() if range_options[selected_range] else weekly.copy()
+            st.line_chart(
+                visible_weekly.set_index("Week Starting")[["Tasks Created", "Tasks Completed"]],
+                use_container_width=True,
+            )
+            st.dataframe(visible_weekly, hide_index=True, use_container_width=True)
+
+        st.divider()
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Task Distribution by Status")
+            status_counts = result["status_counts"]
+            if status_counts.empty:
+                st.info("No status values are available.")
+            else:
+                st.bar_chart(status_counts.set_index("Status")["Tasks"], use_container_width=True)
+
+            st.subheader("Open Tasks by Due Status")
+            due_status = result["due_status_summary"]
+            if due_status.empty:
+                st.info("No open tasks are available for due-date grouping.")
+            else:
+                st.bar_chart(due_status.set_index("Due Status")["Tasks"], use_container_width=True)
+                st.dataframe(due_status, hide_index=True, use_container_width=True)
+            issue_cards = st.columns(2)
+            issue_cards[0].metric("Completed Late", count("Completed late tasks"))
+            issue_cards[1].metric("Tasks Missing Due Date", len(result["missing_due_tasks"]))
+
+        with right:
+            st.subheader("Work Distribution by Assignee")
+            assignee_summary = result["assignee_summary"]
+            if assignee_summary.empty:
+                st.info("No assignee information is available.")
+            else:
+                st.bar_chart(
+                    assignee_summary.set_index("Assignee")[["Completed", "Open", "WIP"]],
+                    use_container_width=True,
+                )
+
+            st.subheader("Due Variance Distribution")
+            st.caption("Positive values mean late completion or an overdue open task; negative values mean early completion or time remaining.")
+            due_variance = result["due_variance_summary"]
+            if due_variance.empty:
+                st.info("No tasks with a due date are available for Due Variance analysis.")
+            else:
+                st.bar_chart(due_variance.set_index("Due Variance Category")[["Tasks"]], use_container_width=True)
+                st.dataframe(due_variance, hide_index=True, use_container_width=True)
+
+        st.subheader("Total Time in Status")
+        status_summary = result["status_summary"]
+        if status_summary.empty:
+            st.info("Total time in Status was not available for this selected ClickUp scope. Missing values are not treated as zero.")
+        else:
+            st.bar_chart(status_summary.set_index("Status")["Total Hours"], use_container_width=True)
+            st.dataframe(status_summary, hide_index=True, use_container_width=True)
+
+    with tab_process:
+        st.subheader("Process Scope and Definitions")
+        st.dataframe(result["analysis_context"], hide_index=True, use_container_width=True)
+        st.subheader("Workflow and Status Analysis")
+        if result["status_summary"].empty:
+            st.info("No status-duration values were returned by ClickUp for this selected scope.")
+        else:
+            st.dataframe(result["status_summary"], hide_index=True, use_container_width=True)
+            with st.expander("Status-duration detail"):
+                st.dataframe(result["status_detail"], hide_index=True, use_container_width=True)
+        st.subheader("Open Overdue Tasks")
+        if result["overdue_tasks"].empty:
+            st.success("No open overdue tasks were identified in the current scope.")
+        else:
+            st.dataframe(result["overdue_tasks"], hide_index=True, use_container_width=True)
+        st.subheader("Completed Late Tasks")
+        if result["late_completed_tasks"].empty:
+            st.success("No completed-late tasks were identified in the current scope.")
+        else:
+            st.dataframe(result["late_completed_tasks"], hide_index=True, use_container_width=True)
+        st.subheader("Evidence and Follow-up")
+        st.dataframe(result["findings"], hide_index=True, use_container_width=True)
+        with st.expander("Metric definitions"):
+            st.dataframe(result["metric_definitions"], hide_index=True, use_container_width=True)
+        st.info("Activity-history collection is disabled. Rework, replanning, and transition-event metrics are not inferred from the ClickUp task snapshot.")
+
+    with tab_individual:
+        st.subheader("Individual Achievements and Assignment Summary")
+        st.caption("Assignment uses the assignee snapshot returned by ClickUp. These values support workload visibility and do not establish individual contribution.")
+        st.dataframe(result["assignee_summary"], hide_index=True, use_container_width=True)
+        assignee_options = ["All", *sorted(tasks["Assignee"].fillna("Unassigned").astype(str).unique())] if not tasks.empty else ["All"]
+        selected_assignee = st.selectbox("Show tasks for", assignee_options, key="clickup_individual_assignee")
+        assignee_tasks = tasks if selected_assignee == "All" else tasks[tasks["Assignee"].fillna("Unassigned").astype(str).eq(selected_assignee)]
+        columns = [
+            "Task ID", "Task Name", "Priority", "Current Status", "Created", "Start Date", "Due Date", "Completed",
+            "Due Variance (days)", "On Time?", "Execution Hours", "Lead Time Hours", "Total Time in Status (min)",
+        ]
+        st.subheader("Task details")
+        st.dataframe(assignee_tasks[[column for column in columns if column in assignee_tasks]], hide_index=True, use_container_width=True)
+
     with tab_tasks:
-        st.subheader("Per-task performance evaluation")
+        st.subheader("Task-Level Evaluation")
         filtered = tasks.copy()
         if not filtered.empty:
-            assignees = ["All", *sorted(filtered["Assignee"].fillna("Unassigned").astype(str).unique())]
-            selected_assignee = st.selectbox("Assignee", assignees, key="clickup_analysis_assignee")
-            if selected_assignee != "All":
-                filtered = filtered[filtered["Assignee"].fillna("Unassigned").astype(str).eq(selected_assignee)]
-            statuses = ["All", *sorted(filtered["Current Status"].fillna("Unavailable").astype(str).unique())]
-            selected_status = st.selectbox("Status", statuses, key="clickup_analysis_status")
-            if selected_status != "All":
-                filtered = filtered[filtered["Current Status"].fillna("Unavailable").astype(str).eq(selected_status)]
-        st.dataframe(filtered, hide_index=True, use_container_width=True)
-    with tab_status:
-        st.subheader("Status-duration detail")
-        st.dataframe(result["status_detail"], hide_index=True, use_container_width=True)
-        st.dataframe(result["status_summary"], hide_index=True, use_container_width=True)
-    with tab_quality:
-        st.subheader("Data quality")
-        st.dataframe(result["quality"], hide_index=True, use_container_width=True)
-        st.info("Activity/History browser collection is disabled. Missing Total time in Status values remain unavailable, not zero.")
+            filter_left, filter_middle, filter_right = st.columns(3)
+            with filter_left:
+                assignee_options = ["All", *sorted(filtered["Assignee"].fillna("Unassigned").astype(str).unique())]
+                task_assignee = st.selectbox("Filter by assignee", assignee_options, key="clickup_task_assignee")
+                if task_assignee != "All":
+                    filtered = filtered[filtered["Assignee"].fillna("Unassigned").astype(str).eq(task_assignee)]
+            with filter_middle:
+                status_options = ["All", *sorted(filtered["Current Status"].fillna("Unavailable").astype(str).unique())]
+                task_status = st.selectbox("Filter by status", status_options, key="clickup_task_status")
+                if task_status != "All":
+                    filtered = filtered[filtered["Current Status"].fillna("Unavailable").astype(str).eq(task_status)]
+            with filter_right:
+                priority_options = ["All", *sorted(filtered["Priority"].fillna("No priority").astype(str).unique())]
+                task_priority = st.selectbox("Filter by priority", priority_options, key="clickup_task_priority")
+                if task_priority != "All":
+                    filtered = filtered[filtered["Priority"].fillna("No priority").astype(str).eq(task_priority)]
+        detail_columns = [
+            "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
+            "Current Status", "Created", "Updated", "Start Date", "Due Date", "Completed", "Completed?", "Open?",
+            "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category", "Overdue Days",
+            "Execution Hours", "Lead Time Hours", "Time to Start Hours", "Time Estimate Hours", "Time Tracked Hours",
+            "Current Status Time (min)", "Total Time in Status (min)",
+        ]
+        st.dataframe(filtered[[column for column in detail_columns if column in filtered]], hide_index=True, use_container_width=True)
 
-    st.download_button(
-        "Download ClickUp Analysis Excel",
-        data=analysis_excel(result),
-        file_name="clickup_performance_analysis.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+    with tab_quality:
+        st.subheader("Data Quality and Coverage")
+        st.dataframe(result["quality"], hide_index=True, use_container_width=True)
+        st.info("Unavailable ClickUp fields remain unavailable; they are not replaced with zero. Jira was not used or changed by this analysis.")
+        with st.expander("Metric definitions"):
+            st.dataframe(result["metric_definitions"], hide_index=True, use_container_width=True)
+
+    st.divider()
+    download_left, download_right = st.columns(2)
+    with download_left:
+        st.download_button(
+            "Download ClickUp Analysis Excel",
+            data=analysis_excel(result),
+            file_name="clickup_performance_analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with download_right:
+        report_key = f"{result['space_name']}:{result['cutoff']}:{len(tasks)}"
+        if st.session_state.get("clickup_word_report_key") != report_key:
+            st.session_state["clickup_word_report"] = create_clickup_word_report(result)
+            st.session_state["clickup_word_report_key"] = report_key
+        st.download_button(
+            "Download ClickUp Analysis Word Report",
+            data=st.session_state["clickup_word_report"],
+            file_name="clickup_performance_analysis.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
 
 
 from automation_ui import require_sign_in, render_collection
 
 settings = require_sign_in()
 
-st.title("Jira Process Performance Dashboard")
-st.caption("Data collection v3.1 — select your Jira work items and run the existing process analysis")
+st.title("Task Process Performance Dashboard")
+st.caption("Select Jira or ClickUp, choose the relevant filters, and run the available process analysis.")
 
 prepared_data, run_button = render_collection(settings)
 cutoff_text = prepared_data.cutoff if prepared_data else ""

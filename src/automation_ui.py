@@ -1,6 +1,8 @@
 """English-only sign-in, space selection, filters, and collection screens."""
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -12,6 +14,10 @@ from jira_gateway import CollectionError, JiraGateway
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway, ClickUpTimeStatusUnavailable
 from clickup_export import (_current_status_info, _status_minutes,
                             collect_data as collect_clickup_data)
+from clickup_filters import (MORE_FILTER_LABELS, assignees as clickup_assignees,
+                             criteria_summary, filter_options as clickup_filter_options,
+                             filter_tasks as filter_clickup_tasks, status_name as clickup_status_name,
+                             timestamp as clickup_timestamp, widget_key)
 
 
 RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
@@ -81,15 +87,88 @@ def _clickup_gateway(settings, workspace_id=""):
         workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
     )
 
+def _clickup_date_rule(label, key):
+    """Render one ClickUp-style date condition and return a small rule object."""
+    modes = ["Any time", "On", "Before", "After", "Between", "Is set", "Is not set"]
+    mode = st.selectbox(label, modes, key=key + "_mode")
+    rule = {"mode": mode}
+    if mode in {"On", "Before", "After", "Between"}:
+        rule["start"] = st.date_input(
+            "From date" if mode == "Between" else "Date",
+            key=key + "_start",
+        )
+    if mode == "Between":
+        rule["end"] = st.date_input("To date", key=key + "_end")
+    return rule
+
+
+def _clickup_number_rule(label, key):
+    """Render a duration/number condition using hours, as ClickUp does."""
+    modes = ["Any value", "At least (hours)", "At most (hours)", "Between (hours)", "Has value", "No value"]
+    mode = st.selectbox(label, modes, key=key + "_mode")
+    rule = {"mode": mode}
+    if mode in {"At least (hours)", "At most (hours)", "Between (hours)"}:
+        minimum = st.number_input("Minimum hours", min_value=0.0, value=0.0, step=0.5,
+                                  key=key + "_minimum")
+        rule["minimum"] = minimum
+        if mode == "At most (hours)":
+            rule["maximum"] = st.number_input("Maximum hours", min_value=0.0, value=minimum, step=0.5,
+                                                key=key + "_maximum")
+        elif mode == "Between (hours)":
+            rule["maximum"] = st.number_input("Maximum hours", min_value=minimum,
+                                                value=max(minimum, 1.0), step=0.5,
+                                                key=key + "_maximum")
+    return rule
+
+
+def _clickup_boolean_rule(label, key):
+    return st.selectbox(label, ["Any", "Is", "Is not"], key=key + "_value")
+
+
+def _clickup_time_status(settings, workspace_id, space_id, tasks):
+    """Read status-duration data only after the user adds that specific filter."""
+    task_ids = [str(task.get("id", "")) for task in tasks if task.get("id")]
+    cache_key = f"{workspace_id}:{space_id}:{','.join(task_ids)}"
+    if st.session_state.get("clickup_time_status_key") != cache_key:
+        time_status_map = {}
+        error = ""
+        try:
+            gateway = _clickup_gateway(settings, workspace_id)
+            try:
+                time_status_map = gateway.time_in_status(task_ids) or {}
+            finally:
+                gateway.close()
+        except (ClickUpTimeStatusUnavailable, ClickUpCollectionError) as exc:
+            error = str(exc)
+        st.session_state["clickup_time_status_key"] = cache_key
+        st.session_state["clickup_time_status_map"] = time_status_map
+        st.session_state["clickup_time_status_error"] = error
+    return (
+        st.session_state.get("clickup_time_status_map", {}),
+        st.session_state.get("clickup_time_status_error", ""),
+    )
+
+
+def _clickup_display_timestamp(value):
+    value = clickup_timestamp(value)
+    return "" if pd.isna(value) else value.strftime("%Y-%m-%d")
+
+
 def _render_clickup_collection(settings):
-    st.caption("Select a ClickUp Space → review its tasks → Done")
+    """Collect one filtered ClickUp Space without changing the Jira path.
+
+    ClickUp filters operate against an API snapshot.  The paid Total time in
+    Status endpoint is requested only when the corresponding More filter is
+    selected; it is not a background collector and never touches Jira.
+    """
+    st.caption("Select a ClickUp Space, apply filters, review the matching tasks, and select Done.")
     try:
         gateway = _clickup_gateway(settings)
         try:
             workspaces = gateway.workspaces()
             workspace_id = settings.clickup_workspace_id or (str(workspaces[0]["id"]) if workspaces else "")
             if not workspace_id:
-                st.error("لم يتم العثور على Workspace في ClickUp.")
+                st.error("No ClickUp Workspace was found for this connection.")
                 return None, False
             spaces = gateway.spaces(workspace_id)
         finally:
@@ -97,105 +176,154 @@ def _render_clickup_collection(settings):
     except ClickUpCollectionError as exc:
         st.error(str(exc))
         return None, False
+
     space_map = {str(item["id"]): item for item in spaces}
-    selected = st.selectbox("Space", [None, *space_map],
-                            format_func=lambda value: "Choose a space" if value is None else space_map[value].get("name", value),
-                            key="clickup_selected_space")
+    selected = st.selectbox(
+        "Space",
+        [None, *space_map],
+        format_func=lambda value: "Choose a space" if value is None else space_map[value].get("name", value),
+        key="clickup_selected_space",
+    )
     if selected is None:
         return None, False
-    try:
-        gateway = _clickup_gateway(settings, workspace_id)
+
+    tasks_cache_key = f"{workspace_id}:{selected}"
+    if st.session_state.get("clickup_tasks_cache_key") != tasks_cache_key:
         try:
-            with st.spinner("جاري تحميل مهام ClickUp..."):
-                tasks = gateway.all_tasks_for_space(selected)
-        finally:
-            gateway.close()
-    except ClickUpCollectionError as exc:
-        st.error(str(exc))
-        return None, False
-    task_ids = [str(task.get("id", "")) for task in tasks if task.get("id")]
-    time_status_key = f"{selected}:{','.join(task_ids)}"
-    if st.session_state.get("clickup_time_status_key") != time_status_key:
-        time_status_map = {}
-        time_status_error = ""
-        try:
-            time_gateway = _clickup_gateway(settings, workspace_id)
+            gateway = _clickup_gateway(settings, workspace_id)
             try:
-                time_status_map = time_gateway.time_in_status(task_ids) or {}
+                with st.spinner("Loading ClickUp tasks..."):
+                    tasks = gateway.all_tasks_for_space(selected)
             finally:
-                time_gateway.close()
-        except ClickUpTimeStatusUnavailable as exc:
-            time_status_error = str(exc)
-        st.session_state["clickup_time_status_key"] = time_status_key
-        st.session_state["clickup_time_status_map"] = time_status_map
-        st.session_state["clickup_time_status_error"] = time_status_error
-    time_status_map = st.session_state.get("clickup_time_status_map", {})
-    time_status_error = st.session_state.get("clickup_time_status_error", "")
-    status_minutes = {task_id: _status_minutes(payload) for task_id, payload in time_status_map.items()}
-    status_options = sorted({status for values in status_minutes.values() for status in values})
+                gateway.close()
+        except ClickUpCollectionError as exc:
+            st.error(str(exc))
+            return None, False
+        st.session_state["clickup_tasks_cache_key"] = tasks_cache_key
+        st.session_state["clickup_tasks_cache"] = tasks
+        # A different Space must not reuse a status-duration result.
+        for key in ("clickup_time_status_key", "clickup_time_status_map", "clickup_time_status_error"):
+            st.session_state.pop(key, None)
+    tasks = st.session_state.get("clickup_tasks_cache", [])
+    options = clickup_filter_options(tasks)
 
-    st.subheader("Total time in Status filter")
-    if time_status_error:
-        st.warning(
-            "Total time in Status is unavailable for this ClickUp account. "
-            "Enable the ClickApp (Business+) to use this filter; task collection remains available."
-        )
-        filtered_tasks = tasks
-        filter_label = "unavailable"
-    elif not status_options:
-        st.info("No Total time in Status values were returned; the filter is disabled for this collection.")
-        filtered_tasks = tasks
-        filter_label = "not_available"
-    else:
-        filter_mode = st.selectbox(
-            "Filter mode", ["No filter", "At least (hours)", "At most (hours)", "Between (hours)"],
-            key=f"clickup_tis_mode_{selected}",
-        )
-        if filter_mode == "No filter":
-            filtered_tasks = tasks
-            filter_label = "none"
-        else:
-            selected_status = st.selectbox("Status", status_options, key=f"clickup_tis_status_{selected}")
-            lower = st.number_input("Minimum hours", min_value=0.0, value=0.0, step=1.0,
-                                    key=f"clickup_tis_min_{selected}")
-            upper = None
-            if filter_mode == "At most (hours)":
-                upper = st.number_input("Maximum hours", min_value=0.0, value=lower, step=1.0,
-                                        key=f"clickup_tis_max_{selected}")
-            elif filter_mode == "Between (hours)":
-                upper = st.number_input("Maximum hours", min_value=lower, value=max(lower, 1.0), step=1.0,
-                                        key=f"clickup_tis_max_{selected}")
-            def matches(task):
-                minutes = status_minutes.get(str(task.get("id", "")), {}).get(selected_status)
-                if minutes is None:
-                    return False
-                hours = float(minutes) / 60.0
-                if filter_mode == "At least (hours)":
-                    return hours >= lower
-                if filter_mode == "At most (hours)":
-                    return hours <= upper
-                return lower <= hours <= upper
-            filtered_tasks = [task for task in tasks if matches(task)]
-            filter_label = f"{filter_mode}:{selected_status}:{lower}:{upper}"
+    st.subheader("ClickUp filters")
+    quick_left, quick_middle, quick_right = st.columns(3)
+    with quick_left:
+        keyword = st.text_input("Search tasks", key=f"clickup_search_{selected}")
+        selected_statuses = st.multiselect("Status", options["status"], key=f"clickup_status_{selected}")
+    with quick_middle:
+        selected_assignees = st.multiselect("Assignee", options["assignee"], key=f"clickup_assignee_{selected}")
+        selected_priorities = st.multiselect("Priority", options["priority"], key=f"clickup_priority_{selected}")
+    with quick_right:
+        due_date = _clickup_date_rule("Due date", f"clickup_due_{selected}")
+        match = st.selectbox("Match filters", ["All (AND)", "Any (OR)"], key=f"clickup_match_{selected}")
 
+    criteria = {
+        "keyword": keyword,
+        "status": selected_statuses,
+        "assignee": selected_assignees,
+        "priority": selected_priorities,
+        "due_date": due_date,
+        "match": match,
+        "extras": {},
+    }
+    time_status_map = {}
+    time_status_error = ""
+
+    with st.expander("More filters", expanded=False):
+        more_filters = st.multiselect(
+            "Add filter",
+            MORE_FILTER_LABELS,
+            key=f"clickup_more_filters_{selected}",
+            help="These labels mirror ClickUp View and Dashboard filter families when the task API provides the field.",
+        )
+        if more_filters:
+            st.caption("Additional conditions are combined with the selected filter-matching rule above.")
+        date_labels = {"Start date", "Date created", "Date updated", "Date closed"}
+        for label in [item for item in more_filters if item in date_labels]:
+            criteria["extras"][label] = _clickup_date_rule(label, f"clickup_more_{widget_key(label)}_{selected}")
+        if "Tags" in more_filters:
+            criteria["extras"]["Tags"] = {
+                "mode": st.selectbox("Tag condition", ["Has any of", "Has all of", "Has none of"],
+                                       key=f"clickup_tag_mode_{selected}"),
+                "values": st.multiselect("Tags", options["tag"], key=f"clickup_tags_{selected}"),
+            }
+        for label, values in (("Location/List", options["location"]), ("Task type", options["task_type"]),
+                              ("Created by", options["created_by"])):
+            if label in more_filters:
+                criteria["extras"][label] = st.multiselect(label, values,
+                                                            key=f"clickup_more_{widget_key(label)}_{selected}")
+        for label in ("Time estimates", "Time tracked"):
+            if label in more_filters:
+                criteria["extras"][label] = _clickup_number_rule(label, f"clickup_more_{widget_key(label)}_{selected}")
+        for label in ("Status is closed", "Recurring", "Milestone", "Dependencies", "Archived"):
+            if label in more_filters:
+                criteria["extras"][label] = _clickup_boolean_rule(label, f"clickup_more_{widget_key(label)}_{selected}")
+        if "Custom Fields" in more_filters:
+            selected_fields = st.multiselect("Custom field", list(options["custom_fields"]),
+                                             key=f"clickup_custom_fields_{selected}")
+            selected_values = {}
+            for field_name in selected_fields:
+                selected_values[field_name] = st.multiselect(
+                    field_name,
+                    options["custom_fields"][field_name],
+                    key=f"clickup_custom_{widget_key(field_name)}_{selected}",
+                )
+            if selected_values:
+                criteria["extras"]["Custom Fields"] = selected_values
+        if "Total time in Status" in more_filters:
+            time_status_map, time_status_error = _clickup_time_status(settings, workspace_id, selected, tasks)
+            if time_status_error:
+                st.warning(
+                    "Total time in Status is not available for this ClickUp account. "
+                    "The task filters and analysis remain available."
+                )
+            else:
+                status_minutes = {
+                    task_id: _status_minutes(payload)
+                    for task_id, payload in time_status_map.items()
+                }
+                status_options = sorted({status for values in status_minutes.values() for status in values}, key=str.casefold)
+                if not status_options:
+                    st.info("ClickUp returned no Total time in Status values for this Space.")
+                else:
+                    selected_status = st.selectbox("Status duration for", status_options,
+                                                   key=f"clickup_tis_status_{selected}")
+                    rule = _clickup_number_rule("Total time in Status", f"clickup_tis_{selected}")
+                    rule["status"] = selected_status
+                    criteria["extras"]["Total time in Status"] = rule
+
+    filtered_tasks = filter_clickup_tasks(tasks, criteria, time_status_map)
+    filter_summary = criteria_summary(criteria)
     rows = []
     for task in filtered_tasks:
-        status = task.get("status") or {}
-        priority = task.get("priority") or {}
-        assignees = task.get("assignees") or []
-        current_minutes, _ = _current_status_info(time_status_map.get(str(task.get("id", ""))))
-        rows.append({"Task ID": task.get("id"), "Task Name": task.get("name"),
-                     "Assignee": ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
-                     "Priority": priority.get("priority") if isinstance(priority, dict) else None,
-                     "Status": status.get("status") if isinstance(status, dict) else None,
-                     "Due date": task.get("due_date"),
-                     "Current status time (min)": current_minutes})
-    st.subheader("All work items")
+        task_id = str(task.get("id", ""))
+        current_minutes, _ = _current_status_info(time_status_map.get(task_id))
+        rows.append({
+            "Task ID": task_id,
+            "Task Name": task.get("name"),
+            "Assignee": ", ".join(clickup_assignees(task)),
+            "Priority": (task.get("priority") or {}).get("priority") if isinstance(task.get("priority"), dict) else task.get("priority"),
+            "Status": clickup_status_name(task),
+            "Due date": _clickup_display_timestamp(task.get("due_date")),
+            "Current Status Time (min)": current_minutes,
+        })
     selected_name = space_map[selected].get("name", selected)
-    st.caption(f"Selected space: {selected_name} · Space ID: {selected} · {len(rows)} of {len(tasks)} work items shown")
+    st.subheader("Matching tasks")
+    st.caption(
+        f"Space: {selected_name} · Space ID: {selected} · {len(rows)} of {len(tasks)} tasks shown · Scope: {filter_summary}"
+    )
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    if not filtered_tasks:
+        st.warning("No tasks match the current filters. Change a filter before selecting Done.")
+
     st.divider()
-    fingerprint = f"clickup:{selected}:{','.join(str(t.get('id', '')) for t in filtered_tasks)}:{filter_label}"
+    fingerprint = "clickup:" + selected + ":" + json.dumps(
+        {"task_ids": [str(task.get("id", "")) for task in filtered_tasks], "criteria": criteria},
+        sort_keys=True,
+        default=str,
+    )
     previous = st.session_state.get("clickup_prepared_data")
     if previous is not None and previous.fingerprint != fingerprint:
         st.session_state.pop("clickup_prepared_data", None)
@@ -204,41 +332,44 @@ def _render_clickup_collection(settings):
         st.session_state.pop("clickup_error", None)
         st.session_state.pop("clickup_prepared_data", None)
         try:
-            with st.status("Collecting ClickUp tasks and Total time in Status...", expanded=True) as status:
-                collector = _clickup_gateway(settings, workspace_id)
-                try:
-                    prepared = collect_clickup_data(
-                        collector, filtered_tasks, selected_name, fingerprint,
-                        settings.source_timezone,
-                        progress=lambda message: status.update(label=message),
-                        space_id=selected,
-                        time_status_data={
-                            str(task.get("id", "")): time_status_map.get(str(task.get("id", "")))
-                            for task in filtered_tasks
-                            if task.get("id") in time_status_map
-                        },
-                        time_status_error=time_status_error,
-                    )
-                finally:
-                    collector.close()
+            with st.status("Preparing the selected ClickUp tasks for analysis...", expanded=True) as progress:
+                prepared = collect_clickup_data(
+                    None,
+                    filtered_tasks,
+                    selected_name,
+                    fingerprint,
+                    settings.source_timezone,
+                    progress=lambda message: progress.update(label=message),
+                    space_id=selected,
+                    # Passing a map, even an empty one, prevents a hidden API collector call.
+                    time_status_data={
+                        str(task.get("id", "")): time_status_map[str(task.get("id", ""))]
+                        for task in filtered_tasks
+                        if str(task.get("id", "")) in time_status_map
+                    },
+                    time_status_error=time_status_error,
+                    filter_summary=filter_summary,
+                    filter_criteria=criteria,
+                )
                 st.session_state["clickup_prepared_data"] = prepared
                 st.session_state["clickup_run_analysis"] = True
-                status.update(label="ClickUp data collection completed.", state="complete", expanded=False)
+                progress.update(label="ClickUp task collection completed.", state="complete", expanded=False)
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
     if st.session_state.get("clickup_error"):
         st.error(st.session_state["clickup_error"])
     prepared = st.session_state.get("clickup_prepared_data")
     if prepared:
-        if getattr(prepared, "clickup_time_status_available", False):
-            st.success(f"ClickUp tasks and Total time in Status collected for Space ID {selected}.")
-        else:
-            st.warning(
-                "Task data was collected, but Total time in Status was unavailable for this account. "
-                "The Activity collector is disabled; Jira was not used or changed."
-            )
-        st.download_button("Download ClickUp Source Excel", prepared.xlsx, prepared.filename,
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
+        st.success("ClickUp task collection completed. Jira was not used or changed.")
+        if "Total time in Status" in criteria["extras"] and not getattr(prepared, "clickup_time_status_available", False):
+            st.info("Total time in Status was unavailable for this selected scope; unavailable values remain blank.")
+        st.download_button(
+            "Download ClickUp source Excel",
+            prepared.xlsx,
+            prepared.filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            on_click="ignore",
+        )
     return prepared, bool(st.session_state.pop("clickup_run_analysis", False))
 
 

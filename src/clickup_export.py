@@ -8,9 +8,6 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
-from clickup_gateway import ClickUpTimeStatusUnavailable
-
-
 @dataclass
 class ClickUpPreparedData:
     """Prepared ClickUp snapshot; deliberately independent of Jira export types."""
@@ -24,6 +21,8 @@ class ClickUpPreparedData:
     filename: str
     space_name: str
     source_timezone: str
+    filter_summary: str = "All tasks in the selected ClickUp Space"
+    filter_criteria: dict = field(default_factory=dict, repr=False)
 
 
 def _sheet(wb, name, headers, rows):
@@ -77,26 +76,23 @@ def _current_status_info(payload):
 
 
 def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None,
-                 space_id=None, time_status_data=None, time_status_error=""):
-    """Collect ClickUp tasks plus native Total time in Status data.
+                 space_id=None, time_status_data=None, time_status_error="", filter_summary="",
+                 filter_criteria=None):
+    """Prepare ClickUp tasks and explicitly supplied status-duration data.
 
-    The old browser Activity/History collector is deliberately not called.
-    ClickUp task collection and Total time in Status are read-only API calls;
-    Jira's collector and workbook are untouched.
+    This function never calls a status/activity endpoint itself.  The UI only
+    obtains Total time in Status when the user explicitly selects that More
+    filter, then passes the returned map here. Jira's collector and workbook
+    are untouched.
     """
     cutoff = datetime.now(timezone.utc).isoformat()
     time_status = {}
     time_status_error = str(time_status_error or "")
     activity_notes = []
-    task_ids = [str(task.get("id", "")) for task in tasks if task.get("id")]
     if time_status_data is not None:
         time_status = dict(time_status_data)
-    else:
-        try:
-            time_status = gateway.time_in_status(task_ids, progress=progress) or {}
-        except ClickUpTimeStatusUnavailable as exc:
-            time_status_error = str(exc)
-            activity_notes.append(["", "Total time in Status unavailable", time_status_error])
+    if time_status_error and not time_status:
+        activity_notes.append(["", "Total time in Status unavailable", time_status_error])
 
     flattened = {task_id: _status_minutes(payload) for task_id, payload in time_status.items()}
     status_names = sorted({status for values in flattened.values() for status in values})
@@ -144,28 +140,35 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     _sheet(wb, "Activity", ["Space ID", "Task ID", "History ID", "Timestamp", "User", "Event Type", "Field", "From", "To", "Comment"], activity_rows)
     context_rows = [
         ["Process Name", space_name], ["Space ID", space_id or ""],
-        ["Evaluation Scope", "Selected ClickUp Space"], ["Dataset Type", "ClickUp API collection"],
+        ["Evaluation Scope", filter_summary or "All tasks in the selected ClickUp Space"],
+        ["Dataset Type", "ClickUp API collection"],
         ["Evaluation Cutoff Date", cutoff], ["Source Timezone", source_timezone], ["Task Count", len(tasks)],
-        ["Activity Collector", "Disabled; replaced by ClickUp Total time in Status API"],
+        ["Activity History", "Disabled; no history collector is used"],
         ["Activity API", "Not collected"],
-        ["Total time in Status API", "Available" if time_status else "Unavailable for this account"],
+        ["Total time in Status API", "Available" if time_status else ("Unavailable for this account" if time_status_error else "Not requested")],
         ["Total time in Status Tasks", len(time_status)], ["Missing Total time in Status Tasks", missing_time_status],
         ["History IDs", "Not collected; status-duration data is sourced from Total time in Status."],
     ]
     _sheet(wb, "Process_Context", ["Field", "Value"], context_rows)
     if not activity_notes:
-        activity_notes = [["", "Activity collector disabled", "Status-duration analysis uses ClickUp Total time in Status API."]]
+        activity_notes = [["", "Activity history disabled", "Status-duration data is included only when a user selects the Total time in Status filter."]]
     _sheet(wb, "Collection_Notes", ["Task ID", "Issue", "Detail"], activity_notes)
     _sheet(wb, "Raw_JSON", ["Task ID", "Section", "JSON"], raw)
 
     stream = BytesIO()
     wb.save(stream)
     filename = f"ClickUp_{space_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    history_payload = {"tasks": tasks, "time_in_status": time_status, "source": "ClickUp API"}
+    history_payload = {
+        "tasks": tasks,
+        "time_in_status": time_status,
+        "source": "ClickUp API",
+        "filter_summary": filter_summary or "All tasks in the selected ClickUp Space",
+    }
     prepared = ClickUpPreparedData(
         stream.getvalue(), json.dumps(history_payload, ensure_ascii=False).encode(), cutoff,
         datetime.now(timezone.utc).isoformat(), space_name, fingerprint, len(tasks), filename,
         space_name, source_timezone,
+        filter_summary or "All tasks in the selected ClickUp Space", dict(filter_criteria or {}),
     )
     prepared.clickup_activity_available = False
     prepared.clickup_time_status_available = bool(time_status)

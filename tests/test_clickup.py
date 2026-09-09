@@ -4,10 +4,13 @@ import unittest
 from unittest.mock import Mock
 
 from openpyxl import load_workbook
+from docx import Document
 
-from clickup_analysis import analyze_clickup
+from clickup_analysis import analyze_clickup, analysis_excel
 from clickup_export import collect_data
+from clickup_filters import filter_tasks
 from clickup_gateway import ClickUpGateway, ClickUpTimeStatusUnavailable
+from clickup_report import create_clickup_word_report
 
 
 def status_payload(current="IN PROGRESS", current_minutes=120, history=None):
@@ -71,6 +74,60 @@ class ClickUpCollectionAndAnalysisTests(unittest.TestCase):
         self.assertTrue(bool(result["tasks"].iloc[0]["Completed?"]))
         self.assertAlmostEqual(result["tasks"].iloc[0]["Total Time in Status (min)"], 90.0)
         self.assertIn("COMPLETE", set(result["status_summary"]["Status"]))
+
+    def test_due_variance_filters_and_dashboard_tables_are_clickup_only(self):
+        tasks = [
+            {
+                "id": "late", "name": "Deliver late", "status": {"status": "COMPLETE", "type": "done"},
+                "priority": {"priority": "high"}, "assignees": [{"username": "Haidar"}],
+                "tags": [{"name": "release"}], "date_created": "2026-09-01T09:00:00Z",
+                "due_date": "2026-09-03T09:00:00Z", "date_closed": "2026-09-05T09:00:00Z",
+            },
+            {
+                "id": "early", "name": "Deliver early", "status": {"status": "COMPLETE", "type": "done"},
+                "priority": {"priority": "low"}, "assignees": [{"username": "Maya"}],
+                "tags": [{"name": "release"}], "date_created": "2026-09-01T09:00:00Z",
+                "due_date": "2026-09-05T09:00:00Z", "date_closed": "2026-09-04T09:00:00Z",
+            },
+        ]
+        filtered = filter_tasks(
+            tasks,
+            {
+                "status": ["COMPLETE"],
+                "priority": ["high"],
+                "extras": {"Tags": {"mode": "Has any of", "values": ["release"]}},
+            },
+        )
+        self.assertEqual([task["id"] for task in filtered], ["late"])
+
+        prepared = collect_data(
+            Mock(), tasks, "Performance Analysis", "due-variance", time_status_data={},
+            filter_summary="Status: COMPLETE",
+        )
+        result = analyze_clickup(prepared)
+        variance = result["tasks"].set_index("Task ID")["Due Variance (days)"]
+        self.assertEqual(variance["late"], 2.0)
+        self.assertEqual(variance["early"], -1.0)
+        self.assertIn("Completed late", set(result["due_variance_summary"]["Due Variance Category"]))
+        self.assertIn("Completed early", set(result["due_variance_summary"]["Due Variance Category"]))
+        self.assertFalse(result["assignee_summary"].empty)
+        self.assertFalse(result["weekly_flow"].empty)
+        workbook = load_workbook(io.BytesIO(analysis_excel(result)), data_only=True)
+        self.assertIn("Due_Variance", workbook.sheetnames)
+        self.assertIn("Assignee_Summary", workbook.sheetnames)
+
+    def test_word_report_contains_clickup_due_variance_section(self):
+        tasks = [{
+            "id": "late", "name": "Deliver late", "status": {"status": "COMPLETE", "type": "done"},
+            "assignees": [{"username": "Haidar"}], "date_created": "2026-09-01T09:00:00Z",
+            "due_date": "2026-09-03T09:00:00Z", "date_closed": "2026-09-05T09:00:00Z",
+        }]
+        prepared = collect_data(Mock(), tasks, "Performance Analysis", "word-report", time_status_data={})
+        report = create_clickup_word_report(analyze_clickup(prepared))
+        document = Document(io.BytesIO(report))
+        content = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        self.assertIn("ClickUp Task Performance Evaluation Report", content)
+        self.assertIn("Due Variance and Timeliness", content)
 
 
 if __name__ == "__main__":
