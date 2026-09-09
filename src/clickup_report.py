@@ -43,7 +43,6 @@ def _format_value(value: Any) -> str:
 
 
 def _format_cutoff(value: Any) -> str:
-    """Show the evaluation instant in a compact, reader-friendly form."""
     parsed = pd.to_datetime(value, utc=True, errors="coerce")
     if pd.isna(parsed):
         return _format_value(value)
@@ -104,7 +103,6 @@ def _set_cell_margins(cell, top=80, bottom=80, start=120, end=120):
 
 
 def _set_table_geometry(table, widths: list[int]):
-    """Apply fixed 6.5-inch table geometry instead of Word auto-fit."""
     table.autofit = False
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     tbl_pr = table._tbl.tblPr
@@ -148,7 +146,6 @@ def _set_repeat_table_header(row):
 
 
 def _configure_document(document: Document):
-    """Use the standard_business_brief token set for the app's Word output."""
     section = document.sections[0]
     section.top_margin = Inches(1)
     section.bottom_margin = Inches(1)
@@ -205,14 +202,26 @@ def _add_title(document: Document, title: str, subtitle: str):
 def _add_heading(document: Document, text: str, level=1):
     paragraph = document.add_heading(text, level=level)
     for run in paragraph.runs:
-        _set_run_font(run, size={1: 16, 2: 13, 3: 12}.get(level, 11), bold=True,
-                      color={1: BLUE, 2: BLUE, 3: DARK_BLUE}.get(level, INK))
+        _set_run_font(
+            run,
+            size={1: 16, 2: 13, 3: 12}.get(level, 11),
+            bold=True,
+            color={1: BLUE, 2: BLUE, 3: DARK_BLUE}.get(level, INK),
+        )
     return paragraph
 
 
 def _add_body(document: Document, text: str):
     paragraph = document.add_paragraph()
     _set_paragraph_spacing(paragraph)
+    run = paragraph.add_run(text)
+    _set_run_font(run, size=11)
+    return paragraph
+
+
+def _add_bullet(document: Document, text: str):
+    paragraph = document.add_paragraph(style="List Bullet")
+    _set_paragraph_spacing(paragraph, after=4)
     run = paragraph.add_run(text)
     _set_run_font(run, size=11)
     return paragraph
@@ -255,8 +264,58 @@ def _overall_value(result: dict, metric: str):
     return None if matches.empty else matches.iloc[0]
 
 
+def _safe_float(value):
+    if value is None or _is_missing(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clickup_recommendations(result: dict) -> list[str]:
+    recommendations: list[str] = []
+    total = int(_overall_value(result, "Total tasks") or 0)
+    completed = int(_overall_value(result, "Completed tasks") or 0)
+    overdue = int(_overall_value(result, "Open overdue tasks") or 0)
+    wip = int(_overall_value(result, "WIP tasks") or 0)
+    missing_due = len(result.get("missing_due_tasks", pd.DataFrame()))
+    completed_late = int(_overall_value(result, "Completed late tasks") or 0)
+    on_time_rate = _safe_float(_overall_value(result, "On-time completion rate (%)"))
+    completion_rate = _safe_float(_overall_value(result, "Completion rate (%)"))
+
+    if overdue > 0:
+        recommendations.append(
+            f"Prioritize the {overdue} open overdue task(s): confirm blockers, owners, and realistic due dates, then review them in the next operating cadence."
+        )
+    if on_time_rate is not None and on_time_rate < 80:
+        recommendations.append(
+            f"Improve schedule reliability: the on-time completion rate is {on_time_rate:.1f}%. Review estimation, due-date setting, and early escalation for tasks at risk."
+        )
+    if completion_rate is not None and completion_rate < 70:
+        recommendations.append(
+            f"Review backlog conversion: {completed} of {total} tasks are completed ({completion_rate:.1f}%). Prioritize the highest-value open work and remove or re-scope stale items."
+        )
+    if total and wip / total >= 0.30 and wip > 0:
+        recommendations.append(
+            f"Control work in progress: {wip} task(s) are WIP ({wip / total * 100:.1f}% of scope). Consider WIP limits and finishing active work before starting additional items."
+        )
+    if completed_late > 0:
+        recommendations.append(
+            f"Review the {completed_late} completed-late task(s) to identify recurring estimation, dependency, or prioritization patterns and address them in future planning."
+        )
+    if missing_due > 0:
+        recommendations.append(
+            f"Improve due-date coverage for the {missing_due} task(s) without a due date so future timeliness and overdue analysis is more complete."
+        )
+    if not recommendations:
+        recommendations.append(
+            "Maintain the current operating controls and continue monitoring completion, timeliness, WIP, due-date coverage, and status-duration evidence at each evaluation cutoff."
+        )
+    return recommendations
+
+
 def create_clickup_word_report(result: dict) -> bytes:
-    """Return a professional English DOCX report for one ClickUp analysis run."""
     document = Document()
     _configure_document(document)
     _add_title(
@@ -280,12 +339,7 @@ def create_clickup_word_report(result: dict) -> bytes:
     _add_heading(document, "Scope and Methodology")
     context = result["analysis_context"].copy()
     context.loc[context["Field"].eq("Evaluation Cutoff"), "Value"] = _format_cutoff(result["cutoff"])
-    _add_table(
-        document,
-        ["Field", "Value"],
-        _frame_rows(context, ["Field", "Value"]),
-        [2700, 6660],
-    )
+    _add_table(document, ["Field", "Value"], _frame_rows(context, ["Field", "Value"]), [2700, 6660])
     _add_body(
         document,
         "Due Variance is measured in calendar days. For completed tasks it equals Completed date minus Due date. For open tasks it equals the evaluation cutoff minus Due date. Positive values are late or overdue; negative values are early or still have time remaining."
@@ -311,6 +365,7 @@ def create_clickup_word_report(result: dict) -> bytes:
         )
     else:
         _add_body(document, "No tasks with due dates were available for Due Variance analysis.")
+
     _add_heading(document, "Open Work by Due Status", 2)
     due_status_rows = _frame_rows(result["due_status_summary"], ["Due Status", "Tasks", "Share of Open Tasks (%)"])
     if due_status_rows:
@@ -339,6 +394,26 @@ def create_clickup_word_report(result: dict) -> bytes:
     else:
         _add_body(document, "No status-duration values were returned for this selected ClickUp scope.")
 
+    _add_heading(document, "Bottlenecks, Exceptions, and Follow-up")
+    _add_table(
+        document,
+        ["Finding", "Tasks", "Recommended Follow-up"],
+        _frame_rows(result["findings"], ["Finding", "Tasks", "Recommended Follow-up"]),
+        [2640, 960, 5760],
+    )
+    if result["late_completed_tasks"].empty and result["overdue_tasks"].empty:
+        _add_body(document, "No completed-late or open-overdue tasks were found in the selected scope.")
+    else:
+        _add_body(document, "The task-level section identifies every task in the selected scope so the listed exceptions can be reviewed in context.")
+
+    _add_heading(document, "Recommendations")
+    _add_body(
+        document,
+        "The following recommendations are generated from the ClickUp results in this report and are limited to the selected scope and evaluation cutoff."
+    )
+    for recommendation in _clickup_recommendations(result):
+        _add_bullet(document, recommendation)
+
     _add_heading(document, "Individual Achievements and Assignment Summary")
     _add_body(
         document,
@@ -357,18 +432,6 @@ def create_clickup_word_report(result: dict) -> bytes:
         )
     else:
         _add_body(document, "No assignee information was returned for this selected scope.")
-
-    _add_heading(document, "Bottlenecks, Exceptions, and Follow-up")
-    _add_table(
-        document,
-        ["Finding", "Tasks", "Recommended Follow-up"],
-        _frame_rows(result["findings"], ["Finding", "Tasks", "Recommended Follow-up"]),
-        [2640, 960, 5760],
-    )
-    if result["late_completed_tasks"].empty and result["overdue_tasks"].empty:
-        _add_body(document, "No completed-late or open-overdue tasks were found in the selected scope.")
-    else:
-        _add_body(document, "The task-level section identifies every task in the selected scope so the listed exceptions can be reviewed in context.")
 
     _add_heading(document, "Task-Level Evaluation")
     task_columns = [
