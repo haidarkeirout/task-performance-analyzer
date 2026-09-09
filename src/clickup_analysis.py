@@ -72,9 +72,9 @@ def _duration_hours(start, end):
 def _timing_values(created, start, end, end_label: str):
     """Return trustworthy task-timing values without inventing negative time.
 
-    ClickUp start dates are frequently date-only values.  A same-day start
+    ClickUp start dates are frequently date-only values. A same-day start
     timestamp can therefore precede the creation timestamp by a few hours.
-    In that case the effective start is the creation time.  A start date after
+    In that case the effective start is the creation time. A start date after
     the completion/cutoff, however, is a chronology conflict and the derived
     timing metrics must remain unavailable.
     """
@@ -124,23 +124,46 @@ def _mean(frame: pd.DataFrame, column: str, mask=None):
     return None if values.empty else float(values.mean())
 
 
-def _weekly_flow(task_frame: pd.DataFrame) -> pd.DataFrame:
+def _weekly_flow(task_frame: pd.DataFrame, cutoff=None) -> pd.DataFrame:
+    """Build Monday-starting created/completed flow through the evaluation cutoff.
+
+    Empty calendar weeks are retained with zero counts so a dashboard request for
+    4, 12, 24, 36, or 48 weeks always represents that actual time window.
+    """
     columns = ["Week Starting", "Tasks Created", "Tasks Completed", "Net Flow", "Cumulative Net Flow"]
     if task_frame.empty:
         return pd.DataFrame(columns=columns)
+
     created = task_frame.loc[task_frame["Created"].notna(), ["Created"]].copy()
     completed = task_frame.loc[task_frame["Completed"].notna(), ["Completed"]].copy()
+
+    if pd.notna(cutoff):
+        created = created[created["Created"].le(cutoff)]
+        completed = completed[completed["Completed"].le(cutoff)]
+
     created["Week Starting"] = created["Created"].dt.normalize() - pd.to_timedelta(created["Created"].dt.weekday, unit="D")
     completed["Week Starting"] = completed["Completed"].dt.normalize() - pd.to_timedelta(completed["Completed"].dt.weekday, unit="D")
     created_counts = created.groupby("Week Starting").size().rename("Tasks Created")
     completed_counts = completed.groupby("Week Starting").size().rename("Tasks Completed")
-    output = pd.concat([created_counts, completed_counts], axis=1).fillna(0).reset_index()
-    if output.empty:
+    grouped = pd.concat([created_counts, completed_counts], axis=1).fillna(0)
+    if grouped.empty:
         return pd.DataFrame(columns=columns)
+
+    first_week = grouped.index.min()
+    last_week = grouped.index.max()
+    if pd.notna(cutoff):
+        cutoff_week = cutoff.normalize() - pd.to_timedelta(cutoff.weekday(), unit="D")
+        if cutoff_week > last_week:
+            last_week = cutoff_week
+
+    weeks = pd.date_range(first_week, last_week, freq="7D")
+    output = grouped.reindex(weeks).fillna(0)
+    output.index.name = "Week Starting"
+    output = output.reset_index()
     output[["Tasks Created", "Tasks Completed"]] = output[["Tasks Created", "Tasks Completed"]].astype(int)
     output["Net Flow"] = output["Tasks Created"] - output["Tasks Completed"]
     output["Cumulative Net Flow"] = output["Net Flow"].cumsum()
-    return output.sort_values("Week Starting").reset_index(drop=True)
+    return output[columns].reset_index(drop=True)
 
 
 def _due_status_summary(frame: pd.DataFrame, cutoff) -> pd.DataFrame:
@@ -318,7 +341,7 @@ def analyze_clickup(prepared_data):
     status_summary = _status_summary(status_frame)
     status_counts = (task_frame["Current Status"].fillna("Unavailable").value_counts().rename_axis("Status").reset_index(name="Tasks")
                      if total else pd.DataFrame(columns=["Status", "Tasks"]))
-    weekly_flow = _weekly_flow(task_frame)
+    weekly_flow = _weekly_flow(task_frame, cutoff)
     due_status_summary = _due_status_summary(task_frame, cutoff)
     due_variance_summary = (task_frame[task_frame["Due Variance (days)"].notna()]
                             .groupby("Due Variance Category", dropna=False)
