@@ -1,7 +1,6 @@
 """ClickUp-only Excel Executive Dashboard builder.
 
-This module consumes only the ClickUp analysis result dictionary. It intentionally
-has no Jira imports or Jira field assumptions.
+This module consumes only the ClickUp analysis result dictionary.
 """
 from __future__ import annotations
 
@@ -88,14 +87,21 @@ def _empty_panel(sheet, anchor: str, title: str):
     cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
 
 
-def _configure_chart(chart, title: str, y_title: str):
+def _configure_chart(chart, title: str, show_legend: bool):
     chart.title = title
     chart.height = 6.5
     chart.width = 12.0
-    chart.legend.position = "b"
-    chart.y_axis.title = y_title
     chart.x_axis.title = ""
+    chart.y_axis.title = ""
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.tickLblPos = "low"
     chart.display_blanks = "zero"
+    if show_legend:
+        chart.legend.position = "b"
+    else:
+        chart.legend = None
 
 
 def _line(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor):
@@ -104,27 +110,49 @@ def _line(sheet, title, start, end, cat_col, first_value_col, last_value_col, an
         return
     chart = LineChart()
     chart.style = 13
-    _configure_chart(chart, title, "Tasks")
-    chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
+    _configure_chart(chart, title, True)
+    chart.add_data(
+        Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end),
+        titles_from_data=True,
+    )
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
     sheet.add_chart(chart, anchor)
 
 
-def _bar(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor, y_title="Tasks"):
+def _bar(
+    sheet,
+    title,
+    start,
+    end,
+    cat_col,
+    first_value_col,
+    last_value_col,
+    anchor,
+    *,
+    stacked=False,
+    show_legend=False,
+):
     if end <= start:
         _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    _configure_chart(chart, title, y_title)
-    chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
+    chart.gapWidth = 60 if stacked else 90
+    if stacked:
+        chart.grouping = "stacked"
+        chart.overlap = 100
+    _configure_chart(chart, title, show_legend)
+    chart.add_data(
+        Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end),
+        titles_from_data=True,
+    )
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
     sheet.add_chart(chart, anchor)
 
 
 def add_clickup_executive_dashboard(workbook, result) -> None:
-    """Create a ClickUp-only Executive_Dashboard worksheet with KPI cards and charts."""
+    """Create a ClickUp-only Executive_Dashboard worksheet matching the Streamlit view."""
     if "Executive_Dashboard" in workbook.sheetnames:
         del workbook["Executive_Dashboard"]
     sheet = workbook.create_sheet("Executive_Dashboard", 0)
@@ -140,6 +168,7 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     sheet["A1"].font = Font(color=WHITE, bold=True, size=20)
     sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[1].height = 30
+
     sheet.merge_cells("A2:P2")
     sheet["A2"] = f"Source: ClickUp | Space: {result.get('space_name', 'Unavailable')} | Evaluation cutoff: {result.get('cutoff', 'Unavailable')}"
     sheet["A2"].font = Font(color=MID, italic=True, size=10)
@@ -176,10 +205,9 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
-    # Keep chart source data on ordinary visible cells below the dashboard.
-    # Hidden data ranges can produce blank chart frames in some Excel clients.
     c = 1
     r = 75
+
     weekly = result.get("weekly_flow", pd.DataFrame())
     rows = [] if weekly.empty else weekly[["Week Starting", "Tasks Created", "Tasks Completed"]].values.tolist()
     end = _write_table(sheet, r, c, ["Week Starting", "Tasks Created", "Tasks Completed"], rows)
@@ -189,32 +217,43 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     status = result.get("status_counts", pd.DataFrame())
     rows = [] if status.empty else status[["Status", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Status", "Tasks"], rows)
-    _bar(sheet, "Task Distribution by Status", r, end, c, c + 1, c + 1, "I13")
+    _bar(sheet, "Task Distribution by Status", r, end, c, c + 1, c + 1, "I13", show_legend=False)
     r = end + 3
 
     due = result.get("due_status_summary", pd.DataFrame())
     rows = [] if due.empty else due[["Due Status", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Status", "Tasks"], rows)
-    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A29")
+    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A29", show_legend=False)
     r = end + 3
 
     assignee = result.get("assignee_summary", pd.DataFrame())
     wanted = [col for col in ["Assignee", "Completed", "Open", "WIP"] if col in assignee.columns]
     rows = [] if assignee.empty or len(wanted) < 4 else assignee[wanted].values.tolist()
     end = _write_table(sheet, r, c, ["Assignee", "Completed", "Open", "WIP"], rows)
-    _bar(sheet, "Work Distribution by Assignee", r, end, c, c + 1, c + 3, "I29")
+    _bar(
+        sheet,
+        "Work Distribution by Assignee",
+        r,
+        end,
+        c,
+        c + 1,
+        c + 3,
+        "I29",
+        stacked=True,
+        show_legend=True,
+    )
     r = end + 3
 
     variance = result.get("due_variance_summary", pd.DataFrame())
     rows = [] if variance.empty else variance[["Due Variance Category", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Variance Category", "Tasks"], rows)
-    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A45")
+    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A45", show_legend=False)
     r = end + 3
 
     status_duration = result.get("status_summary", pd.DataFrame())
     rows = [] if status_duration.empty else status_duration[["Status", "Total Hours"]].values.tolist()
     end = _write_table(sheet, r, c, ["Status", "Total Hours"], rows)
-    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I45", y_title="Hours")
+    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I45", show_legend=False)
 
     sheet["A72"] = "Dashboard chart source data (not included in print area)"
     sheet["A72"].font = Font(color=MID, italic=True, size=9)
