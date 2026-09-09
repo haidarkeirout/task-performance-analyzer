@@ -1,7 +1,6 @@
 """Jira-only Excel Executive Dashboard builder.
 
-This module consumes only the Jira task-metrics frame and Jira process tables.
-It intentionally has no ClickUp imports or ClickUp field assumptions.
+This module consumes only Jira task metrics and Jira process tables.
 """
 from __future__ import annotations
 
@@ -9,7 +8,6 @@ import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-
 
 DARK = "17324D"
 MID = "2F5D7E"
@@ -101,14 +99,21 @@ def _empty_panel(sheet, anchor: str, title: str):
     cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
 
 
-def _configure_chart(chart, title: str, y_title: str):
+def _configure_chart(chart, title: str, show_legend: bool):
     chart.title = title
     chart.height = 6.5
     chart.width = 12.0
-    chart.legend.position = "b"
-    chart.y_axis.title = y_title
     chart.x_axis.title = ""
+    chart.y_axis.title = ""
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.tickLblPos = "low"
     chart.display_blanks = "zero"
+    if show_legend:
+        chart.legend.position = "b"
+    else:
+        chart.legend = None
 
 
 def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor):
@@ -117,31 +122,68 @@ def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, va
         return
     chart = LineChart()
     chart.style = 13
-    _configure_chart(chart, title, "Tasks")
-    data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
-    categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
+    _configure_chart(chart, title, True)
+    data = Reference(
+        sheet,
+        min_col=value_cols[0],
+        max_col=value_cols[-1],
+        min_row=data_start_row,
+        max_row=data_end_row,
+    )
+    categories = Reference(
+        sheet,
+        min_col=category_col,
+        min_row=data_start_row + 1,
+        max_row=data_end_row,
+    )
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
     sheet.add_chart(chart, anchor)
 
 
-def _add_bar_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor, y_title="Tasks"):
+def _add_bar_chart(
+    sheet,
+    title,
+    data_start_row,
+    data_end_row,
+    category_col,
+    value_cols,
+    anchor,
+    *,
+    stacked=False,
+    show_legend=False,
+):
     if data_end_row <= data_start_row:
         _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    _configure_chart(chart, title, y_title)
-    data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
-    categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
+    chart.gapWidth = 60 if stacked else 90
+    if stacked:
+        chart.grouping = "stacked"
+        chart.overlap = 100
+    _configure_chart(chart, title, show_legend)
+    data = Reference(
+        sheet,
+        min_col=value_cols[0],
+        max_col=value_cols[-1],
+        min_row=data_start_row,
+        max_row=data_end_row,
+    )
+    categories = Reference(
+        sheet,
+        min_col=category_col,
+        min_row=data_start_row + 1,
+        max_row=data_end_row,
+    )
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
     sheet.add_chart(chart, anchor)
 
 
 def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) -> None:
-    """Create a Jira-only Executive_Dashboard worksheet with KPI cards and charts."""
+    """Create a Jira-only Executive_Dashboard worksheet matching the Streamlit view."""
     if "Executive_Dashboard" in workbook.sheetnames:
         del workbook["Executive_Dashboard"]
     sheet = workbook.create_sheet("Executive_Dashboard", 0)
@@ -194,7 +236,11 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
 
     completed_mask = frame["is_completed"].eq(True) if "is_completed" in frame else pd.Series(False, index=frame.index)
     completed_late_mask = completed_mask & frame["schedule_variance_days"].gt(0) if "schedule_variance_days" in frame else completed_mask & False
-    open_overdue_mask = (frame["is_open"].eq(True) & frame["overdue_days"].gt(0)) if {"is_open", "overdue_days"}.issubset(frame.columns) else pd.Series(False, index=frame.index)
+    open_overdue_mask = (
+        frame["is_open"].eq(True) & frame["overdue_days"].gt(0)
+        if {"is_open", "overdue_days"}.issubset(frame.columns)
+        else pd.Series(False, index=frame.index)
+    )
     started_mask = frame["time_to_start_business_hours"].notna() if "time_to_start_business_hours" in frame else pd.Series(False, index=frame.index)
     start_variance_mask = frame["start_schedule_variance_days"].notna() if "start_schedule_variance_days" in frame else pd.Series(False, index=frame.index)
 
@@ -216,29 +262,52 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
-    # Keep chart source data on ordinary visible cells below the dashboard.
-    # Hidden source columns can render as blank charts in some Excel clients.
     support_col = 1
     support_row = 70
 
     weekly = tables.get("weekly_flow", pd.DataFrame()) if tables else pd.DataFrame()
     weekly_rows = [] if weekly is None or weekly.empty else weekly[["week_start", "tasks_opened", "tasks_completed"]].values.tolist()
-    weekly_end = _write_support_table(sheet, support_row, support_col, ["Week Starting", "Tasks Opened", "Tasks Completed"], weekly_rows)
+    weekly_end = _write_support_table(
+        sheet,
+        support_row,
+        support_col,
+        ["Week Starting", "Tasks Opened", "Tasks Completed"],
+        weekly_rows,
+    )
     _add_line_chart(sheet, "Weekly Task Flow", support_row, weekly_end, support_col, (support_col + 1, support_col + 2), "A13")
     support_row = weekly_end + 3
 
     status_counts = (
         frame["status_at_cutoff"].fillna("Unavailable").value_counts().rename_axis("Status").reset_index(name="Tasks")
-        if "status_at_cutoff" in frame else pd.DataFrame(columns=["Status", "Tasks"])
+        if "status_at_cutoff" in frame
+        else pd.DataFrame(columns=["Status", "Tasks"])
     )
     status_end = _write_support_table(sheet, support_row, support_col, ["Status", "Tasks"], status_counts.values.tolist())
-    _add_bar_chart(sheet, "Task Distribution by Status", support_row, status_end, support_col, (support_col + 1, support_col + 1), "I13")
+    _add_bar_chart(
+        sheet,
+        "Task Distribution by Status",
+        support_row,
+        status_end,
+        support_col,
+        (support_col + 1, support_col + 1),
+        "I13",
+        show_legend=False,
+    )
     support_row = status_end + 3
 
     due = tables.get("deadline_summary", pd.DataFrame()) if tables else pd.DataFrame()
     due_rows = [] if due is None or due.empty else due[["due_status", "task_count"]].values.tolist()
     due_end = _write_support_table(sheet, support_row, support_col, ["Due Status", "Tasks"], due_rows)
-    _add_bar_chart(sheet, "Open Tasks by Due Status", support_row, due_end, support_col, (support_col + 1, support_col + 1), "A29")
+    _add_bar_chart(
+        sheet,
+        "Open Tasks by Due Status",
+        support_row,
+        due_end,
+        support_col,
+        (support_col + 1, support_col + 1),
+        "A29",
+        show_legend=False,
+    )
     support_row = due_end + 3
 
     if "assignee_name" in frame:
@@ -251,8 +320,24 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
         )
     else:
         assignee = pd.DataFrame(columns=["Assignee", "Completed", "Open", "Rejected"])
-    assignee_end = _write_support_table(sheet, support_row, support_col, ["Assignee", "Completed", "Open", "Rejected"], assignee.values.tolist())
-    _add_bar_chart(sheet, "Work Distribution by Assignee", support_row, assignee_end, support_col, (support_col + 1, support_col + 3), "I29")
+    assignee_end = _write_support_table(
+        sheet,
+        support_row,
+        support_col,
+        ["Assignee", "Completed", "Open", "Rejected"],
+        assignee.values.tolist(),
+    )
+    _add_bar_chart(
+        sheet,
+        "Work Distribution by Assignee",
+        support_row,
+        assignee_end,
+        support_col,
+        (support_col + 1, support_col + 3),
+        "I29",
+        stacked=True,
+        show_legend=True,
+    )
 
     sheet["A67"] = "Dashboard chart source data (not included in print area)"
     sheet["A67"].font = Font(color=MID, italic=True, size=9)
