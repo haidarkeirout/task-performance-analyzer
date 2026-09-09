@@ -199,3 +199,28 @@ Official references: [Streamlit Secrets](https://docs.streamlit.io/deploy/stream
 [Jira authentication](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/),
 [Jira search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/),
 [Jira filter metadata and validation](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-jql/).
+
+## Isolated ClickUp Activity History collector
+
+ClickUp task inventory still uses the read-only ClickUp API. When the optional
+browser session is configured, Activity History is collected through a headless
+Chromium context using the same web requests as ClickUp's Activity panel. This
+path is isolated to ClickUp; it is not imported by the Jira collector, Jira
+analysis, or Jira Excel export.
+
+For staging, keep the existing `CLICKUP_API_TOKEN` and `CLICKUP_WORKSPACE_ID`,
+then configure one authenticated browser source in Streamlit Secrets:
+
+```toml
+# Local machine: a persistent profile created after signing in to ClickUp.
+CLICKUP_BROWSER_PROFILE_DIR = "/path/to/clickup_probe_profile"
+
+# Hosted deployment: storage state exported from that authenticated profile.
+# Use a TOML multiline string for the JSON value.
+CLICKUP_STORAGE_STATE_JSON = """<Playwright storage-state JSON>"""
+```
+
+`packages.txt` installs Chromium and `requirements.txt` installs the optional
+Playwright client. Do not commit the profile or storage state to GitHub. If no
+browser source is configured, ClickUp task collection still works and the app
+falls back to the existing public/web request path; Jira remains unchanged.
