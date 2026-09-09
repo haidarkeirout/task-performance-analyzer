@@ -5,8 +5,6 @@ It intentionally has no ClickUp imports or ClickUp field assumptions.
 """
 from __future__ import annotations
 
-import math
-
 import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -19,6 +17,12 @@ LIGHT = "EAF1F6"
 WHITE = "FFFFFF"
 TEXT = "1F2937"
 BORDER = Side(style="thin", color="D7E1E8")
+PANEL_RANGES = {
+    "A13": "A13:H27",
+    "I13": "I13:P27",
+    "A30": "A30:H44",
+    "I30": "I30:P44",
+}
 
 
 def _safe_number(value, default=None):
@@ -66,6 +70,9 @@ def _card(sheet, start_col: int, label: str, value, row: int):
             cell = sheet.cell(r, c)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
+    sheet.row_dimensions[row].height = 24
+    sheet.row_dimensions[row + 1].height = 28
+    sheet.row_dimensions[row + 2].height = 18
 
 
 def _write_support_table(sheet, start_row: int, start_col: int, headers, rows):
@@ -81,15 +88,39 @@ def _write_support_table(sheet, start_row: int, start_col: int, headers, rows):
     return start_row + len(rows)
 
 
+def _empty_panel(sheet, anchor: str, title: str):
+    panel = PANEL_RANGES.get(anchor)
+    if not panel:
+        return
+    sheet.merge_cells(panel)
+    cell = sheet[anchor]
+    cell.value = f"{title}\n\nNo data available for this chart."
+    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+    cell.font = Font(color=MID, bold=True, size=12)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
+
+
+def _configure_chart(chart, title: str, y_title: str):
+    chart.title = title
+    chart.height = 7.2
+    chart.width = 13.2
+    chart.legend.position = "b"
+    chart.y_axis.title = y_title
+    chart.x_axis.title = ""
+    # The supporting source columns are intentionally hidden from the user.
+    # Excel normally ignores hidden cells, which previously produced blank charts.
+    chart.visible_cells_only = False
+    chart.display_blanks = "zero"
+
+
 def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor):
     if data_end_row <= data_start_row:
+        _empty_panel(sheet, anchor, title)
         return
     chart = LineChart()
-    chart.title = title
     chart.style = 13
-    chart.height = 8
-    chart.width = 14
-    chart.legend.position = "b"
+    _configure_chart(chart, title, "Tasks")
     data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
     categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
     chart.add_data(data, titles_from_data=True)
@@ -97,16 +128,14 @@ def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, va
     sheet.add_chart(chart, anchor)
 
 
-def _add_bar_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor):
+def _add_bar_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor, y_title="Tasks"):
     if data_end_row <= data_start_row:
+        _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    chart.title = title
-    chart.height = 8
-    chart.width = 14
-    chart.legend.position = "b"
+    _configure_chart(chart, title, y_title)
     data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
     categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
     chart.add_data(data, titles_from_data=True)
@@ -121,6 +150,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     sheet = workbook.create_sheet("Executive_Dashboard", 0)
     sheet.sheet_view.showGridLines = False
     sheet.freeze_panes = "A12"
+    sheet.sheet_properties.tabColor = DARK
 
     for col in range(1, 17):
         sheet.column_dimensions[get_column_letter(col)].width = 12
@@ -130,11 +160,18 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     sheet["A1"].fill = PatternFill("solid", fgColor=DARK)
     sheet["A1"].font = Font(color=WHITE, bold=True, size=20)
     sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    sheet.row_dimensions[1].height = 30
+    sheet.row_dimensions[1].height = 32
 
     cutoff = frame.iloc[0].get("evaluation_cutoff") if frame is not None and not frame.empty else "Unavailable"
+    process_name = "Jira"
+    if tables:
+        context = tables.get("process_context")
+        if context is not None and not context.empty and {"Field", "Value"}.issubset(context.columns):
+            matches = context.loc[context["Field"].eq("Process Name"), "Value"]
+            if not matches.empty:
+                process_name = str(matches.iloc[0])
     sheet.merge_cells("A2:P2")
-    sheet["A2"] = f"Source: Jira | Evaluation cutoff: {cutoff}"
+    sheet["A2"] = f"Source: Jira | Space: {process_name} | Evaluation cutoff: {cutoff}"
     sheet["A2"].font = Font(color=MID, italic=True, size=10)
     sheet["A2"].alignment = Alignment(horizontal="center")
 
