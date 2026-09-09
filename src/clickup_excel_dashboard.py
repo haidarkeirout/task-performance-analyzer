@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -89,51 +88,38 @@ def _empty_panel(sheet, anchor: str, title: str):
     cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
 
 
-def _configure_chart(chart, title: str, y_title: str, x_title: str):
+def _configure_chart(chart, title: str, y_title: str):
     chart.title = title
     chart.height = 6.5
     chart.width = 12.0
     chart.legend.position = "b"
     chart.y_axis.title = y_title
-    chart.x_axis.title = x_title
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-    chart.x_axis.tickLblPos = "low"
-    chart.y_axis.tickLblPos = "low"
+    chart.x_axis.title = ""
     chart.display_blanks = "zero"
 
 
-def _line(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor, x_title="Week Starting"):
+def _line(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor):
     if end <= start:
         _empty_panel(sheet, anchor, title)
         return
     chart = LineChart()
     chart.style = 13
-    _configure_chart(chart, title, "Tasks", x_title)
+    _configure_chart(chart, title, "Tasks")
     chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
-    chart.dLbls = DataLabelList()
-    chart.dLbls.showVal = True
-    chart.dLbls.showLegendKey = False
     sheet.add_chart(chart, anchor)
 
 
-def _bar(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor, x_title, y_title="Tasks"):
+def _bar(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor, y_title="Tasks"):
     if end <= start:
         _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    chart.gapWidth = 70
-    _configure_chart(chart, title, y_title, x_title)
+    _configure_chart(chart, title, y_title)
     chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
-    chart.dLbls = DataLabelList()
-    chart.dLbls.showVal = True
-    chart.dLbls.showCatName = True
-    chart.dLbls.showLegendKey = False
-    chart.dLbls.separator = " - "
     sheet.add_chart(chart, anchor)
 
 
@@ -190,6 +176,8 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
+    # Keep chart source data on ordinary visible cells below the dashboard.
+    # Hidden data ranges can produce blank chart frames in some Excel clients.
     c = 1
     r = 75
     weekly = result.get("weekly_flow", pd.DataFrame())
@@ -201,32 +189,32 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     status = result.get("status_counts", pd.DataFrame())
     rows = [] if status.empty else status[["Status", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Status", "Tasks"], rows)
-    _bar(sheet, "Task Distribution by Status", r, end, c, c + 1, c + 1, "I13", "Status")
+    _bar(sheet, "Task Distribution by Status", r, end, c, c + 1, c + 1, "I13")
     r = end + 3
 
     due = result.get("due_status_summary", pd.DataFrame())
     rows = [] if due.empty else due[["Due Status", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Status", "Tasks"], rows)
-    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A29", "Due Status")
+    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A29")
     r = end + 3
 
     assignee = result.get("assignee_summary", pd.DataFrame())
     wanted = [col for col in ["Assignee", "Completed", "Open", "WIP"] if col in assignee.columns]
     rows = [] if assignee.empty or len(wanted) < 4 else assignee[wanted].values.tolist()
     end = _write_table(sheet, r, c, ["Assignee", "Completed", "Open", "WIP"], rows)
-    _bar(sheet, "Work Distribution by Assignee", r, end, c, c + 1, c + 3, "I29", "Assignee")
+    _bar(sheet, "Work Distribution by Assignee", r, end, c, c + 1, c + 3, "I29")
     r = end + 3
 
     variance = result.get("due_variance_summary", pd.DataFrame())
     rows = [] if variance.empty else variance[["Due Variance Category", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Variance Category", "Tasks"], rows)
-    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A45", "Due Variance Category")
+    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A45")
     r = end + 3
 
     status_duration = result.get("status_summary", pd.DataFrame())
     rows = [] if status_duration.empty else status_duration[["Status", "Total Hours"]].values.tolist()
     end = _write_table(sheet, r, c, ["Status", "Total Hours"], rows)
-    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I45", "Status", y_title="Hours")
+    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I45", y_title="Hours")
 
     sheet["A72"] = "Dashboard chart source data (not included in print area)"
     sheet["A72"].font = Font(color=MID, italic=True, size=9)
