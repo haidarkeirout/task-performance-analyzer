@@ -75,8 +75,6 @@ def workbook_histories(workbook, tasks, source_timezone, through_text, confirmed
         if key not in result:
             continue
         h = result[key]
-        # The source workbook lists never-transitioned tasks as blank event rows.
-        # This is a task placeholder, not a malformed transition.
         if all(pd.isna(row[name]) for name in ["From Status", "To Status", "Transition Date", "Transition Time"]):
             continue
         try:
@@ -171,9 +169,9 @@ def deadline_summary(frame):
 def weekly_flow_summary(frame):
     """Count task creation and completion events by Monday-starting week.
 
-    The chart is intentionally based on task-level created/completed dates,
-    not on status-transition rows. Each task can therefore contribute at most
-    once to each weekly series. Counts are limited to the evaluation cutoff.
+    The weekly series is anchored to the evaluation cutoff, so dashboard filters
+    such as 4, 12, 24, 36, or 48 weeks always represent real calendar weeks.
+    Weeks with no created or completed tasks are retained with zero counts.
     """
     if frame is None or frame.empty:
         return pd.DataFrame(columns=WEEKLY_FLOW_COLUMNS)
@@ -188,10 +186,15 @@ def weekly_flow_summary(frame):
         return pd.DataFrame(columns=WEEKLY_FLOW_COLUMNS)
 
     cutoff = parse_timestamp(frame.iloc[0].get("evaluation_cutoff"), "UTC")
+    cutoff_week = None
     if cutoff is not None:
         cutoff_local = cutoff.tz_convert(timezone_name)
         created = created.where(created.le(cutoff_local))
         completed = completed.where(completed.le(cutoff_local))
+        cutoff_day = cutoff_local.normalize()
+        cutoff_week = (
+            cutoff_day - pd.to_timedelta(cutoff_day.weekday(), unit="D")
+        ).tz_localize(None)
 
     def week_starts(values):
         values = values.dropna()
@@ -199,8 +202,6 @@ def weekly_flow_summary(frame):
             return pd.Series(dtype="datetime64[ns]")
         normalized = values.dt.normalize()
         starts = normalized - pd.to_timedelta(normalized.dt.weekday, unit="D")
-        # Excel cannot store timezone-aware datetimes. Keep the local calendar
-        # date as a naive timestamp for charts and exports.
         return starts.dt.tz_localize(None)
 
     created_weeks = week_starts(created)
@@ -211,6 +212,8 @@ def weekly_flow_summary(frame):
 
     first_week = available.min()
     last_week = available.max()
+    if cutoff_week is not None and cutoff_week > last_week:
+        last_week = cutoff_week
     weeks = pd.date_range(first_week, last_week, freq="7D")
     result = pd.DataFrame({"week_start": weeks})
     result["tasks_opened"] = result["week_start"].map(created_weeks.value_counts()).fillna(0).astype(int)
@@ -310,7 +313,6 @@ def excel_bytes(frame, tables):
             sheet = writer.sheets[name]
             sheet.freeze_panes = "A2"
             sheet.auto_filter.ref = sheet.dimensions
-            # Prevent source text beginning '=' from becoming executable Excel formulas.
             for row in sheet:
                 for cell in row:
                     if cell.data_type == "f":
