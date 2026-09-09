@@ -38,8 +38,11 @@ INPUT_CONFIG_PATH = CONFIG_DIR / "jira_input_config.json"
 METRICS_CONFIG_PATH = CONFIG_DIR / "jira_metrics_config.json"
 
 
+APP_TITLE = "Task Performance Intelligence"
+
+
 st.set_page_config(
-    page_title="Task Process Performance Dashboard",
+    page_title=APP_TITLE,
     page_icon="📊",
     layout="wide",
 )
@@ -976,7 +979,7 @@ from automation_ui import require_sign_in, render_collection
 
 settings = require_sign_in()
 
-st.title("Task Process Performance Dashboard")
+st.title(APP_TITLE)
 st.caption("Select Jira or ClickUp, choose the relevant filters, and run the available process analysis.")
 
 prepared_data, run_button = render_collection(settings)
