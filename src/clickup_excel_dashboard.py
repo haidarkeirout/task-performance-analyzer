@@ -16,6 +16,14 @@ LIGHT = "EAF1F6"
 WHITE = "FFFFFF"
 TEXT = "1F2937"
 BORDER = Side(style="thin", color="D7E1E8")
+PANEL_RANGES = {
+    "A13": "A13:H26",
+    "I13": "I13:P26",
+    "A29": "A29:H42",
+    "I29": "I29:P42",
+    "A45": "A45:H58",
+    "I45": "I45:P58",
+}
 
 
 def _metric(result, name, default=None):
@@ -41,14 +49,17 @@ def _card(sheet, start_col, label, value, row):
     sheet.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
     sheet.merge_cells(start_row=row + 1, start_column=start_col, end_row=row + 2, end_column=end_col)
     sheet.cell(row, start_col, label).fill = PatternFill("solid", fgColor=DARK)
-    sheet.cell(row, start_col).font = Font(color=WHITE, bold=True, size=10)
+    sheet.cell(row, start_col).font = Font(color=WHITE, bold=True, size=9)
     sheet.cell(row + 1, start_col, value).fill = PatternFill("solid", fgColor=LIGHT)
-    sheet.cell(row + 1, start_col).font = Font(color=TEXT, bold=True, size=16)
+    sheet.cell(row + 1, start_col).font = Font(color=TEXT, bold=True, size=15)
     for r in range(row, row + 3):
         for c in range(start_col, end_col + 1):
             cell = sheet.cell(r, c)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
+    sheet.row_dimensions[row].height = 21
+    sheet.row_dimensions[row + 1].height = 25
+    sheet.row_dimensions[row + 2].height = 14
 
 
 def _write_table(sheet, start_row, start_col, headers, rows):
@@ -64,30 +75,49 @@ def _write_table(sheet, start_row, start_col, headers, rows):
     return start_row + len(rows)
 
 
+def _empty_panel(sheet, anchor: str, title: str):
+    panel = PANEL_RANGES.get(anchor)
+    if not panel:
+        return
+    sheet.merge_cells(panel)
+    cell = sheet[anchor]
+    cell.value = f"{title}\n\nNo data available for this chart."
+    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+    cell.font = Font(color=MID, bold=True, size=11)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
+
+
+def _configure_chart(chart, title: str, y_title: str):
+    chart.title = title
+    chart.height = 6.5
+    chart.width = 12.0
+    chart.legend.position = "b"
+    chart.y_axis.title = y_title
+    chart.x_axis.title = ""
+    chart.display_blanks = "zero"
+
+
 def _line(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor):
     if end <= start:
+        _empty_panel(sheet, anchor, title)
         return
     chart = LineChart()
-    chart.title = title
     chart.style = 13
-    chart.height = 8
-    chart.width = 14
-    chart.legend.position = "b"
+    _configure_chart(chart, title, "Tasks")
     chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
     sheet.add_chart(chart, anchor)
 
 
-def _bar(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor):
+def _bar(sheet, title, start, end, cat_col, first_value_col, last_value_col, anchor, y_title="Tasks"):
     if end <= start:
+        _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    chart.title = title
-    chart.height = 8
-    chart.width = 14
-    chart.legend.position = "b"
+    _configure_chart(chart, title, y_title)
     chart.add_data(Reference(sheet, min_col=first_value_col, max_col=last_value_col, min_row=start, max_row=end), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=cat_col, min_row=start + 1, max_row=end))
     sheet.add_chart(chart, anchor)
@@ -100,8 +130,9 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     sheet = workbook.create_sheet("Executive_Dashboard", 0)
     sheet.sheet_view.showGridLines = False
     sheet.freeze_panes = "A12"
+    sheet.sheet_properties.tabColor = DARK
     for col in range(1, 17):
-        sheet.column_dimensions[get_column_letter(col)].width = 12
+        sheet.column_dimensions[get_column_letter(col)].width = 11
 
     sheet.merge_cells("A1:P1")
     sheet["A1"] = "ClickUp Executive Dashboard"
@@ -145,8 +176,10 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
-    c = 18
-    r = 1
+    # Keep chart source data on ordinary visible cells below the dashboard.
+    # Hidden data ranges can produce blank chart frames in some Excel clients.
+    c = 1
+    r = 75
     weekly = result.get("weekly_flow", pd.DataFrame())
     rows = [] if weekly.empty else weekly[["Week Starting", "Tasks Created", "Tasks Completed"]].values.tolist()
     end = _write_table(sheet, r, c, ["Week Starting", "Tasks Created", "Tasks Completed"], rows)
@@ -162,30 +195,30 @@ def add_clickup_executive_dashboard(workbook, result) -> None:
     due = result.get("due_status_summary", pd.DataFrame())
     rows = [] if due.empty else due[["Due Status", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Status", "Tasks"], rows)
-    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A30")
+    _bar(sheet, "Open Tasks by Due Status", r, end, c, c + 1, c + 1, "A29")
     r = end + 3
 
     assignee = result.get("assignee_summary", pd.DataFrame())
     wanted = [col for col in ["Assignee", "Completed", "Open", "WIP"] if col in assignee.columns]
     rows = [] if assignee.empty or len(wanted) < 4 else assignee[wanted].values.tolist()
     end = _write_table(sheet, r, c, ["Assignee", "Completed", "Open", "WIP"], rows)
-    _bar(sheet, "Work Distribution by Assignee", r, end, c, c + 1, c + 3, "I30")
+    _bar(sheet, "Work Distribution by Assignee", r, end, c, c + 1, c + 3, "I29")
     r = end + 3
 
     variance = result.get("due_variance_summary", pd.DataFrame())
     rows = [] if variance.empty else variance[["Due Variance Category", "Tasks"]].values.tolist()
     end = _write_table(sheet, r, c, ["Due Variance Category", "Tasks"], rows)
-    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A47")
+    _bar(sheet, "Due Variance Distribution", r, end, c, c + 1, c + 1, "A45")
     r = end + 3
 
     status_duration = result.get("status_summary", pd.DataFrame())
     rows = [] if status_duration.empty else status_duration[["Status", "Total Hours"]].values.tolist()
     end = _write_table(sheet, r, c, ["Status", "Total Hours"], rows)
-    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I47")
+    _bar(sheet, "Total Time in Status", r, end, c, c + 1, c + 1, "I45", y_title="Hours")
 
-    for col in range(c, c + 10):
-        sheet.column_dimensions[get_column_letter(col)].hidden = True
-    sheet.print_area = "A1:P64"
+    sheet["A72"] = "Dashboard chart source data (not included in print area)"
+    sheet["A72"].font = Font(color=MID, italic=True, size=9)
+    sheet.print_area = "A1:P60"
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0
