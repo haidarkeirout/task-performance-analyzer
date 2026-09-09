@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -101,42 +102,55 @@ def _empty_panel(sheet, anchor: str, title: str):
     cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
 
 
-def _configure_chart(chart, title: str, y_title: str):
+def _configure_chart(chart, title: str, y_title: str, x_title: str):
     chart.title = title
     chart.height = 6.5
     chart.width = 12.0
     chart.legend.position = "b"
     chart.y_axis.title = y_title
-    chart.x_axis.title = ""
+    chart.x_axis.title = x_title
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.tickLblPos = "low"
     chart.display_blanks = "zero"
 
 
-def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor):
+def _add_line_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor, x_title="Week Starting"):
     if data_end_row <= data_start_row:
         _empty_panel(sheet, anchor, title)
         return
     chart = LineChart()
     chart.style = 13
-    _configure_chart(chart, title, "Tasks")
+    _configure_chart(chart, title, "Tasks", x_title)
     data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
     categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
+    chart.dLbls = DataLabelList()
+    chart.dLbls.showVal = True
+    chart.dLbls.showLegendKey = False
     sheet.add_chart(chart, anchor)
 
 
-def _add_bar_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor, y_title="Tasks"):
+def _add_bar_chart(sheet, title, data_start_row, data_end_row, category_col, value_cols, anchor, x_title, y_title="Tasks"):
     if data_end_row <= data_start_row:
         _empty_panel(sheet, anchor, title)
         return
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    _configure_chart(chart, title, y_title)
+    chart.gapWidth = 70
+    _configure_chart(chart, title, y_title, x_title)
     data = Reference(sheet, min_col=value_cols[0], max_col=value_cols[-1], min_row=data_start_row, max_row=data_end_row)
     categories = Reference(sheet, min_col=category_col, min_row=data_start_row + 1, max_row=data_end_row)
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
+    chart.dLbls = DataLabelList()
+    chart.dLbls.showVal = True
+    chart.dLbls.showCatName = True
+    chart.dLbls.showLegendKey = False
+    chart.dLbls.separator = " - "
     sheet.add_chart(chart, anchor)
 
 
@@ -216,8 +230,6 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
-    # Keep chart source data on ordinary visible cells below the dashboard.
-    # Hidden source columns can render as blank charts in some Excel clients.
     support_col = 1
     support_row = 70
 
@@ -232,13 +244,13 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
         if "status_at_cutoff" in frame else pd.DataFrame(columns=["Status", "Tasks"])
     )
     status_end = _write_support_table(sheet, support_row, support_col, ["Status", "Tasks"], status_counts.values.tolist())
-    _add_bar_chart(sheet, "Task Distribution by Status", support_row, status_end, support_col, (support_col + 1, support_col + 1), "I13")
+    _add_bar_chart(sheet, "Task Distribution by Status", support_row, status_end, support_col, (support_col + 1, support_col + 1), "I13", "Status")
     support_row = status_end + 3
 
     due = tables.get("deadline_summary", pd.DataFrame()) if tables else pd.DataFrame()
     due_rows = [] if due is None or due.empty else due[["due_status", "task_count"]].values.tolist()
     due_end = _write_support_table(sheet, support_row, support_col, ["Due Status", "Tasks"], due_rows)
-    _add_bar_chart(sheet, "Open Tasks by Due Status", support_row, due_end, support_col, (support_col + 1, support_col + 1), "A29")
+    _add_bar_chart(sheet, "Open Tasks by Due Status", support_row, due_end, support_col, (support_col + 1, support_col + 1), "A29", "Due Status")
     support_row = due_end + 3
 
     if "assignee_name" in frame:
@@ -252,7 +264,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     else:
         assignee = pd.DataFrame(columns=["Assignee", "Completed", "Open", "Rejected"])
     assignee_end = _write_support_table(sheet, support_row, support_col, ["Assignee", "Completed", "Open", "Rejected"], assignee.values.tolist())
-    _add_bar_chart(sheet, "Work Distribution by Assignee", support_row, assignee_end, support_col, (support_col + 1, support_col + 3), "I29")
+    _add_bar_chart(sheet, "Work Distribution by Assignee", support_row, assignee_end, support_col, (support_col + 1, support_col + 3), "I29", "Assignee")
 
     sheet["A67"] = "Dashboard chart source data (not included in print area)"
     sheet["A67"].font = Font(color=MID, italic=True, size=9)
