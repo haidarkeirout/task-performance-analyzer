@@ -9,6 +9,7 @@ from datetime import datetime, time
 from io import BytesIO
 import pandas as pd
 from metrics_engine import aggregate, get_status_events, parse_timestamp
+from jira_excel_dashboard import add_jira_executive_dashboard
 
 EVENT_COLUMNS = ["issue_key", "task_name", "from_status", "to_status", "event_type", "changed_at", "author_name", "source", "included_in_metrics"]
 STAGE_COLUMNS = ["status", "tasks_visited", "elapsed_total_hours", "elapsed_mean_hours", "elapsed_median_hours", "business_total_hours", "business_mean_hours", "business_median_hours", "open_tasks_currently_here"]
@@ -317,4 +318,5 @@ def excel_bytes(frame, tables):
                 for cell in row:
                     if cell.data_type == "f":
                         cell.data_type = "s"
+        add_jira_executive_dashboard(writer.book, frame, tables)
     return output.getvalue()
