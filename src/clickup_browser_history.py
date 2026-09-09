@@ -79,6 +79,11 @@ class ClickUpBrowserHistory:
         self.task_wait_ms = max(500, int(task_wait_ms))
         self.show_more_limit = max(1, int(show_more_limit))
         self.executable_path = str(executable_path or os.environ.get("CLICKUP_BROWSER_EXECUTABLE", "")).strip()
+        if not self.executable_path:
+            for candidate in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+                if Path(candidate).exists():
+                    self.executable_path = candidate
+                    break
 
     @property
     def configured(self) -> bool:
@@ -253,10 +258,13 @@ class ClickUpBrowserHistory:
             url = f"{origin}/tasks/v1/task/{task_id}/historyItems?{query}"
             try:
                 response = await request_context.get(url, timeout=60_000)
-                if response.ok:
-                    payload = await response.json()
-                    if isinstance(payload, dict):
-                        events.extend(payload.get("history", []) or [])
+                if not response.ok:
+                    raise ClickUpBrowserHistoryError(
+                        f"ClickUp Activity details returned HTTP {response.status}."
+                    )
+                payload = await response.json()
+                if isinstance(payload, dict):
+                    events.extend(payload.get("history", []) or [])
             except Exception as exc:
                 raise ClickUpBrowserHistoryError(
                     f"ClickUp Activity details could not be read for task {task_id}."
