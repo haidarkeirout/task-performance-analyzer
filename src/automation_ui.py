@@ -71,6 +71,21 @@ def _reset_connection():
         st.session_state.pop(key, None)
 
 
+
+def _clickup_gateway(settings, workspace_id=""):
+    """Build a ClickUp-only gateway with optional web-history configuration."""
+    frontdoor_base_url = ""
+    try:
+        values = st.secrets.to_dict()
+        frontdoor_base_url = str(values.get("CLICKUP_FRONTDOOR_BASE_URL", "") or "").strip()
+    except (FileNotFoundError, AttributeError):
+        pass
+    return ClickUpGateway(
+        settings.clickup_token,
+        workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
+        frontdoor_base_url=frontdoor_base_url or None,
+    )
+
 def _render_clickup_collection(settings):
     st.caption("Select a ClickUp Space → review its tasks → Done")
     try:
@@ -94,7 +109,7 @@ def _render_clickup_collection(settings):
     if selected is None:
         return None, False
     try:
-        gateway = ClickUpGateway(settings.clickup_token)
+        gateway = _clickup_gateway(settings, workspace_id)
         try:
             with st.spinner("جاري تحميل مهام ClickUp..."):
                 tasks = gateway.all_tasks_for_space(selected)
@@ -124,7 +139,7 @@ def _render_clickup_collection(settings):
         st.session_state.pop("clickup_prepared_data", None)
         try:
             with st.status("Collecting ClickUp Activity...", expanded=True) as status:
-                collector = ClickUpGateway(settings.clickup_token)
+                collector = _clickup_gateway(settings, workspace_id)
                 try:
                     prepared = collect_clickup_data(
                         collector, tasks, selected_name, fingerprint,
