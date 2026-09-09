@@ -73,23 +73,37 @@ def _reset_connection():
 
 
 def _clickup_gateway(settings, workspace_id=""):
-    """Build a ClickUp-only gateway with optional web-history configuration."""
-    frontdoor_base_url = ""
+    """Build a ClickUp-only gateway and optional headless history settings."""
+    values = {}
     try:
         values = st.secrets.to_dict()
-        frontdoor_base_url = str(values.get("CLICKUP_FRONTDOOR_BASE_URL", "") or "").strip()
     except (FileNotFoundError, AttributeError):
         pass
+    def secret(name, default=""):
+        return str(values.get(name, default) or "").strip()
+    raw_headless = secret("CLICKUP_BROWSER_HEADLESS", "true").lower()
+    browser_headless = raw_headless not in {"0", "false", "no", "off"}
+    try:
+        browser_wait_ms = max(500, int(secret("CLICKUP_BROWSER_TASK_WAIT_MS", "4500")))
+    except ValueError:
+        browser_wait_ms = 4500
+    storage_state_json = secret("CLICKUP_STORAGE_STATE_JSON") or secret("CLICKUP_STORAGE_STATE")
     return ClickUpGateway(
         settings.clickup_token,
         workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
-        frontdoor_base_url=frontdoor_base_url or None,
+        frontdoor_base_url=secret("CLICKUP_FRONTDOOR_BASE_URL") or None,
+        browser_profile_dir=secret("CLICKUP_BROWSER_PROFILE_DIR"),
+        storage_state_json=storage_state_json,
+        storage_state_path=secret("CLICKUP_STORAGE_STATE_PATH"),
+        browser_history_base_url=secret("CLICKUP_HISTORY_BASE_URL"),
+        browser_headless=browser_headless,
+        browser_task_wait_ms=browser_wait_ms,
     )
 
 def _render_clickup_collection(settings):
     st.caption("Select a ClickUp Space → review its tasks → Done")
     try:
-        gateway = ClickUpGateway(settings.clickup_token)
+        gateway = _clickup_gateway(settings)
         try:
             workspaces = gateway.workspaces()
             workspace_id = settings.clickup_workspace_id or (str(workspaces[0]["id"]) if workspaces else "")
