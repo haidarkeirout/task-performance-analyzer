@@ -5,6 +5,8 @@ import os
 import time
 import requests
 
+from clickup_browser_history import ClickUpBrowserHistory, ClickUpBrowserHistoryError
+
 
 class ClickUpCollectionError(RuntimeError):
     pass
@@ -25,6 +27,12 @@ class ClickUpGateway:
         sleep=time.sleep,
         workspace_id: str = "",
         frontdoor_base_url: str | None = None,
+        browser_profile_dir: str = "",
+        storage_state_json: str = "",
+        storage_state_path: str = "",
+        browser_history_base_url: str = "",
+        browser_headless: bool = True,
+        browser_task_wait_ms: int = 4500,
     ):
         if not token or not token.startswith("pk_"):
             raise ClickUpCollectionError("ClickUp Personal API Token is missing or invalid.")
@@ -40,6 +48,14 @@ class ClickUpGateway:
         ).rstrip("/")
         self._web_history_disabled = False
         self._web_history_disable_reason = ""
+        self._browser_history = ClickUpBrowserHistory(
+            profile_dir=browser_profile_dir,
+            storage_state_json=storage_state_json,
+            storage_state_path=storage_state_path,
+            history_base_url=browser_history_base_url,
+            headless=browser_headless,
+            task_wait_ms=browser_task_wait_ms,
+        )
 
     def close(self):
         self.session.close()
@@ -301,6 +317,22 @@ class ClickUpGateway:
             raise ClickUpActivityUnavailable(
                 "ClickUp web Activity History returned an unexpected payload."
             ) from exc
+
+    @property
+    def browser_history_configured(self):
+        """Whether the optional ClickUp-only headless collector is configured."""
+        return self._browser_history.configured
+
+    def browser_activity(self, task_ids, progress=None):
+        """Collect task Activity History through ClickUp's authenticated web UI."""
+        if not self.browser_history_configured:
+            raise ClickUpActivityUnavailable(
+                "ClickUp web history needs a browser profile or storage state."
+            )
+        try:
+            return self._browser_history.collect(task_ids, progress=progress)
+        except ClickUpBrowserHistoryError as exc:
+            raise ClickUpActivityUnavailable(str(exc)) from exc
 
     def workspaces(self):
         data = self.request("/team")
