@@ -12,7 +12,30 @@ CollectionStore = _jira_ui.CollectionStore
 PersistenceError = _jira_ui.PersistenceError
 persistence_owner_key = _jira_ui.persistence_owner_key
 JiraGateway = _jira_ui.JiraGateway
-CollectionJob = _jira_ui.CollectionJob
+
+
+class CollectionJob(_jira_ui.CollectionJob):
+    """Keep an active persistent Jira job alive across Streamlit fragment state loss.
+
+    Streamlit Cloud can occasionally leave the in-session object non-running after
+    a successful bounded collection step even though the durable job is still
+    marked running. A restored browser/app session remains explicitly paused and
+    still requires the existing Resume action.
+    """
+
+    def snapshot(self):
+        snapshot = super().snapshot()
+        if (
+            snapshot["status"] == "idle"
+            and snapshot.get("persisted_status") == "running"
+            and snapshot.get("result") is None
+            and not snapshot.get("error")
+            and not self.cancelled
+        ):
+            self.start()
+            snapshot = super().snapshot()
+        return snapshot
+
 
 require_sign_in = _jira_ui.require_sign_in
 invalidate_selection = _jira_ui.invalidate_selection
@@ -33,4 +56,5 @@ def render_collection(settings):
     # before rendering so production and deterministic test transports behave alike.
     _jira_ui.JiraGateway = JiraGateway
     _jira_ui.CollectionStore = CollectionStore
+    _jira_ui.CollectionJob = CollectionJob
     return _jira_ui.render_collection(settings)
