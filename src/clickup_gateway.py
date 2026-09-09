@@ -38,6 +38,8 @@ class ClickUpGateway:
             or os.environ.get("CLICKUP_FRONTDOOR_BASE_URL")
             or self.default_frontdoor_base
         ).rstrip("/")
+        self._web_history_disabled = False
+        self._web_history_disable_reason = ""
 
     def close(self):
         self.session.close()
@@ -74,6 +76,11 @@ class ClickUpGateway:
             raise ClickUpActivityUnavailable(
                 "ClickUp web Activity History needs the ClickUp Workspace ID."
             )
+        if self._web_history_disabled:
+            raise ClickUpActivityUnavailable(
+                self._web_history_disable_reason
+                or "ClickUp web Activity History is unavailable for this account."
+            )
         common_headers = {
             "Accept": "application/json",
             "Origin": "https://app.clickup.com",
@@ -96,8 +103,8 @@ class ClickUpGateway:
             })
 
         auth_values = (self.token, f"Bearer {self.token}")
-        last_response = None
         for attempt in range(3):
+            last_response = None
             for auth_index, authorization in enumerate(auth_values):
                 headers = {**common_headers, "Authorization": authorization}
                 try:
@@ -132,13 +139,17 @@ class ClickUpGateway:
                     f"فشل مسار ClickUp الخاص بسجل النشاط (HTTP {response.status_code})."
                 )
             if response.status_code in (401, 403):
-                raise ClickUpActivityUnavailable(
+                self._web_history_disabled = True
+                self._web_history_disable_reason = (
                     "ClickUp web Activity History requires an authenticated web session for this account."
                 )
+                raise ClickUpActivityUnavailable(self._web_history_disable_reason)
             if response.status_code == 404:
-                raise ClickUpActivityUnavailable(
+                self._web_history_disabled = True
+                self._web_history_disable_reason = (
                     "ClickUp web Activity History is not available for this account."
                 )
+                raise ClickUpActivityUnavailable(self._web_history_disable_reason)
             if response.status_code < 200 or response.status_code >= 300:
                 raise ClickUpActivityUnavailable(
                     f"ClickUp web Activity History returned HTTP {response.status_code}."
