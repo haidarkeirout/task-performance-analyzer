@@ -18,10 +18,10 @@ WHITE = "FFFFFF"
 TEXT = "1F2937"
 BORDER = Side(style="thin", color="D7E1E8")
 PANEL_RANGES = {
-    "A13": "A13:H27",
-    "I13": "I13:P27",
-    "A30": "A30:H44",
-    "I30": "I30:P44",
+    "A13": "A13:H26",
+    "I13": "I13:P26",
+    "A29": "A29:H42",
+    "I29": "I29:P42",
 }
 
 
@@ -62,17 +62,17 @@ def _card(sheet, start_col: int, label: str, value, row: int):
     label_cell = sheet.cell(row, start_col, label)
     value_cell = sheet.cell(row + 1, start_col, value)
     label_cell.fill = PatternFill("solid", fgColor=DARK)
-    label_cell.font = Font(color=WHITE, bold=True, size=10)
+    label_cell.font = Font(color=WHITE, bold=True, size=9)
     value_cell.fill = PatternFill("solid", fgColor=LIGHT)
-    value_cell.font = Font(color=TEXT, bold=True, size=16)
+    value_cell.font = Font(color=TEXT, bold=True, size=15)
     for r in range(row, row + 3):
         for c in range(start_col, end_col + 1):
             cell = sheet.cell(r, c)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
-    sheet.row_dimensions[row].height = 24
-    sheet.row_dimensions[row + 1].height = 28
-    sheet.row_dimensions[row + 2].height = 18
+    sheet.row_dimensions[row].height = 21
+    sheet.row_dimensions[row + 1].height = 25
+    sheet.row_dimensions[row + 2].height = 14
 
 
 def _write_support_table(sheet, start_row: int, start_col: int, headers, rows):
@@ -96,21 +96,18 @@ def _empty_panel(sheet, anchor: str, title: str):
     cell = sheet[anchor]
     cell.value = f"{title}\n\nNo data available for this chart."
     cell.fill = PatternFill("solid", fgColor="F8FAFC")
-    cell.font = Font(color=MID, bold=True, size=12)
+    cell.font = Font(color=MID, bold=True, size=11)
     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     cell.border = Border(left=BORDER, right=BORDER, top=BORDER, bottom=BORDER)
 
 
 def _configure_chart(chart, title: str, y_title: str):
     chart.title = title
-    chart.height = 7.2
-    chart.width = 13.2
+    chart.height = 6.5
+    chart.width = 12.0
     chart.legend.position = "b"
     chart.y_axis.title = y_title
     chart.x_axis.title = ""
-    # The supporting source columns are intentionally hidden from the user.
-    # Excel normally ignores hidden cells, which previously produced blank charts.
-    chart.visible_cells_only = False
     chart.display_blanks = "zero"
 
 
@@ -153,7 +150,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     sheet.sheet_properties.tabColor = DARK
 
     for col in range(1, 17):
-        sheet.column_dimensions[get_column_letter(col)].width = 12
+        sheet.column_dimensions[get_column_letter(col)].width = 11
 
     sheet.merge_cells("A1:P1")
     sheet["A1"] = "Jira Executive Dashboard"
@@ -219,8 +216,10 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     for coordinate in ("A11", "D11"):
         sheet[coordinate].font = Font(bold=True, color=TEXT)
 
-    support_col = 18
-    support_row = 1
+    # Keep chart source data on ordinary visible cells below the dashboard.
+    # Hidden source columns can render as blank charts in some Excel clients.
+    support_col = 1
+    support_row = 70
 
     weekly = tables.get("weekly_flow", pd.DataFrame()) if tables else pd.DataFrame()
     weekly_rows = [] if weekly is None or weekly.empty else weekly[["week_start", "tasks_opened", "tasks_completed"]].values.tolist()
@@ -239,7 +238,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     due = tables.get("deadline_summary", pd.DataFrame()) if tables else pd.DataFrame()
     due_rows = [] if due is None or due.empty else due[["due_status", "task_count"]].values.tolist()
     due_end = _write_support_table(sheet, support_row, support_col, ["Due Status", "Tasks"], due_rows)
-    _add_bar_chart(sheet, "Open Tasks by Due Status", support_row, due_end, support_col, (support_col + 1, support_col + 1), "A30")
+    _add_bar_chart(sheet, "Open Tasks by Due Status", support_row, due_end, support_col, (support_col + 1, support_col + 1), "A29")
     support_row = due_end + 3
 
     if "assignee_name" in frame:
@@ -253,12 +252,11 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
     else:
         assignee = pd.DataFrame(columns=["Assignee", "Completed", "Open", "Rejected"])
     assignee_end = _write_support_table(sheet, support_row, support_col, ["Assignee", "Completed", "Open", "Rejected"], assignee.values.tolist())
-    _add_bar_chart(sheet, "Work Distribution by Assignee", support_row, assignee_end, support_col, (support_col + 1, support_col + 3), "I30")
+    _add_bar_chart(sheet, "Work Distribution by Assignee", support_row, assignee_end, support_col, (support_col + 1, support_col + 3), "I29")
 
-    for col in range(support_col, support_col + 10):
-        sheet.column_dimensions[get_column_letter(col)].hidden = True
-
-    sheet.print_area = "A1:P47"
+    sheet["A67"] = "Dashboard chart source data (not included in print area)"
+    sheet["A67"].font = Font(color=MID, italic=True, size=9)
+    sheet.print_area = "A1:P44"
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0
