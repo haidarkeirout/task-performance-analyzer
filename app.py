@@ -227,8 +227,10 @@ def show_weekly_task_flow(process_data: dict | None = None) -> None:
     range_options = {
         "All available weeks": None,
         "Last 4 weeks": 4,
-        "Last 12 weeks (quarter)": 12,
-        "Last 52 weeks (year)": 52,
+        "Last 12 weeks": 12,
+        "Last 24 weeks": 24,
+        "Last 36 weeks": 36,
+        "Last 48 weeks": 48,
     }
     selected_range = st.selectbox(
         "Trend period",
@@ -815,8 +817,10 @@ def show_clickup_analysis(result) -> None:
             range_options = {
                 "All available weeks": None,
                 "Last 4 weeks": 4,
-                "Last 12 weeks (quarter)": 12,
-                "Last 52 weeks (year)": 52,
+                "Last 12 weeks": 12,
+                "Last 24 weeks": 24,
+                "Last 36 weeks": 36,
+                "Last 48 weeks": 48,
             }
             selected_range = st.selectbox("Trend period", list(range_options), key="clickup_weekly_flow_period")
             visible_weekly = weekly.tail(range_options[selected_range]).copy() if range_options[selected_range] else weekly.copy()
