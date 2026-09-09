@@ -14,6 +14,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
+from clickup_excel_dashboard import add_clickup_executive_dashboard
 from clickup_filters import (
     CANCELLED_STATUSES,
     TERMINAL_STATUSES,
@@ -472,7 +473,7 @@ def _write_sheet(workbook, name: str, frame: pd.DataFrame):
 
 
 def analysis_excel(result) -> bytes:
-    """Create an English ClickUp analysis workbook with all dashboard tables."""
+    """Create an English ClickUp analysis workbook with the ClickUp executive dashboard and analysis tables."""
     workbook = Workbook()
     workbook.remove(workbook.active)
     sheets = [
@@ -491,6 +492,7 @@ def analysis_excel(result) -> bytes:
     ]
     for name, frame in sheets:
         _write_sheet(workbook, name, frame)
+    add_clickup_executive_dashboard(workbook, result)
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
