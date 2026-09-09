@@ -122,8 +122,13 @@ class ClickUpBrowserHistory:
             if self.executable_path:
                 launch_options["executable_path"] = self.executable_path
             if self.profile_dir:
+                profile = Path(self.profile_dir).expanduser()
+                if not profile.exists() or not profile.is_dir():
+                    raise ClickUpBrowserHistoryError(
+                        "CLICKUP_BROWSER_PROFILE_DIR does not exist on this server."
+                    )
                 context = await chromium.launch_persistent_context(
-                    str(Path(self.profile_dir).expanduser()),
+                    str(profile),
                     **launch_options,
                 )
                 return context, None
