@@ -71,10 +71,39 @@ def _reset_connection():
         st.session_state.pop(key, None)
 
 
+
+def _clickup_gateway(settings, workspace_id=""):
+    """Build a ClickUp-only gateway and optional headless history settings."""
+    values = {}
+    try:
+        values = st.secrets.to_dict()
+    except (FileNotFoundError, AttributeError):
+        pass
+    def secret(name, default=""):
+        return str(values.get(name, default) or "").strip()
+    raw_headless = secret("CLICKUP_BROWSER_HEADLESS", "true").lower()
+    browser_headless = raw_headless not in {"0", "false", "no", "off"}
+    try:
+        browser_wait_ms = max(500, int(secret("CLICKUP_BROWSER_TASK_WAIT_MS", "4500")))
+    except ValueError:
+        browser_wait_ms = 4500
+    storage_state_json = secret("CLICKUP_STORAGE_STATE_JSON") or secret("CLICKUP_STORAGE_STATE")
+    return ClickUpGateway(
+        settings.clickup_token,
+        workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
+        frontdoor_base_url=secret("CLICKUP_FRONTDOOR_BASE_URL") or None,
+        browser_profile_dir=secret("CLICKUP_BROWSER_PROFILE_DIR"),
+        storage_state_json=storage_state_json,
+        storage_state_path=secret("CLICKUP_STORAGE_STATE_PATH"),
+        browser_history_base_url=secret("CLICKUP_HISTORY_BASE_URL"),
+        browser_headless=browser_headless,
+        browser_task_wait_ms=browser_wait_ms,
+    )
+
 def _render_clickup_collection(settings):
     st.caption("Select a ClickUp Space → review its tasks → Done")
     try:
-        gateway = ClickUpGateway(settings.clickup_token)
+        gateway = _clickup_gateway(settings)
         try:
             workspaces = gateway.workspaces()
             workspace_id = settings.clickup_workspace_id or (str(workspaces[0]["id"]) if workspaces else "")
@@ -94,7 +123,7 @@ def _render_clickup_collection(settings):
     if selected is None:
         return None, False
     try:
-        gateway = ClickUpGateway(settings.clickup_token)
+        gateway = _clickup_gateway(settings, workspace_id)
         try:
             with st.spinner("جاري تحميل مهام ClickUp..."):
                 tasks = gateway.all_tasks_for_space(selected)
@@ -114,27 +143,42 @@ def _render_clickup_collection(settings):
                      "Status": status.get("status") if isinstance(status, dict) else None,
                      "Due date": task.get("due_date")})
     st.subheader("All work items")
-    st.caption(f"Selected space: {space_map[selected].get('name', selected)} · {len(rows)} work items shown")
+    selected_name = space_map[selected].get("name", selected)
+    st.caption(f"Selected space: {selected_name} · Space ID: {selected} · {len(rows)} work items shown")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     st.divider()
     fingerprint = f"clickup:{selected}:{len(tasks)}"
     if st.button("Done", type="primary", key="clickup_done"):
         st.session_state.pop("clickup_error", None)
+        st.session_state.pop("clickup_prepared_data", None)
         try:
             with st.status("Collecting ClickUp Activity...", expanded=True) as status:
-                prepared = collect_clickup_data(ClickUpGateway(settings.clickup_token), tasks,
-                    space_map[selected].get("name", selected), fingerprint, settings.source_timezone,
-                    progress=lambda message: status.update(label=message))
-                st.session_state["prepared_data"] = prepared
+                collector = _clickup_gateway(settings, workspace_id)
+                try:
+                    prepared = collect_clickup_data(
+                        collector, tasks, selected_name, fingerprint,
+                        settings.source_timezone,
+                        progress=lambda message: status.update(label=message),
+                        space_id=selected,
+                    )
+                finally:
+                    collector.close()
+                st.session_state["clickup_prepared_data"] = prepared
                 status.update(label="ClickUp data collection completed.", state="complete", expanded=False)
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
     if st.session_state.get("clickup_error"):
         st.error(st.session_state["clickup_error"])
-    prepared = st.session_state.get("prepared_data")
+    prepared = st.session_state.get("clickup_prepared_data")
     if prepared:
-        st.success("ClickUp data has been collected and is ready for analysis.")
-        st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
+        if getattr(prepared, "clickup_activity_available", True):
+            st.success(f"ClickUp data collected for Space ID {selected}. History IDs are included in the Activity sheet.")
+        else:
+            st.warning(
+                "Task data was collected for this Space, but ClickUp did not expose its full Activity History "
+                "endpoint for this account. The Activity and History ID columns are empty; Jira was not used or changed."
+            )
+        st.download_button("Download ClickUp Source Excel", prepared.xlsx, prepared.filename,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
     return prepared, False
 

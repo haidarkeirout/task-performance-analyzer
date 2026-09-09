@@ -892,9 +892,14 @@ if "task_metrics" in st.session_state:
             )
 
 else:
-    st.info(
-        (
-            "Select a Jira space, choose filters, and click Done. "
-            "When your data is ready, click Run Analysis."
+    if st.session_state.get("data_source") == "ClickUp":
+        st.info(
+            "Select a ClickUp Space, click Done, then download the ClickUp source Excel."
         )
-    )
+    else:
+        st.info(
+            (
+                "Select a Jira space, choose filters, and click Done. "
+                "When your data is ready, click Run Analysis."
+            )
+        )
