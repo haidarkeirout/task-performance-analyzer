@@ -347,7 +347,9 @@ class ClickUpGateway:
     def activity(self, task_id: str):
         try:
             data = self.request(f"/task/{task_id}/activity")
-        except ClickUpActivityUnavailable as public_error:
+        except ClickUpCollectionError as public_error:
+            if str(public_error) != "مورد ClickUp المطلوب غير متاح لهذا الحساب.":
+                raise
             try:
                 return self._web_activity(task_id)
             except ClickUpActivityUnavailable as web_error:
