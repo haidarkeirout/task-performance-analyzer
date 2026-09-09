@@ -27,11 +27,30 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     cutoff = datetime.now(timezone.utc).isoformat(); rows=[]; activity_rows=[]; raw=[]
     activity_unavailable = False
     activity_notes = []
+    browser_activity = {}
+    browser_errors = {}
+    browser_history_error = ""
+    if getattr(gateway, "browser_history_configured", False):
+        try:
+            browser_activity = gateway.browser_activity(
+                [str(task.get("id", "")) for task in tasks],
+                progress=progress,
+            ) or {}
+            browser_errors = browser_activity.pop("__errors__", {}) or {}
+        except ClickUpActivityUnavailable as exc:
+            browser_history_error = str(exc)
     for index, task in enumerate(tasks, 1):
         task_id = str(task.get("id", ""))
         if progress: progress(f"Collecting Activity: {index} of {len(tasks)} tasks...")
         try:
-            activity = gateway.activity(task_id)
+            if getattr(gateway, "browser_history_configured", False):
+                if browser_history_error:
+                    raise ClickUpActivityUnavailable(browser_history_error)
+                if task_id in browser_errors:
+                    raise ClickUpActivityUnavailable(str(browser_errors[task_id]))
+                activity = browser_activity.get(task_id, [])
+            else:
+                activity = gateway.activity(task_id)
         except ClickUpActivityUnavailable as exc:
             # The task/list API is still valid; only the optional web Activity
             # History endpoint is unavailable for this account.
@@ -51,7 +70,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     wb=Workbook(); wb.remove(wb.active)
     _sheet(wb,"ClickUp_Data",["Space ID","Task ID","Task Name","Assignee","Priority","Current Status","Created","Due Date","Completed","Time Estimate (ms)","Time Spent (ms)","Activity Events","History IDs"],rows)
     _sheet(wb,"Activity",["Space ID","Task ID","History ID","Timestamp","User","Event Type","Field","From","To","Comment"],activity_rows)
-    _sheet(wb,"Process_Context",["Field","Value"],[["Process Name",space_name],["Space ID",space_id or ""],["Evaluation Scope","Selected ClickUp Space"],["Dataset Type","ClickUp API collection"],["Evaluation Cutoff Date",cutoff],["Source Timezone",source_timezone],["Task Count",len(tasks)],["Activity API","Available (public or web backend)" if not activity_unavailable else "Unavailable for this account"],["History IDs","Collected from ClickUp Activity events." if not activity_unavailable else "Not returned by the available ClickUp Activity endpoints for this account."],["Activity Errors",len(activity_notes)]])
+    _sheet(wb,"Process_Context",["Field","Value"],[["Process Name",space_name],["Space ID",space_id or ""],["Evaluation Scope","Selected ClickUp Space"],["Dataset Type","ClickUp API collection"],["Evaluation Cutoff Date",cutoff],["Source Timezone",source_timezone],["Task Count",len(tasks)],["Activity API","Available (public or web backend)" if not activity_unavailable else "Unavailable for this account"],["Activity Collector","Headless ClickUp web collector" if getattr(gateway, "browser_history_configured", False) else "Public API / web fallback"],["History IDs","Collected from ClickUp Activity events." if not activity_unavailable else "Not returned by the available ClickUp Activity endpoints for this account."],["Activity Errors",len(activity_notes)]])
     _sheet(wb,"Collection_Notes",["Task ID","Issue","Detail"],activity_notes or [["","None","No ClickUp collection warnings."]])
     _sheet(wb,"Raw_JSON",["Task ID","Section","JSON"],raw)
     stream=BytesIO(); wb.save(stream)
