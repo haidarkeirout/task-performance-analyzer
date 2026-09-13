@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from company_performance.application import build_company_analysis
 from company_performance.dashboard import DashboardFilters
 from company_performance.models import UnifiedStatus
+from company_performance.ui import remember_prepared_source
 
 
 def jira_workbook() -> bytes:
@@ -59,6 +60,31 @@ class ClickUpPrepared:
 
 
 class CompanyApplicationTests(unittest.TestCase):
+    def test_streamlit_bridge_keeps_one_prepared_payload_per_source(self):
+        """Company mode reuses authenticated collector output; it never owns credentials."""
+        session_state = {}
+        jira = JiraPrepared()
+        clickup = ClickUpPrepared()
+
+        remember_prepared_source(session_state, "Jira", jira)
+        remember_prepared_source(session_state, "ClickUp", clickup)
+
+        self.assertIs(session_state["company_prepared_jira"], jira)
+        self.assertIs(session_state["company_prepared_clickup"], clickup)
+
+    def test_legacy_weekly_period_options_are_preserved_for_both_source_views(self):
+        """Adding Company mode must not shorten the existing Jira/ClickUp timelines."""
+        app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+        expected = (
+            '"Last 4 weeks": 4',
+            '"Last 12 weeks": 12',
+            '"Last 24 weeks": 24',
+            '"Last 36 weeks": 36',
+            '"Last 48 weeks": 48',
+        )
+        for option in expected:
+            self.assertGreaterEqual(app_source.count(option), 2, option)
+
     def test_prepared_jira_and_clickup_build_one_company_analysis_without_api_calls(self):
         result = build_company_analysis(
             period_start=date(2026, 9, 1), period_end=date(2026, 9, 30),
