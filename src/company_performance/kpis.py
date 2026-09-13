@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from statistics import mean
+from statistics import mean, median
 from typing import Iterable
 
 from .models import StatusInterval, TaskPeriodSnapshot, UnifiedStatus
@@ -12,12 +12,18 @@ from .normalization import normalize_priority
 
 
 def safe_rate(numerator: int, denominator: int) -> float | None:
-    return None if denominator == 0 else numerator / denominator * 100.0
+    """Return a presentation-safe rate using the agreed one-decimal precision."""
+    return None if denominator == 0 else round(numerator / denominator * 100.0, 1)
 
 
 def _average(values: Iterable[int]) -> float | None:
     usable = list(values)
-    return None if not usable else float(mean(usable))
+    return None if not usable else round(float(mean(usable)), 1)
+
+
+def _median(values: Iterable[int]) -> float | None:
+    usable = list(values)
+    return None if not usable else round(float(median(usable)), 1)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,48 @@ class CoreKPIs:
     average_time_to_start_days: float | None
     average_execution_duration_days: float | None
     average_lead_time_days: float | None
+
+
+@dataclass(frozen=True)
+class StatusMetrics:
+    """Evidence for one non-terminal workflow status in the selected period.
+
+    All duration values are calendar days already clipped to the selected
+    period.  A caller should only use these metrics when ``history_covered``
+    is true; this makes ClickUp's snapshot-only coverage explicit rather than
+    inventing historical timing.
+    """
+
+    status: UnifiedStatus
+    tasks_passed_through: int
+    average_days: float | None
+    median_days: float | None
+    total_days: int
+    open_tasks_now: int
+    overdue_open_tasks: int
+    repeated_returns: int
+    history_covered: bool
+
+
+@dataclass(frozen=True)
+class BottleneckCandidate:
+    """A workflow stage that warrants follow-up, never a confirmed cause."""
+
+    status: UnifiedStatus
+    strength: str
+    evidence: tuple[str, ...]
+    metrics: StatusMetrics
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """An evidence-linked, actionable recommendation for an executive report."""
+
+    code: str
+    severity: str
+    title: str
+    evidence: str
+    suggested_action: str
 
 
 def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
@@ -121,3 +169,155 @@ def average_days_in_status(
         if interval.status is status
     ]
     return _average(values)
+
+
+def calculate_status_metrics(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[StatusMetrics, ...]:
+    """Summarise historical time-in-status without creating synthetic history.
+
+    Completed, Cancelled and Rejected are deliberately excluded from workflow
+    bottleneck comparison.  Unknown status is handled through Data Quality,
+    not as a chart category.
+    """
+    items = [snapshot for snapshot in snapshots if snapshot.counted_in_kpis]
+    result: list[StatusMetrics] = []
+    non_terminal = [status for status in UnifiedStatus if status.is_open]
+    for status in non_terminal:
+        durations = [
+            interval.days
+            for snapshot in items
+            if snapshot.history_available
+            for interval in snapshot.status_intervals
+            if interval.status is status
+        ]
+        open_now = [item for item in items if item.status_at_period_end is status]
+        overdue_now = [
+            item for item in open_now
+            if item.task.due_date is not None and item.task.due_date < item.period_end
+        ]
+        # Rework/replanning/re-evaluation are review-return signals.  They are
+        # intentionally attached to In Review, their common source stage.
+        returns = sum(
+            len(item.exception_events) for item in items if status is UnifiedStatus.IN_REVIEW
+        )
+        result.append(
+            StatusMetrics(
+                status=status,
+                tasks_passed_through=len(durations),
+                average_days=_average(durations),
+                median_days=_median(durations),
+                total_days=sum(durations),
+                open_tasks_now=len(open_now),
+                overdue_open_tasks=len(overdue_now),
+                repeated_returns=returns,
+                history_covered=bool(durations),
+            )
+        )
+    return tuple(result)
+
+
+def identify_bottleneck_candidates(
+    snapshots: Iterable[TaskPeriodSnapshot],
+) -> tuple[BottleneckCandidate, ...]:
+    """Find evidence-backed workflow bottleneck candidates.
+
+    There is deliberately no fixed "five days means bottleneck" rule.  A
+    stage becomes a candidate only when at least two relative signals agree:
+    above-peer time in stage, concentrated open work, overdue work, or
+    repeated review returns.  Three or more signals make it *Strong*; neither
+    level claims root cause or a confirmed bottleneck.
+    """
+    metrics = calculate_status_metrics(snapshots)
+    comparable_averages = [metric.average_days for metric in metrics if metric.average_days is not None]
+    peer_average = _average(value for value in comparable_averages if value is not None)
+    highest_open = max((metric.open_tasks_now for metric in metrics), default=0)
+    candidates: list[BottleneckCandidate] = []
+    for metric in metrics:
+        evidence: list[str] = []
+        if (
+            metric.average_days is not None
+            and peer_average is not None
+            and metric.average_days >= peer_average
+            and metric.tasks_passed_through > 0
+        ):
+            evidence.append("Above-peer average time in status")
+        if metric.open_tasks_now > 0 and metric.open_tasks_now == highest_open:
+            evidence.append("Highest current open-work concentration")
+        if metric.overdue_open_tasks > 0:
+            evidence.append("Open overdue tasks in status")
+        if metric.repeated_returns > 0:
+            evidence.append("Repeated workflow returns from review")
+        if len(evidence) >= 2:
+            candidates.append(
+                BottleneckCandidate(
+                    status=metric.status,
+                    strength="Strong Bottleneck Candidate" if len(evidence) >= 3 else "Potential Bottleneck Candidate",
+                    evidence=tuple(evidence),
+                    metrics=metric,
+                )
+            )
+    return tuple(candidates)
+
+
+def generate_recommendations(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[Recommendation, ...]:
+    """Generate recommendations from agreed service thresholds and evidence.
+
+    Completion <70% and on-time completion <80% produce recommendations only;
+    they are not bottleneck thresholds and do not prove a root cause.
+    """
+    items = tuple(snapshots)
+    core = calculate_core_kpis(items)
+    recommendations: list[Recommendation] = []
+    if core.completion_rate is not None and core.completion_rate < 70.0:
+        recommendations.append(
+            Recommendation(
+                code="completion-rate",
+                severity="High",
+                title="Improve completion flow",
+                evidence=f"Completion rate is {core.completion_rate:.1f}%, below the 70.0% recommendation threshold.",
+                suggested_action="Review the oldest open work and agree an owner and next step for each item.",
+            )
+        )
+    if core.on_time_completion_rate is not None and core.on_time_completion_rate < 80.0:
+        recommendations.append(
+            Recommendation(
+                code="on-time-rate",
+                severity="High",
+                title="Protect delivery dates",
+                evidence=f"On-time completion rate is {core.on_time_completion_rate:.1f}%, below the 80.0% recommendation threshold.",
+                suggested_action="Review due dates for active work and escalate items that cannot meet their committed date.",
+            )
+        )
+    if core.high_priority_overdue_tasks > 0:
+        recommendations.append(
+            Recommendation(
+                code="priority-overdue",
+                severity="High",
+                title="Escalate overdue high-priority work",
+                evidence=f"{core.high_priority_overdue_tasks} high-priority open task(s) are overdue.",
+                suggested_action="Assign an accountable owner and recovery date, then track the item to closure.",
+            )
+        )
+    elif core.overdue_open_tasks > 0:
+        recommendations.append(
+            Recommendation(
+                code="open-overdue",
+                severity="Medium",
+                title="Recover overdue open work",
+                evidence=f"{core.overdue_open_tasks} open task(s) are past their due date.",
+                suggested_action="Validate scope, due date and next action for each overdue task.",
+            )
+        )
+    missing_history = sum(
+        1 for item in items if "Missing Workflow History" in item.data_quality_flags
+    )
+    if missing_history:
+        recommendations.append(
+            Recommendation(
+                code="history-coverage",
+                severity="Medium",
+                title="Improve historical workflow coverage",
+                evidence=f"{missing_history} task(s) cannot be used in historical status KPIs because workflow history is missing.",
+                suggested_action="Collect complete workflow history before using historical status comparisons for these tasks.",
+            )
+        )
+    return tuple(recommendations)
