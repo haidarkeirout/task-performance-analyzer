@@ -11,22 +11,21 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl import load_workbook
 
 from .adapters import (
     CompanyCollection,
-    SourceCoverage,
     adapt_clickup_prepared,
     adapt_jira_collection,
     combine_company_sources,
 )
 from .dashboard import CompanyDashboardModel, DashboardFilters, build_company_dashboard
 from .kpis import BottleneckCandidate, Recommendation, generate_recommendations, identify_bottleneck_candidates
-from .normalization import calendar_date, deduplicate_tasks
-from .workflow import reconstruct_task
 from .models import TaskPeriodSnapshot
+from .normalization import assignee_group, calendar_date, deduplicate_tasks, normalize_priority, normalize_status
+from .workflow import reconstruct_task
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,20 @@ class CompanyAnalysisResult:
     model: CompanyDashboardModel
     bottlenecks: tuple[BottleneckCandidate, ...]
     recommendations: tuple[Recommendation, ...]
+
+
+@dataclass(frozen=True)
+class CompanyPreviewRow:
+    """One source-neutral task row shown before Company Performance analysis."""
+
+    source_tool: str
+    space: str | None
+    task_name: str | None
+    original_status: str | None
+    final_status: str
+    assignee: str
+    priority: str
+    due_date: date | None
 
 
 def _value(row: Mapping[str, Any], name: str) -> Any:
@@ -106,6 +119,91 @@ def _adapt_jira_prepared(prepared_data: Any, unified_project: str):
     )
 
 
+def _prepared_items(value: Any | None) -> tuple[Any, ...]:
+    """Accept the legacy single prepared result or a Company multi-space sequence."""
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(item for item in value if item is not None)
+    return (value,)
+
+
+def build_company_preview(
+    *,
+    jira_prepared: Any | None = None,
+    clickup_prepared: Any | None = None,
+) -> tuple[CompanyPreviewRow, ...]:
+    """Build the combined source preview without running historical analysis."""
+    sources = []
+    for prepared in _prepared_items(jira_prepared):
+        sources.append(_adapt_jira_prepared(prepared, "Preview"))
+    for prepared in _prepared_items(clickup_prepared):
+        sources.append(adapt_clickup_prepared(prepared, unified_project="Preview"))
+
+    if not sources:
+        return ()
+    records = deduplicate_tasks(combine_company_sources(*sources).records)
+    return tuple(
+        CompanyPreviewRow(
+            source_tool=task.source_tool,
+            space=task.source_space,
+            task_name=task.task_name,
+            original_status=task.raw_status,
+            final_status=normalize_status(task.source_tool, task.raw_status).value,
+            assignee=assignee_group(task),
+            priority=normalize_priority(task.source_tool, task.priority),
+            due_date=task.due_date,
+        )
+        for task in records
+    )
+
+
+def filter_company_preview(
+    rows: Iterable[CompanyPreviewRow],
+    *,
+    source_tools: Sequence[str] = (),
+    spaces: Sequence[str] = (),
+    task_name: str = "",
+    original_statuses: Sequence[str] = (),
+    final_statuses: Sequence[str] = (),
+    assignees: Sequence[str] = (),
+    priorities: Sequence[str] = (),
+    due_date_start: date | None = None,
+    due_date_end: date | None = None,
+) -> tuple[CompanyPreviewRow, ...]:
+    """Filter the combined preview using the approved pre-analysis fields."""
+    sources = {value.casefold() for value in source_tools}
+    selected_spaces = set(spaces)
+    selected_originals = set(original_statuses)
+    selected_finals = set(final_statuses)
+    selected_assignees = set(assignees)
+    selected_priorities = set(priorities)
+    task_name_filter = task_name.strip().casefold()
+    selected: list[CompanyPreviewRow] = []
+
+    for row in rows:
+        if sources and row.source_tool.casefold() not in sources:
+            continue
+        if selected_spaces and (row.space or "") not in selected_spaces:
+            continue
+        if task_name_filter and task_name_filter not in (row.task_name or "").casefold():
+            continue
+        if selected_originals and (row.original_status or "") not in selected_originals:
+            continue
+        if selected_finals and row.final_status not in selected_finals:
+            continue
+        if selected_assignees and row.assignee not in selected_assignees:
+            continue
+        if selected_priorities and row.priority not in selected_priorities:
+            continue
+        if due_date_start is not None and (row.due_date is None or row.due_date < due_date_start):
+            continue
+        if due_date_end is not None and (row.due_date is None or row.due_date > due_date_end):
+            continue
+        selected.append(row)
+    return tuple(selected)
+
+
 def build_company_analysis(
     *,
     period_start: date,
@@ -114,25 +212,35 @@ def build_company_analysis(
     jira_project: str | None = None,
     clickup_prepared: Any | None = None,
     clickup_project: str | None = None,
+    unified_project: str | None = None,
     filters: DashboardFilters | None = None,
 ) -> CompanyAnalysisResult:
-    """Build a company run from one or both existing prepared source results.
+    """Build a company run from one or more existing prepared source results.
 
-    The caller must explicitly provide a Unified Project name for every
-    included source.  This reflects the approved manual mapping and avoids
-    guessing that two similarly named Jira/ClickUp spaces are the same work.
+    ``jira_project`` and ``clickup_project`` remain supported for the existing
+    single-source callers.  Company multi-space selection can instead provide
+    one explicit ``unified_project`` for the selected Jira and ClickUp spaces.
     """
     if period_end < period_start:
         raise ValueError("Analysis period end must not be before its start.")
+
+    jira_items = _prepared_items(jira_prepared)
+    clickup_items = _prepared_items(clickup_prepared)
+    shared_project = (unified_project or "").strip()
     sources = []
-    if jira_prepared is not None:
-        if not (jira_project or "").strip():
+
+    if jira_items:
+        project = shared_project or (jira_project or "").strip()
+        if not project:
             raise ValueError("Enter a Unified Project name for the selected Jira space.")
-        sources.append(_adapt_jira_prepared(jira_prepared, jira_project.strip()))
-    if clickup_prepared is not None:
-        if not (clickup_project or "").strip():
+        sources.extend(_adapt_jira_prepared(item, project) for item in jira_items)
+
+    if clickup_items:
+        project = shared_project or (clickup_project or "").strip()
+        if not project:
             raise ValueError("Enter a Unified Project name for the selected ClickUp space.")
-        sources.append(adapt_clickup_prepared(clickup_prepared, unified_project=clickup_project.strip()))
+        sources.extend(adapt_clickup_prepared(item, unified_project=project) for item in clickup_items)
+
     if not sources:
         raise ValueError("Collect at least one Jira or ClickUp space before running Company Performance.")
 

@@ -99,12 +99,14 @@ class DataQualityItem:
 
 @dataclass(frozen=True)
 class TaskDetail:
-    """One row for the details tab, including in-period workflow evidence."""
+    """One row for the details tab, including source and normalised statuses."""
 
     source_tool: str
+    source_space: str | None
     task_id: str
     task_name: str | None
     unified_project: str | None
+    original_status: str | None
     final_status: str
     assignee_group: str
     assignees: tuple[str, ...]
@@ -203,15 +205,10 @@ def _chart(key: str, title: str, points: Sequence[ChartPoint], note: str | None 
 def _executive_charts(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[ExecutiveChart, ...]:
     items = [item for item in snapshots if item.counted_in_kpis]
     status_counts = Counter(item.status_at_period_end for item in items)
-    unknown = status_counts.pop(UnifiedStatus.UNKNOWN, 0)
     status_points = tuple(
         ChartPoint(status.value, status_counts.get(status, 0))
         for status in _KNOWN_STATUS_ORDER
         if status_counts.get(status, 0)
-    )
-    outcome_note = (
-        f"Tasks not classified due to missing or unmapped data: {unknown}"
-        if unknown else None
     )
 
     project_counts = Counter(item.task.unified_project or "Unmapped Project" for item in items)
@@ -230,7 +227,7 @@ def _executive_charts(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[Executiv
         if priority_counts[priority]
     )
     return (
-        _chart("delivery-outcome", "Delivery Outcome", status_points, outcome_note),
+        _chart("delivery-outcome", "Delivery Outcome", status_points),
         _chart("workload-by-project", "Workload by Unified Project", project_points),
         _chart("overdue-by-priority", "Open Overdue Work by Priority", priority_points),
     )
@@ -251,9 +248,11 @@ def _task_details(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[TaskDetail, 
     return tuple(
         TaskDetail(
             source_tool=item.task.source_tool,
+            source_space=item.task.source_space,
             task_id=item.task.task_id,
             task_name=item.task.task_name,
             unified_project=item.task.unified_project,
+            original_status=item.task.raw_status,
             final_status=item.status_at_period_end.value,
             assignee_group=assignee_group(item.task),
             assignees=item.task.assignees,
@@ -325,19 +324,13 @@ def build_company_dashboard(
         data_quality=_quality_items(selected),
         task_details=_task_details(selected),
     )
-    # Guard the contract even if later refactoring changes helper functions.
     if len(model.cards) != 5 or len(model.executive_charts) != 3:
         raise AssertionError("Company dashboard contract requires five cards and three charts")
     return model
 
 
 def render_company_performance_dashboard(st: Any, model: CompanyDashboardModel) -> None:
-    """Minimal optional Streamlit renderer for a prepared dashboard model.
-
-    ``st`` is injected so importing this module has no Streamlit dependency.
-    Existing source-specific pages remain untouched until the main application
-    deliberately wires this function into its navigation.
-    """
+    """Minimal optional Streamlit renderer for a prepared dashboard model."""
     st.subheader("Company Performance — Selected Projects")
     st.caption(f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}")
     columns = st.columns(5)

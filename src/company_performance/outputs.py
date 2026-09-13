@@ -88,11 +88,7 @@ def write_company_excel(
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
 ) -> Path:
-    """Write the approved four-sheet Company Performance workbook.
-
-    Raw collected data is intentionally *not* added to this workbook.  Use
-    :func:`write_company_raw_data` when an audit copy is required.
-    """
+    """Write the approved four-sheet Company Performance workbook."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
@@ -144,11 +140,16 @@ def write_company_excel(
     _fit_columns(breakdown)
 
     details = workbook.create_sheet(DETAILS_SHEET)
-    _write_table(details, [("Source Tool", "Task ID", "Task Name", "Unified Project", "Final Status", "Assignee Group", "Assignees", "Priority", "Created Date", "Due Date", "Actual Start Date", "Final Completion Date", "Workflow Events", "Exception Events", "Data Quality Flags")] + [
-        (item.source_tool, item.task_id, item.task_name, item.unified_project, item.final_status,
-         item.assignee_group, item.assignees, item.priority, item.created_date, item.due_date,
-         item.actual_start_date, item.final_completion_date, item.workflow_events,
-         item.exception_events, item.data_quality_flags)
+    _write_table(details, [(
+        "Source Tool", "Source Space", "Task ID", "Task Name", "Unified Project",
+        "Original Status", "Final Status", "Assignee Group", "Assignees", "Priority",
+        "Created Date", "Due Date", "Actual Start Date", "Final Completion Date",
+        "Workflow Events", "Exception Events", "Data Quality Flags",
+    )] + [
+        (item.source_tool, item.source_space, item.task_id, item.task_name, item.unified_project,
+         item.original_status, item.final_status, item.assignee_group, item.assignees, item.priority,
+         item.created_date, item.due_date, item.actual_start_date, item.final_completion_date,
+         item.workflow_events, item.exception_events, item.data_quality_flags)
         for item in model.task_details
     ])
     _fit_columns(details)
@@ -167,8 +168,6 @@ def write_company_excel(
     ], start_row=row + 1)
     _fit_columns(quality)
 
-    # The contract is deliberately checked before saving, so an accidental
-    # extra audit/raw sheet cannot silently reach executives.
     if tuple(workbook.sheetnames) != COMPANY_SHEET_NAMES:
         raise AssertionError("Company Performance workbook must contain exactly four approved sheets")
     workbook.save(output)
@@ -244,7 +243,6 @@ def write_company_word_report(
     document.add_paragraph("Selected Projects")
     document.add_paragraph(f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}")
 
-    # The headings form an intentional, testable report contract.
     document.add_heading("1. Executive Summary", level=1)
     document.add_paragraph(
         f"The analysis covers {_display(model.kpis.total_tasks)} eligible task(s). "

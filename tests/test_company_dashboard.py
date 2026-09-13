@@ -79,15 +79,15 @@ class CompanyDashboardTests(unittest.TestCase):
         self.assertIn("Platform", model.filter_options.unified_projects)
         self.assertIn("Mobile", model.filter_options.unified_projects)
 
-    def test_delivery_outcome_excludes_unknown_and_exposes_count_as_note_and_quality(self):
+    def test_delivery_outcome_excludes_unknown_and_keeps_it_in_data_quality(self):
         unmapped = snapshot("unmapped", raw_status="Custom Status", initial_status="Custom Status")
         model = build_company_dashboard([unmapped])
         delivery = next(chart for chart in model.executive_charts if chart.key == "delivery-outcome")
         self.assertEqual(delivery.points, ())
-        self.assertEqual(delivery.note, "Tasks not classified due to missing or unmapped data: 1")
+        self.assertIsNone(delivery.note)
         self.assertIn("Unmapped Status", [item.flag for item in model.data_quality])
 
-    def test_task_details_keep_in_period_transition_and_exception_evidence(self):
+    def test_task_details_keep_original_final_status_and_workflow_evidence(self):
         item = snapshot(
             "review-return",
             (event("To Do", "In Progress", "2026-09-02T09:00:00"),
@@ -95,6 +95,8 @@ class CompanyDashboardTests(unittest.TestCase):
              event("In Review", "In Progress", "2026-09-04T09:00:00")),
         )
         detail = build_company_dashboard([item]).task_details[0]
+        self.assertEqual(detail.original_status, "In Review")
+        self.assertEqual(detail.final_status, "In Execution")
         self.assertIn("Rework", detail.exception_events)
         self.assertIn("2026-09-04: In Review → In Progress", detail.workflow_events)
 

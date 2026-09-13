@@ -81,6 +81,29 @@ def _named(value: Any) -> str | None:
     return _text(value)
 
 
+def _clickup_status(value: Any) -> tuple[str | None, bool]:
+    """Return a readable ClickUp status, using the internal id only as fallback."""
+    if isinstance(value, Mapping):
+        for key in ("status", "name", "status_name", "label"):
+            result = _text(value.get(key))
+            if result:
+                return result, False
+        fallback = _text(value.get("id"))
+        return fallback, bool(fallback)
+    return _text(value), False
+
+
+def _clickup_priority(value: Any) -> str | None:
+    """Read ClickUp's priority label before falling back to its identifier."""
+    if isinstance(value, Mapping):
+        for key in ("priority", "name", "label", "value", "id"):
+            result = _text(value.get(key))
+            if result:
+                return result
+        return None
+    return _text(value)
+
+
 def _collection_time(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -302,12 +325,14 @@ def adapt_clickup_collection(
         task_id = _text(task.get("id"))
         if not task_id:
             continue
-        status = task.get("status")
-        priority = task.get("priority")
+        raw_status, status_unresolved = _clickup_status(task.get("status"))
+        priority = _clickup_priority(task.get("priority"))
         list_value = task.get("list") if isinstance(task.get("list"), Mapping) else {}
         department = _named(list_value.get("name"))
         parent_id = _parent(task.get("parent"))
         flags = {"ClickUp Chronological History Unavailable", "Missing Workflow History"}
+        if status_unresolved:
+            flags.add("ClickUp Status Unresolved")
         if not department:
             flags.add("Missing ClickUp List Name")
         payload = status_payloads.get(task_id)
@@ -322,9 +347,9 @@ def adapt_clickup_collection(
             source_space=source_space,
             unified_project=unified_project,
             department=department,
-            raw_status=_named(status),
+            raw_status=raw_status,
             initial_status=None,
-            priority=_named(priority),
+            priority=priority,
             assignees=_clickup_assignees(task.get("assignees")),
             created_date=_source_date(task.get("date_created")),
             planned_start_date=_source_date(task.get("start_date")),

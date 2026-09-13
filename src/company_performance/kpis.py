@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 from statistics import mean, median
 from typing import Iterable
 
-from .models import StatusInterval, TaskPeriodSnapshot, UnifiedStatus
+from .models import TaskPeriodSnapshot, UnifiedStatus
 from .normalization import normalize_priority
 
 
@@ -49,13 +48,7 @@ class CoreKPIs:
 
 @dataclass(frozen=True)
 class StatusMetrics:
-    """Evidence for one non-terminal workflow status in the selected period.
-
-    All duration values are calendar days already clipped to the selected
-    period.  A caller should only use these metrics when ``history_covered``
-    is true; this makes ClickUp's snapshot-only coverage explicit rather than
-    inventing historical timing.
-    """
+    """Evidence for one non-terminal workflow status in the selected period."""
 
     status: UnifiedStatus
     tasks_passed_through: int
@@ -91,13 +84,17 @@ class Recommendation:
 
 def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
     tasks = [snapshot for snapshot in snapshots if snapshot.counted_in_kpis]
-    completed = [item for item in tasks if item.status_at_period_end is UnifiedStatus.COMPLETED]
-    cancelled = [item for item in tasks if item.status_at_period_end is UnifiedStatus.CANCELLED]
-    rejected = [item for item in tasks if item.status_at_period_end is UnifiedStatus.REJECTED]
-    open_items = [item for item in tasks if item.status_at_period_end.is_open]
+
+    # Unknown status remains visible in Task Details/Data Quality, but it must not
+    # silently change status-dependent executive rates or overdue/WIP counts.
+    known = [item for item in tasks if item.status_at_period_end is not UnifiedStatus.UNKNOWN]
+    completed = [item for item in known if item.status_at_period_end is UnifiedStatus.COMPLETED]
+    cancelled = [item for item in known if item.status_at_period_end is UnifiedStatus.CANCELLED]
+    rejected = [item for item in known if item.status_at_period_end is UnifiedStatus.REJECTED]
+    open_items = [item for item in known if item.status_at_period_end.is_open]
     wip = [
         item
-        for item in tasks
+        for item in known
         if item.status_at_period_end in {UnifiedStatus.IN_EXECUTION, UnifiedStatus.IN_REVIEW}
     ]
     open_with_due = [item for item in open_items if item.task.due_date is not None]
@@ -113,7 +110,7 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         if normalize_priority(item.task.source_tool, item.task.priority) in {"Critical", "High"}
     ]
     unassigned = [item for item in open_items if not item.task.assignees]
-    eligible = len(tasks) - len(cancelled) - len(rejected)
+    eligible = len(known) - len(cancelled) - len(rejected)
 
     completed_with_due = [
         item for item in completed if item.task.due_date is not None and item.final_completion_date is not None
@@ -123,7 +120,7 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
 
     time_to_start = [
         (item.actual_start_date - item.task.created_date).days
-        for item in tasks
+        for item in known
         if item.actual_start_date is not None and item.task.created_date is not None
     ]
     execution = [
@@ -160,7 +157,6 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
 def average_days_in_status(
     snapshots: Iterable[TaskPeriodSnapshot], status: UnifiedStatus
 ) -> float | None:
-    """Average clipped calendar days for tasks that entered one status."""
     values = [
         interval.days
         for snapshot in snapshots
@@ -172,12 +168,6 @@ def average_days_in_status(
 
 
 def calculate_status_metrics(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[StatusMetrics, ...]:
-    """Summarise historical time-in-status without creating synthetic history.
-
-    Completed, Cancelled and Rejected are deliberately excluded from workflow
-    bottleneck comparison.  Unknown status is handled through Data Quality,
-    not as a chart category.
-    """
     items = [snapshot for snapshot in snapshots if snapshot.counted_in_kpis]
     result: list[StatusMetrics] = []
     non_terminal = [status for status in UnifiedStatus if status.is_open]
@@ -194,8 +184,6 @@ def calculate_status_metrics(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[S
             item for item in open_now
             if item.task.due_date is not None and item.task.due_date < item.period_end
         ]
-        # Rework/replanning/re-evaluation are review-return signals.  They are
-        # intentionally attached to In Review, their common source stage.
         returns = sum(
             len(item.exception_events) for item in items if status is UnifiedStatus.IN_REVIEW
         )
@@ -218,14 +206,6 @@ def calculate_status_metrics(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[S
 def identify_bottleneck_candidates(
     snapshots: Iterable[TaskPeriodSnapshot],
 ) -> tuple[BottleneckCandidate, ...]:
-    """Find evidence-backed workflow bottleneck candidates.
-
-    There is deliberately no fixed "five days means bottleneck" rule.  A
-    stage becomes a candidate only when at least two relative signals agree:
-    above-peer time in stage, concentrated open work, overdue work, or
-    repeated review returns.  Three or more signals make it *Strong*; neither
-    level claims root cause or a confirmed bottleneck.
-    """
     metrics = calculate_status_metrics(snapshots)
     comparable_averages = [metric.average_days for metric in metrics if metric.average_days is not None]
     peer_average = _average(value for value in comparable_averages if value is not None)
@@ -259,11 +239,6 @@ def identify_bottleneck_candidates(
 
 
 def generate_recommendations(snapshots: Iterable[TaskPeriodSnapshot]) -> tuple[Recommendation, ...]:
-    """Generate recommendations from agreed service thresholds and evidence.
-
-    Completion <70% and on-time completion <80% produce recommendations only;
-    they are not bottleneck thresholds and do not prove a root cause.
-    """
     items = tuple(snapshots)
     core = calculate_core_kpis(items)
     recommendations: list[Recommendation] = []
