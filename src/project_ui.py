@@ -275,7 +275,7 @@ def _weekly_flow_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
             week = completed - timedelta(days=completed.weekday())
             values[week]["Tasks Completed"] += 1
     rows = [{"Week Starting": key, **value} for key, value in sorted(values.items())]
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["Week Starting", "Tasks Created", "Tasks Completed"])
 
 
 def _source_space_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
@@ -296,7 +296,7 @@ def _source_space_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
             grouped[key]["Open Overdue"] += 1
     for (source, space), values in sorted(grouped.items()):
         rows.append({"Source": source, "Space": space, **values})
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["Source", "Space", "Total Tasks", "Completed", "Open Overdue"])
 
 
 def _assignee_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
