@@ -260,7 +260,12 @@ def _task_detail_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
             "Workflow History Available": task.history_complete,
             "Data Quality Flags": "; ".join(sorted(snapshot.data_quality_flags)),
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=[
+        "Source", "Space", "Task ID", "Task", "Assignee", "Priority", "Task Type",
+        "Original Status", "Final Status", "Created Date", "Start Date", "Due Date",
+        "Completed Date", "Completed Late", "Open Overdue", "Workflow History Available",
+        "Data Quality Flags",
+    ])
 
 
 def _weekly_flow_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
