@@ -36,6 +36,7 @@ from company_performance.ui import (
     render_company_launcher,
     render_company_result,
 )
+from project_ui import render_project_collection, render_project_result
 from department_analysis import (
     build_department_result,
     build_jira_department_result,
@@ -1102,7 +1103,7 @@ analysis_mode_label = st.radio(
 )
 analysis_mode = {
     "Employee Performance": "employee",
-    "Project Performance": "existing",
+    "Project Performance": "project",
     "Department Performance": "department",
     "Company Performance": "company",
 }[analysis_mode_label]
@@ -1120,12 +1121,23 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
         "company_unified_project", "company_period_start", "company_period_end",
+        "project_catalog_revision", "project_selected_jira_space", "project_selected_clickup_space",
+        "project_selection_fingerprint", "project_jira_prepared", "project_clickup_prepared",
+        "project_preview", "project_analysis", "project_scope_label", "project_scope_slug",
+        "project_period_start", "project_period_end", "project_report_key",
     ):
         st.session_state.pop(key, None)
     st.session_state["active_analysis_mode"] = analysis_mode
 st.caption("Choose an analysis, apply its filters, and run the available process analysis.")
 prepared_data, run_button = render_collection(settings, analysis_mode=analysis_mode)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
+
+if analysis_mode == "project":
+    if st.session_state.get("project_analysis") is not None:
+        render_project_result(st, st.session_state["project_analysis"])
+    else:
+        st.info("Select a Jira Space, a ClickUp Space, or one from each, then choose the analysis period.")
+    st.stop()
 
 # Company Performance is intentionally additive.  A prepared Jira or ClickUp
 # result remains available while the user collects the other source, and the
