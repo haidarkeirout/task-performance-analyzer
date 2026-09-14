@@ -158,6 +158,15 @@ def format_percentage(
     return f"{numerator / denominator * 100:.1f}%"
 
 
+def _filename_component(value) -> str:
+    """Return a non-empty, filesystem-safe component for report filenames."""
+    text = "Unavailable" if value is None else str(value).strip()
+    for character in '<>:"/\\|?*':
+        text = text.replace(character, "-")
+    text = " ".join(text.split()).strip(" .-")
+    return text or "Unavailable"
+
+
 def calculate_dashboard_values(task_metrics):
     row = aggregate(task_metrics, []).iloc[0]
     return {"total": row["total_tasks"], "completed": row["completed_tasks"],
