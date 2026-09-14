@@ -154,14 +154,19 @@ def _clickup_display_timestamp(value):
     return "" if pd.isna(value) else value.strftime("%Y-%m-%d")
 
 
-def _render_clickup_collection(settings):
+def _render_clickup_collection(settings, analysis_mode="existing"):
     """Collect one filtered ClickUp Space without changing the Jira path.
 
     ClickUp filters operate against an API snapshot.  The paid Total time in
     Status endpoint is requested only when the corresponding More filter is
     selected; it is not a background collector and never touches Jira.
     """
-    st.caption("Select a ClickUp Space, apply filters, review the matching tasks, and select Done.")
+    department_mode = analysis_mode == "department"
+    st.caption(
+        "Select a ClickUp Space and Department, apply filters, review the matching tasks, and select Done."
+        if department_mode else
+        "Select a ClickUp Space, apply filters, review the matching tasks, and select Done."
+    )
     try:
         gateway = _clickup_gateway(settings)
         try:
@@ -187,13 +192,40 @@ def _render_clickup_collection(settings):
     if selected is None:
         return None, False
 
-    tasks_cache_key = f"{workspace_id}:{selected}"
+    department_id = ""
+    department_name = ""
+    if department_mode:
+        try:
+            gateway = _clickup_gateway(settings, workspace_id)
+            try:
+                department_lists = gateway.all_lists_for_space(selected)
+            finally:
+                gateway.close()
+        except ClickUpCollectionError as exc:
+            st.error(str(exc))
+            return None, False
+        department_map = {str(item["id"]): item for item in department_lists}
+        department_id = st.selectbox(
+            "Department",
+            [None, *department_map],
+            format_func=lambda value: "Choose a department" if value is None else department_map[value].get("name", value),
+            key=f"clickup_department_{selected}",
+            help="Each ClickUp List is treated as one department for this analysis.",
+        )
+        if department_id is None:
+            return None, False
+        department_name = str(department_map[department_id].get("name") or department_id)
+
+    tasks_cache_key = f"{workspace_id}:{selected}:{department_id or 'all'}"
     if st.session_state.get("clickup_tasks_cache_key") != tasks_cache_key:
         try:
             gateway = _clickup_gateway(settings, workspace_id)
             try:
                 with st.spinner("Loading ClickUp tasks..."):
-                    tasks = gateway.all_tasks_for_space(selected)
+                    tasks = (
+                        gateway.all_tasks_for_list(department_id)
+                        if department_mode else gateway.all_tasks_for_space(selected)
+                    )
             finally:
                 gateway.close()
         except ClickUpCollectionError as exc:
@@ -296,6 +328,8 @@ def _render_clickup_collection(settings):
 
     filtered_tasks = filter_clickup_tasks(tasks, criteria, time_status_map)
     filter_summary = criteria_summary(criteria)
+    if department_mode:
+        filter_summary = f"Department: {department_name} · {filter_summary}"
     rows = []
     for task in filtered_tasks:
         task_id = str(task.get("id", ""))
@@ -320,7 +354,8 @@ def _render_clickup_collection(settings):
 
     st.divider()
     fingerprint = "clickup:" + selected + ":" + json.dumps(
-        {"task_ids": [str(task.get("id", "")) for task in filtered_tasks], "criteria": criteria},
+        {"analysis_mode": analysis_mode, "department_id": department_id,
+         "task_ids": [str(task.get("id", "")) for task in filtered_tasks], "criteria": criteria},
         sort_keys=True,
         default=str,
     )
@@ -350,6 +385,9 @@ def _render_clickup_collection(settings):
                     time_status_error=time_status_error,
                     filter_summary=filter_summary,
                     filter_criteria=criteria,
+                    analysis_mode=analysis_mode,
+                    department_name=department_name,
+                    department_id=department_id,
                 )
                 st.session_state["clickup_prepared_data"] = prepared
                 st.session_state["clickup_run_analysis"] = True
