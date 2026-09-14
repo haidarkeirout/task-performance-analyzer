@@ -209,6 +209,28 @@ def _render_active_job_full_rerun(job):
     return prepared, run_clicked
 
 
+_SOURCE_TRANSIENT_KEYS = (
+    "prepared_data", "prepared_fingerprint", "preview", "preview_query",
+    "collection_error", "collection_notice", "clickup_prepared_data",
+    "clickup_analysis", "clickup_run_analysis", "clickup_error",
+    "department_analysis", "task_metrics", "process_data",
+    "validation_log", "cutoff_text",
+)
+
+
+def _on_data_source_change():
+    """Clear visible results and transient collection state when Jira/ClickUp changes."""
+    current = st.session_state.get("data_source")
+    previous = st.session_state.get("_active_data_source")
+    if previous is not None and previous != current:
+        job = st.session_state.pop("collection_job", None)
+        if job is not None:
+            job.cancel()
+        for key in _SOURCE_TRANSIENT_KEYS:
+            st.session_state.pop(key, None)
+    st.session_state["_active_data_source"] = current
+
+
 def render_collection(settings, analysis_mode="existing"):
     """Route to the selected connector without sharing collection state."""
     source = st.radio(
@@ -216,7 +238,9 @@ def render_collection(settings, analysis_mode="existing"):
         ["Jira", "ClickUp"],
         horizontal=True,
         key="data_source",
+        on_change=_on_data_source_change,
     )
+    st.session_state["_active_data_source"] = source
     if source == "ClickUp":
         return _render_clickup_collection(settings, analysis_mode=analysis_mode)
 
