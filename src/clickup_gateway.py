@@ -143,10 +143,43 @@ class ClickUpGateway:
         data = self.request(f"/folder/{folder_id}/list", params={"archived": str(archived).lower()})
         return data.get("lists", [])
 
+    def all_lists_for_space(self, space_id: str, archived: bool = False):
+        """Return every List in a Space, including folderless Lists.
+
+        Department analysis deliberately treats one ClickUp List as one
+        department.  Keeping this lookup in the gateway avoids inferring a
+        department from task names or other mutable fields.
+        """
+        result = list(self.folderless_lists(space_id, archived=archived))
+        for folder in self.folders(space_id, archived=archived):
+            folder_name = folder.get("name") or "Folder"
+            for current_list in self.lists(str(folder["id"]), archived=archived):
+                item = dict(current_list)
+                item["folder_name"] = folder_name
+                result.append(item)
+        return result
+
     def tasks(self, list_id: str, page: int = 0):
         return self.request(f"/list/{list_id}/task", params={
             "page": page, "include_closed": "true", "subtasks": "true", "include_timl": "true",
         })
+
+    def all_tasks_for_list(self, list_id: str, progress=None):
+        result, seen, page = [], set(), 0
+        while True:
+            data = self.tasks(list_id, page)
+            tasks = data.get("tasks", [])
+            for task in tasks:
+                task_id = str(task.get("id", ""))
+                if task_id and task_id not in seen:
+                    seen.add(task_id)
+                    result.append(task)
+            if progress:
+                progress(f"ClickUp: collected {len(result)} department tasks...")
+            if len(tasks) < 100:
+                break
+            page += 1
+        return result
 
     def all_tasks_for_space(self, space_id: str, progress=None):
         lists = list(self.folderless_lists(space_id))
