@@ -6,6 +6,7 @@ import streamlit as st
 import jira_ui as _jira_ui
 from clickup_ui import _render_clickup_collection
 from employee_ui import render_employee_collection
+from project_ui import render_project_collection
 
 # Re-export these symbols for existing tests and callers.
 CollectionError = _jira_ui.CollectionError
@@ -214,6 +215,8 @@ def render_collection(settings, analysis_mode="existing"):
     """Route to the selected connector without sharing collection state."""
     if analysis_mode == "employee":
         return render_employee_collection(settings)
+    if analysis_mode == "project":
+        return render_project_collection(settings)
     source = st.radio(
         "Data source",
         ["Jira", "ClickUp"],
