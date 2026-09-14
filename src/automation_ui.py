@@ -209,7 +209,7 @@ def _render_active_job_full_rerun(job):
     return prepared, run_clicked
 
 
-def render_collection(settings):
+def render_collection(settings, analysis_mode="existing"):
     """Route to the selected connector without sharing collection state."""
     source = st.radio(
         "Data source",
@@ -218,7 +218,7 @@ def render_collection(settings):
         key="data_source",
     )
     if source == "ClickUp":
-        return _render_clickup_collection(settings)
+        return _render_clickup_collection(settings, analysis_mode=analysis_mode)
 
     # Tests patch wrapper-level objects, so keep the Jira implementation synchronized.
     _jira_ui.JiraGateway = JiraGateway
