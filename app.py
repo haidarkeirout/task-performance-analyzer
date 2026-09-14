@@ -1095,13 +1095,14 @@ settings = require_sign_in()
 st.title(APP_TITLE)
 analysis_mode_label = st.radio(
     "Analysis type",
-    ["Employee & Project Analysis", "Department Performance", "Company Performance"],
+    ["Employee Performance", "Project Performance", "Department Performance", "Company Performance"],
     horizontal=True,
     key="analysis_type_selector",
     help="The existing employee/project analysis and department analysis use separate results and exports.",
 )
 analysis_mode = {
-    "Employee & Project Analysis": "existing",
+    "Employee Performance": "employee",
+    "Project Performance": "existing",
     "Department Performance": "department",
     "Company Performance": "company",
 }[analysis_mode_label]
@@ -1113,6 +1114,8 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "clickup_analysis", "department_analysis", "company_analysis",
         "task_metrics", "process_data", "validation_log",
         "clickup_prepared_data", "clickup_run_analysis",
+        "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
+        "employee_prepared", "employee_fingerprint",
         "company_prepared_jira", "company_prepared_clickup",
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
@@ -1120,7 +1123,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
     ):
         st.session_state.pop(key, None)
     st.session_state["active_analysis_mode"] = analysis_mode
-st.caption("Select Jira or ClickUp, choose the relevant filters, and run the available process analysis.")
+st.caption("Choose an analysis, apply its filters, and run the available process analysis.")
 prepared_data, run_button = render_collection(settings, analysis_mode=analysis_mode)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
 
@@ -1317,7 +1320,9 @@ if "task_metrics" in st.session_state:
             )
 
 else:
-    if st.session_state.get("data_source") == "ClickUp":
+    if analysis_mode == "employee":
+        st.info("Choose an employee, load the assigned tasks, and click Done before running the analysis.")
+    elif st.session_state.get("data_source") == "ClickUp":
         st.info(
             "Select a ClickUp Space, click Done, then download the ClickUp source Excel."
         )

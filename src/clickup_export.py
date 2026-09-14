@@ -105,6 +105,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     missing_time_status = 0
     for index, task in enumerate(tasks, 1):
         task_id = str(task.get("id", ""))
+        task_space_id = task.get("space_id") or space_id
         if progress:
             progress(f"Preparing ClickUp task {index} of {len(tasks)}...")
         payload = time_status.get(task_id)
@@ -117,7 +118,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
         current_minutes, current_since = _current_status_info(payload)
         history_ids = ""
         rows.append([
-            space_id or task.get("space_id"), task_id, task.get("name"),
+            task_space_id, task_id, task.get("name"),
             ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
             priority.get("priority") if isinstance(priority, dict) else priority,
             status.get("status") if isinstance(status, dict) else status,
@@ -127,7 +128,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
             current_minutes, current_since, history_ids,
             *[values.get(name) for name in status_names],
         ])
-        raw.append([task_id, "task", json.dumps({**task, "selected_space_id": space_id}, ensure_ascii=False)])
+        raw.append([task_id, "task", json.dumps({**task, "selected_space_id": task_space_id}, ensure_ascii=False)])
         if payload is not None:
             raw.append([task_id, "time_in_status", json.dumps(payload, ensure_ascii=False)])
 
