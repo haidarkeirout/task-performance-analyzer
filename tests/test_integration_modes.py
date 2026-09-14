@@ -30,5 +30,9 @@ class IntegratedAnalysisModeTests(unittest.TestCase):
         self.assertIn('"company_prepared_clickup_spaces"', self.source)
 
 
+    def test_department_report_filename_helper_is_defined(self):
+        self.assertIn("def _filename_component(value)", self.source)
+
+
 if __name__ == "__main__":
     unittest.main()
