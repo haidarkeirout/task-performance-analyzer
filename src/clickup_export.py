@@ -23,6 +23,9 @@ class ClickUpPreparedData:
     source_timezone: str
     filter_summary: str = "All tasks in the selected ClickUp Space"
     filter_criteria: dict = field(default_factory=dict, repr=False)
+    analysis_mode: str = "existing"
+    department_name: str = ""
+    department_id: str = ""
 
 
 def _sheet(wb, name, headers, rows):
@@ -77,7 +80,7 @@ def _current_status_info(payload):
 
 def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None,
                  space_id=None, time_status_data=None, time_status_error="", filter_summary="",
-                 filter_criteria=None):
+                 filter_criteria=None, analysis_mode="existing", department_name="", department_id=""):
     """Prepare ClickUp tasks and explicitly supplied status-duration data.
 
     This function never calls a status/activity endpoint itself.  The UI only
@@ -169,6 +172,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
         datetime.now(timezone.utc).isoformat(), space_name, fingerprint, len(tasks), filename,
         space_name, source_timezone,
         filter_summary or "All tasks in the selected ClickUp Space", dict(filter_criteria or {}),
+        analysis_mode, department_name, department_id,
     )
     prepared.clickup_activity_available = False
     prepared.clickup_time_status_available = bool(time_status)
