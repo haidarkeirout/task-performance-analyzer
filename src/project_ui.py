@@ -645,6 +645,8 @@ def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: 
 
 
 def render_project_collection(settings):
+    if st.session_state.get("project_analysis") is not None:
+        return None, False
     jira_spaces, clickup_spaces = _load_catalogs(settings)
     jira_error = st.session_state.get("project_jira_error", "")
     clickup_error = st.session_state.get("project_clickup_error", "")
