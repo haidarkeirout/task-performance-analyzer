@@ -159,7 +159,6 @@ def render_employee_collection(settings):
     snapshot_key = f"{record.name}:{record.primary_source}:{record.jira_account_id}:{record.clickup_user_id}"
     if st.button("Load Employee Tasks", type="primary", key="employee_load"):
         _clear_employee_state()
-        st.session_state["employee_selected_name"] = selected_name
         try:
             with st.spinner(f"Finding {record.name}'s assigned tasks..."):
                 snapshot = _load_jira(record, settings) if record.primary_source == "jira" else _load_clickup(record, settings)
