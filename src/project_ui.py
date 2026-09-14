@@ -320,7 +320,7 @@ def _assignee_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
     return pd.DataFrame([
         {"Assignee": assignee, **values}
         for assignee, values in sorted(grouped.items())
-    ])
+    ], columns=["Assignee", "Total Tasks", "Completed", "Open", "Open Overdue"])
 
 
 def _write_excel_table(sheet, headers, rows, start_row=1):
@@ -412,7 +412,10 @@ def _workflow_events_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
                     "To Status": event.to_status or "N/A",
                     "Performed By": event.performed_by or "N/A",
                 })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=[
+        "Source", "Space", "Task ID", "Task", "Changed Date", "From Status",
+        "To Status", "Performed By",
+    ])
 
 
 def _exception_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
@@ -427,7 +430,7 @@ def _exception_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
                 "Task": task.task_name,
                 "Exception": exception,
             })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["Source", "Space", "Task ID", "Task", "Exception"])
 
 
 def _recommendation_rows(result: CompanyAnalysisResult) -> list[tuple[Any, ...]]:
