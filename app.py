@@ -31,6 +31,12 @@ from report_builder import build_report
 from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
 from clickup_analysis import analyze_clickup, analysis_excel
 from clickup_report import create_clickup_word_report
+from department_analysis import (
+    build_department_result,
+    build_jira_department_result,
+    department_excel,
+    department_word,
+)
 
 
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -548,6 +554,8 @@ def show_clickup_analysis(result) -> None:
             "Execution, lead-time, and time-to-start averages are measured in elapsed hours. "
             "Timing values stay unavailable when ClickUp dates conflict. Due Variance and overdue measures use calendar days."
         )
+
+
         completed_cards = st.columns(3)
         completed_cards[0].metric("Avg Execution Time (Completed)", average("Average execution hours", "h"))
         completed_cards[1].metric("Avg Lead Time (Completed)", average("Average lead time hours", "h"))
@@ -737,19 +745,124 @@ def show_clickup_analysis(result) -> None:
         )
 
 
+def show_department_analysis(result: dict) -> None:
+    """Render the isolated department dashboard and approved exports."""
+    def value(name, default=None):
+        matches = result["kpis"].loc[result["kpis"]["KPI"].eq(name), "Value"]
+        return default if matches.empty else matches.iloc[0]
+
+    def percent(name):
+        current = value(name)
+        return "Unavailable" if current is None or pd.isna(current) else f"{float(current):.1f}%"
+
+    st.success("Department performance analysis completed.")
+    st.caption(
+        f"Department: {result['department_name']} · Space: {result['space_name']} · "
+        f"Cutoff: {result['cutoff']}"
+    )
+    cards = st.columns(6)
+    cards[0].metric("Total Tasks", int(value("Total Tasks", 0)))
+    cards[1].metric("Task Completion Rate", percent("Task Completion Rate (%)"))
+    cards[2].metric("On-Time Completion Rate", percent("On-Time Completion Rate (%)"))
+    cards[3].metric("Open Overdue Tasks", int(value("Open Overdue Tasks", 0)))
+    lead = value("Average Lead Time (hours)")
+    cards[4].metric("Average Lead Time", "Unavailable" if lead is None or pd.isna(lead) else f"{float(lead):.1f} h")
+    cards[5].metric("Workflow Exception Rate", percent("Workflow Exception Rate (%)"))
+    st.caption(
+        f"Cancelled/Rejected: {int(value('Cancelled/Rejected Tasks', 0))} · "
+        f"Rate: {percent('Cancellation/Rejected Rate (%)')} · "
+        "Workflow exception rate remains unavailable when activity history is not collected."
+    )
+    chart_left, chart_right = st.columns(2)
+    with chart_left:
+        st.subheader("Task Status Distribution")
+        if result["status_counts"].empty:
+            st.info("No status data is available.")
+        else:
+            st.bar_chart(result["status_counts"].set_index("Status")["Tasks"], use_container_width=True)
+        st.subheader("Workload by Employee")
+        employees = result["employee_breakdown"]
+        employee_columns = [c for c in ["Open", "WIP", "Overdue"] if c in employees]
+        if employees.empty:
+            st.info("No assignee data is available.")
+        else:
+            st.bar_chart(employees.set_index("Assignee")[employee_columns], use_container_width=True)
+    with chart_right:
+        st.subheader("Delivery Performance")
+        if result["due_variance_summary"].empty:
+            st.info("No due-date delivery data is available.")
+        else:
+            st.bar_chart(result["due_variance_summary"].set_index("Due Variance Category")["Tasks"], use_container_width=True)
+        st.subheader("Department Performance Trend")
+        if result["weekly_flow"].empty:
+            st.info("No dated tasks are available for a trend.")
+        else:
+            st.line_chart(result["weekly_flow"].set_index("Week Starting")[["Tasks Created", "Tasks Completed"]], use_container_width=True)
+    summary_tab, attention_tab, quality_tab = st.tabs(
+        ["Department Employee Summary", "Tasks Requiring Attention", "Bottlenecks & Data Quality"]
+    )
+    with summary_tab:
+        st.caption("This table explains department workload; it is not an individual employee performance score.")
+        st.dataframe(result["employee_breakdown"], hide_index=True, use_container_width=True)
+    with attention_tab:
+        if result["attention"].empty:
+            st.success("No tasks requiring attention were identified.")
+        else:
+            st.dataframe(result["attention"], hide_index=True, use_container_width=True)
+    with quality_tab:
+        st.subheader("Bottleneck Candidates")
+        if result["bottlenecks"].empty:
+            st.info("Status-duration evidence is unavailable.")
+        else:
+            st.dataframe(result["bottlenecks"], hide_index=True, use_container_width=True)
+        st.subheader("Data Quality")
+        if result["department_quality"].empty:
+            st.success("No material data-quality issues were identified.")
+        else:
+            st.dataframe(result["department_quality"], hide_index=True, use_container_width=True)
+    st.divider()
+    excel_name = f"Department_Performance_{_filename_component(result['department_name'])}.xlsx"
+    word_name = f"Department_Performance_{_filename_component(result['department_name'])}.docx"
+    left, right = st.columns(2)
+    left.download_button("Download Excel Report", department_excel(result), excel_name,
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         use_container_width=True)
+    right.download_button("Download Word Report", department_word(result), word_name,
+                          mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                          use_container_width=True)
+
+
 from automation_ui import require_sign_in, render_collection
 
 settings = require_sign_in()
 st.title(APP_TITLE)
+analysis_mode_label = st.radio(
+    "Analysis type",
+    ["Employee & Project Analysis", "Department Performance"],
+    horizontal=True,
+    key="analysis_type_selector",
+    help="The existing employee/project analysis and department analysis use separate results and exports.",
+)
+analysis_mode = "department" if analysis_mode_label == "Department Performance" else "existing"
+if st.session_state.get("active_analysis_mode") != analysis_mode:
+    for key in ("clickup_analysis", "department_analysis", "task_metrics", "process_data", "validation_log"):
+        st.session_state.pop(key, None)
+    st.session_state["active_analysis_mode"] = analysis_mode
 st.caption("Select Jira or ClickUp, choose the relevant filters, and run the available process analysis.")
-prepared_data, run_button = render_collection(settings)
+prepared_data, run_button = render_collection(settings, analysis_mode=analysis_mode)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
 
 if run_button and prepared_data is not None:
     if st.session_state.get("data_source") == "ClickUp":
         try:
             with st.spinner("Calculating ClickUp performance analysis..."):
-                st.session_state["clickup_analysis"] = analyze_clickup(prepared_data)
+                clickup_result = analyze_clickup(prepared_data)
+                if analysis_mode == "department":
+                    st.session_state["department_analysis"] = build_department_result(clickup_result, prepared_data)
+                    st.session_state.pop("clickup_analysis", None)
+                else:
+                    st.session_state["clickup_analysis"] = clickup_result
+                    st.session_state.pop("department_analysis", None)
             st.success("ClickUp analysis completed successfully.")
         except Exception as exc:
             st.session_state.pop("clickup_analysis", None)
@@ -775,15 +888,27 @@ if run_button and prepared_data is not None:
                 st.session_state.pop("process_data", None)
                 st.info("No selected work items existed at the evaluation cutoff. Click Done to collect a newer snapshot.")
             else:
-                st.session_state["process_data"] = process_data
-                st.session_state["task_metrics"] = task_metrics
-                st.session_state["validation_log"] = validation_log
-                st.session_state["cutoff_text"] = prepared_data.cutoff
+                if analysis_mode == "department":
+                    st.session_state["department_analysis"] = build_jira_department_result(
+                        task_metrics, process_data, prepared_data.space_name, prepared_data.cutoff,
+                    )
+                    for key in ("task_metrics", "process_data", "validation_log", "clickup_analysis"):
+                        st.session_state.pop(key, None)
+                else:
+                    st.session_state["process_data"] = process_data
+                    st.session_state["task_metrics"] = task_metrics
+                    st.session_state["validation_log"] = validation_log
+                    st.session_state["cutoff_text"] = prepared_data.cutoff
+                    st.session_state.pop("department_analysis", None)
                 st.success("Analysis completed successfully.")
         except Exception:
             st.session_state.pop("task_metrics", None)
             st.session_state.pop("process_data", None)
             st.error("Analysis could not be completed for this dataset. Check the source data or contact the administrator.")
+
+if "department_analysis" in st.session_state:
+    show_department_analysis(st.session_state["department_analysis"])
+    st.stop()
 
 if "clickup_analysis" in st.session_state:
     show_clickup_analysis(st.session_state["clickup_analysis"])
