@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 from company_performance.application import CompanyAnalysisResult, build_company_analysis, build_company_preview
+from company_performance.kpis import calculate_status_metrics
 from jira_export import PreparedData, _json, build_workbook
 from jira_gateway import CollectionError, JiraGateway
 
@@ -352,6 +353,90 @@ def _fit_sheet(sheet):
     sheet.freeze_panes = "A2"
 
 
+def _kpi_detail_rows(model) -> list[tuple[str, Any, str]]:
+    kpis = model.kpis
+    rate = lambda value: "N/A" if value is None else f"{value:.1f}%"
+    days = lambda value: "N/A" if value is None else f"{value:.1f}"
+    return [
+        ("Total Tasks", kpis.total_tasks, "All eligible tasks collected from the selected Jira/ClickUp Spaces."),
+        ("Completed Tasks", kpis.completed_tasks, "Tasks in Completed status at the end of the selected period."),
+        ("Open Tasks", kpis.open_tasks, "Tasks in an open workflow status at period end."),
+        ("Current WIP", kpis.current_wip, "Tasks currently in In Execution or In Review."),
+        ("Completion Rate", rate(kpis.completion_rate), "Completed tasks divided by eligible tasks."),
+        ("Open Overdue Tasks", kpis.overdue_open_tasks, "Open tasks with a due date before the period end."),
+        ("Open Overdue Rate", rate(kpis.overdue_open_rate), "Open overdue tasks divided by open tasks with a due date."),
+        ("High-Priority Open Tasks", kpis.high_priority_open_tasks, "Open Critical or High priority tasks."),
+        ("High-Priority Overdue Tasks", kpis.high_priority_overdue_tasks, "Critical or High priority tasks that are open and overdue."),
+        ("Unassigned Open Tasks", kpis.unassigned_open_tasks, "Open tasks without an assigned owner."),
+        ("On-Time Completion Rate", rate(kpis.on_time_completion_rate), "Completed tasks with a due date completed on or before that date."),
+        ("Late Completion Rate", rate(kpis.late_completion_rate), "Completed tasks with a due date completed after that date."),
+        ("Average Time to Start (days)", days(kpis.average_time_to_start_days), "Average time from creation to the first recorded start."),
+        ("Average Execution Duration (days)", days(kpis.average_execution_duration_days), "Average time from start to completion."),
+        ("Average Lead Time (days)", days(kpis.average_lead_time_days), "Average time from creation to completion."),
+        ("Cancelled Tasks", kpis.cancelled_tasks, "Tasks cancelled at period end."),
+        ("Rejected Tasks", kpis.rejected_tasks, "Tasks rejected at period end."),
+    ]
+
+
+def _status_analysis_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
+    rows = []
+    for metric in calculate_status_metrics(result.snapshots):
+        rows.append({
+            "Status": metric.status.value,
+            "Tasks Passed Through": metric.tasks_passed_through,
+            "Average Days": metric.average_days,
+            "Median Days": metric.median_days,
+            "Total Days": metric.total_days,
+            "Open Tasks at Period End": metric.open_tasks_now,
+            "Open Overdue Tasks": metric.overdue_open_tasks,
+            "Repeated Returns": metric.repeated_returns,
+            "History Covered": metric.history_covered,
+        })
+    return pd.DataFrame(rows)
+
+
+def _workflow_events_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
+    rows = []
+    for snapshot in result.snapshots:
+        task = snapshot.task
+        for event in task.workflow_history:
+            changed = event.changed_at.date()
+            if snapshot.period_start <= changed <= snapshot.period_end:
+                rows.append({
+                    "Source": task.source_tool,
+                    "Space": task.source_space,
+                    "Task ID": task.task_id,
+                    "Task": task.task_name,
+                    "Changed Date": changed,
+                    "From Status": event.from_status or "N/A",
+                    "To Status": event.to_status or "N/A",
+                    "Performed By": event.performed_by or "N/A",
+                })
+    return pd.DataFrame(rows)
+
+
+def _exception_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
+    rows = []
+    for snapshot in result.snapshots:
+        task = snapshot.task
+        for exception in snapshot.exception_events:
+            rows.append({
+                "Source": task.source_tool,
+                "Space": task.source_space,
+                "Task ID": task.task_id,
+                "Task": task.task_name,
+                "Exception": exception,
+            })
+    return pd.DataFrame(rows)
+
+
+def _recommendation_rows(result: CompanyAnalysisResult) -> list[tuple[Any, ...]]:
+    return [
+        (item.severity, item.title, item.evidence, item.suggested_action)
+        for item in result.recommendations
+    ]
+
+
 def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> bytes:
     model = result.model
     period = f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"
@@ -362,51 +447,148 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     summary.append(["Project Performance Analysis Report"])
     summary.append(["Analysis Scope", scope_label])
     summary.append(["Analysis Period", period])
+    summary.append(["Selected Source Spaces", " / ".join(
+        f"{item.source_tool}: {item.source_space or 'N/A'}"
+        for item in model.source_coverage
+    ) or "N/A"])
     summary.append([])
-    _write_excel_table(
+    summary_row = _write_excel_table(
         summary,
         ["KPI", "Value", "Definition"],
-        [(card.title, card.value, card.supporting_text) for card in model.cards],
-        start_row=5,
+        _kpi_detail_rows(model),
+        start_row=6,
     )
-    row = summary.max_row + 2
-    summary.cell(row=row, column=1, value="Executive Chart Data").fill = _SECTION_FILL
-    row += 1
+    summary.cell(row=summary_row + 1, column=1, value="Executive Chart Data").fill = _SECTION_FILL
     chart_rows = []
     for chart in model.executive_charts:
         for point in chart.points:
             chart_rows.append((chart.title, point.label, point.value))
-    _write_excel_table(summary, ["Chart", "Category", "Count"], chart_rows, start_row=row)
+    _write_excel_table(summary, ["Chart", "Category", "Count"], chart_rows, start_row=summary_row + 2)
     _fit_sheet(summary)
+
+    kpis = workbook.create_sheet("KPI Detail")
+    _write_excel_table(kpis, ["KPI", "Value", "Definition"], _kpi_detail_rows(model), start_row=1)
+    _fit_sheet(kpis)
+
+    outcome = workbook.create_sheet("Delivery Outcome")
+    outcome_rows = []
+    for chart in model.executive_charts:
+        for point in chart.points:
+            outcome_rows.append((chart.title, point.label, point.value, chart.note or "N/A"))
+    _write_excel_table(outcome, ["Chart", "Category", "Count", "Notes"], outcome_rows, start_row=1)
+    _fit_sheet(outcome)
+
+    status = workbook.create_sheet("Status Analysis")
+    status_frame = _status_analysis_frame(result)
+    _write_excel_table(
+        status,
+        list(status_frame.columns),
+        status_frame.astype(object).values.tolist() if not status_frame.empty else [],
+        start_row=1,
+    )
+    _fit_sheet(status)
 
     weekly = workbook.create_sheet("Weekly Flow")
     weekly_frame = _weekly_flow_frame(result)
-    _write_excel_table(weekly, list(weekly_frame.columns), weekly_frame.astype(object).values.tolist() if not weekly_frame.empty else [], start_row=1)
+    _write_excel_table(
+        weekly,
+        list(weekly_frame.columns),
+        weekly_frame.astype(object).values.tolist() if not weekly_frame.empty else [],
+        start_row=1,
+    )
     _fit_sheet(weekly)
 
     source_space = workbook.create_sheet("Source-Space Breakdown")
     source_frame = _source_space_frame(result)
-    _write_excel_table(source_space, list(source_frame.columns), source_frame.astype(object).values.tolist() if not source_frame.empty else [], start_row=1)
+    _write_excel_table(
+        source_space,
+        list(source_frame.columns),
+        source_frame.astype(object).values.tolist() if not source_frame.empty else [],
+        start_row=1,
+    )
     _fit_sheet(source_space)
 
     assignees = workbook.create_sheet("Assignee Analysis")
     assignee_frame = _assignee_frame(result)
-    _write_excel_table(assignees, list(assignee_frame.columns), assignee_frame.astype(object).values.tolist() if not assignee_frame.empty else [], start_row=1)
+    _write_excel_table(
+        assignees,
+        list(assignee_frame.columns),
+        assignee_frame.astype(object).values.tolist() if not assignee_frame.empty else [],
+        start_row=1,
+    )
     _fit_sheet(assignees)
+
+    bottlenecks = workbook.create_sheet("Bottlenecks")
+    bottleneck_rows = [
+        (
+            item.status.value,
+            item.strength,
+            item.metrics.tasks_passed_through,
+            item.metrics.average_days,
+            item.metrics.open_tasks_now,
+            item.metrics.overdue_open_tasks,
+            "; ".join(item.evidence),
+        )
+        for item in result.bottlenecks
+    ]
+    _write_excel_table(
+        bottlenecks,
+        ["Status", "Assessment", "Tasks Passed Through", "Average Days", "Open Tasks",
+         "Open Overdue", "Evidence"],
+        bottleneck_rows,
+        start_row=1,
+    )
+    _fit_sheet(bottlenecks)
+
+    recommendations = workbook.create_sheet("Recommendations")
+    _write_excel_table(
+        recommendations,
+        ["Severity", "Recommendation", "Evidence", "Suggested Action"],
+        _recommendation_rows(result),
+        start_row=1,
+    )
+    _fit_sheet(recommendations)
 
     details = workbook.create_sheet("Task Details")
     detail_frame = _task_detail_frame(result)
-    _write_excel_table(details, list(detail_frame.columns), detail_frame.astype(object).values.tolist() if not detail_frame.empty else [], start_row=1)
+    _write_excel_table(
+        details,
+        list(detail_frame.columns),
+        detail_frame.astype(object).values.tolist() if not detail_frame.empty else [],
+        start_row=1,
+    )
     _fit_sheet(details)
+
+    workflow = workbook.create_sheet("Workflow Events")
+    workflow_frame = _workflow_events_frame(result)
+    _write_excel_table(
+        workflow,
+        list(workflow_frame.columns),
+        workflow_frame.astype(object).values.tolist() if not workflow_frame.empty else [],
+        start_row=1,
+    )
+    _fit_sheet(workflow)
+
+    exceptions = workbook.create_sheet("Exceptions")
+    exception_frame = _exception_frame(result)
+    _write_excel_table(
+        exceptions,
+        list(exception_frame.columns),
+        exception_frame.astype(object).values.tolist() if not exception_frame.empty else [],
+        start_row=1,
+    )
+    _fit_sheet(exceptions)
 
     quality = workbook.create_sheet("Data Quality")
     coverage_rows = [
-        (item.source_tool, item.source_space, item.task_count, item.history_mode, item.reason or "N/A")
+        (item.source_tool, item.source_space, item.unified_project, item.source_available,
+         item.task_count, item.history_mode, item.reason or "N/A", "; ".join(item.flags) or "N/A")
         for item in model.source_coverage
     ]
     quality_row = _write_excel_table(
         quality,
-        ["Source", "Space", "Tasks", "History Coverage", "Notes"],
+        ["Source", "Space", "Unified Scope", "Source Available", "Tasks",
+         "History Coverage", "Notes", "Coverage Flags"],
         coverage_rows,
         start_row=1,
     )
@@ -449,6 +631,7 @@ def _add_docx_table(document, headers, rows):
 
 def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> bytes:
     model = result.model
+    period = f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"
     document = Document()
     document.styles["Normal"].font.name = "Arial"
     document.styles["Normal"].font.size = Pt(10)
@@ -460,45 +643,97 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
 
     title = document.add_heading("Project Performance Analysis Report", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    document.add_paragraph(f"Analysis Scope: {scope_label}")
-    document.add_paragraph(
-        f"Analysis Period: {model.period_start.isoformat()} to {model.period_end.isoformat()}"
-    )
+    subtitle = document.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.add_run(scope_label).bold = True
+    period_line = document.add_paragraph(f"Analysis Period: {period}")
+    period_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    document.add_heading("1. Executive Summary", level=1)
+    document.add_heading("1. Report Scope and Source Coverage", level=1)
     document.add_paragraph(
-        f"The analysis covers {model.kpis.total_tasks} eligible task(s). "
-        f"Completion rate: {model.kpis.completion_rate if model.kpis.completion_rate is not None else 'N/A'}%; "
-        f"current WIP: {model.kpis.current_wip}; open overdue work: {model.kpis.overdue_open_tasks}."
+        "This report evaluates the project scope represented by the selected source Spaces. "
+        "Tasks are combined into one analysis while the original source and Space remain visible "
+        "in every detailed view."
     )
-
-    document.add_heading("2. Headline KPIs", level=1)
     _add_docx_table(
         document,
-        ["KPI", "Value", "Definition"],
-        [(card.title, card.value, card.supporting_text) for card in model.cards],
+        ["Source", "Selected Space", "Tasks", "History Coverage", "Notes"],
+        [
+            (
+                item.source_tool,
+                item.source_space,
+                item.task_count,
+                item.history_mode,
+                item.reason or "N/A",
+            )
+            for item in model.source_coverage
+        ],
     )
 
-    document.add_heading("3. Delivery Outcome", level=1)
+    document.add_heading("2. Analysis Period and Methodology", level=1)
+    document.add_paragraph(
+        f"Evaluation period: {model.period_start.isoformat()} to {model.period_end.isoformat()}. "
+        "The analysis reconstructs each task's period-end status from the collected source data, "
+        "then calculates delivery, workload, timeliness, overdue and workflow metrics. "
+        "Jira workflow history is used when available; ClickUp history-dependent measures are "
+        "marked as unavailable rather than estimated."
+    )
+    _add_docx_table(
+        document,
+        ["Field", "Value"],
+        [
+            ("Analysis Scope", scope_label),
+            ("Analysis Period", period),
+            ("Selected Spaces", " / ".join(
+                f"{item.source_tool}: {item.source_space or 'N/A'}"
+                for item in model.source_coverage
+            ) or "N/A"),
+            ("Task Records", model.kpis.total_tasks),
+        ],
+    )
+
+    document.add_heading("3. Executive Summary", level=1)
+    completion = "N/A" if model.kpis.completion_rate is None else f"{model.kpis.completion_rate:.1f}%"
+    on_time = "N/A" if model.kpis.on_time_completion_rate is None else f"{model.kpis.on_time_completion_rate:.1f}%"
+    document.add_paragraph(
+        f"The selected Spaces contain {model.kpis.total_tasks} eligible task(s). "
+        f"{model.kpis.completed_tasks} task(s) were completed by period end, resulting in a "
+        f"{completion} completion rate. The analysis identifies {model.kpis.current_wip} current "
+        f"WIP task(s), {model.kpis.overdue_open_tasks} open overdue task(s), and an on-time "
+        f"completion rate of {on_time}."
+    )
+
+    document.add_heading("4. KPI Summary", level=1)
+    _add_docx_table(document, ["KPI", "Value", "Definition"], _kpi_detail_rows(model))
+
+    document.add_heading("5. Delivery Outcome", level=1)
     for chart in model.executive_charts:
         document.add_heading(chart.title, level=2)
-        _add_docx_table(document, ["Category", "Count"], [
-            (point.label, point.value) for point in chart.points
-        ])
+        _add_docx_table(
+            document,
+            ["Category", "Count"],
+            [(point.label, point.value) for point in chart.points],
+        )
+        if chart.note:
+            document.add_paragraph(f"Note: {chart.note}")
 
-    document.add_heading("4. Weekly Delivery Flow", level=1)
+    document.add_heading("6. Weekly Delivery Flow", level=1)
     weekly = _weekly_flow_frame(result)
-    _add_docx_table(document, list(weekly.columns), weekly.astype(object).values.tolist() if not weekly.empty else [])
-
-    document.add_heading("5. Source and Space Coverage", level=1)
     _add_docx_table(
         document,
-        ["Source", "Space", "Tasks", "History Coverage", "Notes"],
-        [(item.source_tool, item.source_space, item.task_count, item.history_mode, item.reason or "N/A")
-         for item in model.source_coverage],
+        list(weekly.columns),
+        weekly.astype(object).values.tolist() if not weekly.empty else [],
     )
 
-    document.add_heading("6. Workload and Individual Achievements", level=1)
+    document.add_heading("7. Source and Space Contribution", level=1)
+    source_space = _source_space_frame(result)
+    _add_docx_table(
+        document,
+        list(source_space.columns),
+        source_space.astype(object).values.tolist() if not source_space.empty else [],
+    )
+
+    document.add_heading("8. Workload and Individual Achievements", level=1)
     assignees = _assignee_frame(result)
     _add_docx_table(
         document,
@@ -506,34 +741,101 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
         assignees.astype(object).values.tolist() if not assignees.empty else [],
     )
 
-    document.add_heading("7. Bottlenecks and Recommendations", level=1)
+    document.add_heading("9. Process and Status Analysis", level=1)
+    status = _status_analysis_frame(result)
     _add_docx_table(
         document,
-        ["Status", "Assessment", "Evidence"],
-        [(item.status.value, item.strength, item.evidence) for item in result.bottlenecks],
+        list(status.columns),
+        status.astype(object).values.tolist() if not status.empty else [],
+    )
+
+    document.add_heading("10. Bottlenecks and Recommendations", level=1)
+    _add_docx_table(
+        document,
+        ["Status", "Assessment", "Tasks Passed Through", "Average Days", "Open Tasks",
+         "Open Overdue", "Evidence"],
+        [
+            (
+                item.status.value,
+                item.strength,
+                item.metrics.tasks_passed_through,
+                item.metrics.average_days,
+                item.metrics.open_tasks_now,
+                item.metrics.overdue_open_tasks,
+                "; ".join(item.evidence),
+            )
+            for item in result.bottlenecks
+        ],
     )
     _add_docx_table(
         document,
         ["Severity", "Recommendation", "Evidence", "Suggested Action"],
-        [(item.severity, item.title, item.evidence, item.suggested_action)
-         for item in result.recommendations],
+        _recommendation_rows(result),
     )
 
-    document.add_heading("8. Data Quality and Limitations", level=1)
+    document.add_heading("11. Task-Level Detail", level=1)
+    details = _task_detail_frame(result)
     _add_docx_table(
         document,
-        ["Flag", "Task Count"],
+        list(details.columns),
+        details.astype(object).values.tolist() if not details.empty else [],
+    )
+
+    document.add_heading("12. Workflow Events and Exceptions", level=1)
+    workflow = _workflow_events_frame(result)
+    _add_docx_table(
+        document,
+        list(workflow.columns),
+        workflow.astype(object).values.tolist() if not workflow.empty else [],
+    )
+    exceptions = _exception_frame(result)
+    _add_docx_table(
+        document,
+        list(exceptions.columns),
+        exceptions.astype(object).values.tolist() if not exceptions.empty else [],
+    )
+
+    document.add_heading("13. Data Quality and Limitations", level=1)
+    _add_docx_table(
+        document,
+        ["Source", "Space", "Unified Scope", "Source Available", "Tasks",
+         "History Coverage", "Notes", "Coverage Flags"],
+        [
+            (
+                item.source_tool,
+                item.source_space,
+                item.unified_project,
+                item.source_available,
+                item.task_count,
+                item.history_mode,
+                item.reason or "N/A",
+                "; ".join(item.flags) or "N/A",
+            )
+            for item in model.source_coverage
+        ],
+    )
+    _add_docx_table(
+        document,
+        ["Data Quality Flag", "Task Count"],
         [(item.flag, item.task_count) for item in model.data_quality],
     )
     document.add_paragraph(
-        "Source-specific fields remain unavailable when the connected platform does not provide them. "
-        "Unavailable values are not replaced with zero."
+        "Unavailable source fields are reported as N/A rather than being converted to zero. "
+        "Cross-source totals are calculated only from the tasks in the selected Spaces and "
+        "selected analysis period. Source-specific identifiers, statuses and Spaces remain "
+        "available in Task-Level Detail for auditability."
+    )
+
+    document.add_heading("14. Conclusion", level=1)
+    document.add_paragraph(
+        f"This Project Performance Analysis Report is limited to {scope_label} and the period "
+        f"{period}. It is intended to support project-level delivery review, workload follow-up "
+        "and evidence-based action planning."
     )
 
     stream = BytesIO()
     document.save(stream)
     return stream.getvalue()
-
 
 def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: str, scope_slug: str) -> None:
     if st.button("Start New Project Analysis", key="project_new_analysis"):
