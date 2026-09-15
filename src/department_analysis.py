@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -208,90 +209,345 @@ def _write_frame(ws, frame: pd.DataFrame, start_row=1, title=None):
     return row
 
 
+def _department_task_frame(result: dict) -> pd.DataFrame:
+    tasks = result["tasks"].copy()
+    if "Space" not in tasks.columns:
+        tasks.insert(0, "Space", result.get("space_name", "Unknown"))
+    return tasks
+
+
+def _department_status_column(tasks: pd.DataFrame) -> str:
+    return "Current Status" if "Current Status" in tasks.columns else "Status"
+
+
+def _department_status_rows(tasks: pd.DataFrame) -> pd.DataFrame:
+    column = _department_status_column(tasks)
+    if column not in tasks:
+        return pd.DataFrame(columns=["Status", "Tasks"])
+    return tasks[column].fillna("Unknown").value_counts().rename_axis("Status").reset_index(name="Tasks")
+
+
+def _cutoff_date(value) -> date:
+    if type(value) is date:
+        return value
+    if isinstance(value, date):
+        return value.date()
+    parsed = pd.to_datetime(value, errors="coerce")
+    return parsed.date() if not pd.isna(parsed) else date.today()
+
+
+def _department_due_rows(tasks: pd.DataFrame, cutoff) -> pd.DataFrame:
+    cutoff_date = _cutoff_date(cutoff)
+    if tasks.empty or "Open?" not in tasks:
+        return pd.DataFrame([("Open overdue", 0), ("Open within due date", 0), ("Open without due date", 0)],
+                            columns=["Due Status", "Tasks"])
+    open_mask = tasks["Open?"].eq(True)
+    due = tasks["Due Date"] if "Due Date" in tasks else pd.Series(pd.NaT, index=tasks.index)
+    due_dates = pd.to_datetime(due, errors="coerce").dt.date
+    overdue_days = pd.to_numeric(tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce")
+    overdue_mask = open_mask & (overdue_days.gt(0) | (due_dates.notna() & due_dates.lt(cutoff_date)))
+    return pd.DataFrame([
+        ("Open overdue", int(overdue_mask.sum())),
+        ("Open within due date", int((open_mask & due.notna() & ~overdue_mask).sum())),
+        ("Open without due date", int((open_mask & due.isna()).sum())),
+    ], columns=["Due Status", "Tasks"])
+
+
+def _department_space_breakdown(tasks: pd.DataFrame, cutoff=None) -> pd.DataFrame:
+    if tasks.empty:
+        return pd.DataFrame(columns=["Space", "Total Tasks", "Completed", "Open", "Open Overdue"])
+    cutoff_date = _cutoff_date(cutoff)
+    completed = tasks.get("Completed?", pd.Series(False, index=tasks.index)).eq(True)
+    open_mask = tasks.get("Open?", pd.Series(False, index=tasks.index)).eq(True)
+    due = tasks.get("Due Date", pd.Series(pd.NaT, index=tasks.index))
+    due_dates = pd.to_datetime(due, errors="coerce").dt.date
+    overdue_days = pd.to_numeric(tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce")
+    overdue = open_mask & (overdue_days.gt(0) | (due_dates.notna() & due_dates.lt(cutoff_date)))
+    grouped = tasks.assign(
+        _completed=completed, _open=open_mask, _overdue=overdue,
+    ).groupby("Space", dropna=False).agg(
+        **{"Total Tasks": ("Task ID", "count"), "Completed": ("_completed", "sum"),
+           "Open": ("_open", "sum"), "Open Overdue": ("_overdue", "sum")}
+    ).reset_index()
+    grouped["Space"] = grouped["Space"].fillna("Unknown")
+    return grouped
+
+
+def _department_weekly_frame(result: dict) -> pd.DataFrame:
+    weekly = result.get("weekly_flow", pd.DataFrame()).copy()
+    if weekly.empty:
+        return pd.DataFrame([{"Week Starting": result.get("cutoff"), "Tasks Created": 0, "Tasks Completed": 0}],
+                            columns=["Week Starting", "Tasks Created", "Tasks Completed"])
+    weekly = weekly.rename(columns={
+        "week_start": "Week Starting", "tasks_opened": "Tasks Created",
+        "tasks_completed": "Tasks Completed",
+    })
+    for name in ("Week Starting", "Tasks Created", "Tasks Completed"):
+        if name not in weekly:
+            weekly[name] = 0
+    return weekly[["Week Starting", "Tasks Created", "Tasks Completed"]]
+
+
+def _department_card(ws, index: int, title: str, value: Any) -> None:
+    row = 3 + (index // 5) * 4
+    start_col = 1 + (index % 5) * 2
+    ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=start_col + 1)
+    ws.merge_cells(start_row=row + 1, start_column=start_col, end_row=row + 2, end_column=start_col + 1)
+    header = ws.cell(row, start_col, title)
+    header.fill = PatternFill("solid", fgColor="17324D")
+    header.font = Font(color="FFFFFF", bold=True)
+    header.alignment = Alignment(horizontal="center")
+    value_cell = ws.cell(row + 1, start_col, "N/A" if value is None else value)
+    value_cell.font = Font(size=15, bold=True, color="1F2937")
+    value_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def _department_dashboard_chart(ws, chart_type, title, anchor, start_row, headers, rows):
+    _write_frame(ws, pd.DataFrame(rows, columns=headers), start_row=start_row)
+    if chart_type == "line":
+        chart = LineChart()
+        chart.add_data(Reference(ws, min_col=2, max_col=len(headers), min_row=start_row, max_row=start_row + len(rows)), titles_from_data=True)
+        chart.set_categories(Reference(ws, min_col=1, min_row=start_row + 1, max_row=start_row + len(rows)))
+    else:
+        chart = BarChart()
+        chart.type = "col"
+        chart.add_data(Reference(ws, min_col=2, max_col=len(headers), min_row=start_row, max_row=start_row + len(rows)), titles_from_data=True)
+        chart.set_categories(Reference(ws, min_col=1, min_row=start_row + 1, max_row=start_row + len(rows)))
+    chart.title = title
+    chart.style = 10
+    chart.height = 7
+    chart.width = 13
+    if len(headers) > 2:
+        chart.legend.position = "b"
+    ws.add_chart(chart, anchor)
+
+
 def department_excel(result: dict) -> bytes:
-    """Return the approved four-sheet department workbook."""
-    wb = Workbook()
-    wb.remove(wb.active)
-    summary = wb.create_sheet("Department Summary")
+    """Return the exact Department Performance workbook requested by the user."""
+    tasks = _department_task_frame(result)
+    kpi_values = result["kpis"].set_index("KPI")["Value"].to_dict()
+    total = len(tasks)
+    wip = int(tasks.get("WIP?", pd.Series(False, index=tasks.index)).eq(True).sum())
+    source_spaces = ", ".join(map(str, result.get("space_names", [result.get("space_name", "Unknown")])))
+    cutoff = result.get("cutoff")
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+
+    dashboard = workbook.create_sheet("Department_Executive_Dashboard")
+    dashboard.sheet_view.showGridLines = False
+    dashboard.merge_cells("A1:J1")
+    dashboard["A1"] = "Department Performance"
+    dashboard["A1"].fill = PatternFill("solid", fgColor="17324D")
+    dashboard["A1"].font = Font(color="FFFFFF", bold=True, size=16)
+    dashboard["A1"].alignment = Alignment(horizontal="center")
+    dashboard.merge_cells("A2:J2")
+    dashboard["A2"] = f"Department: {result['department_name']} | Source: {result.get('data_source', 'N/A')} | Cutoff: {cutoff}"
+    dashboard["A2"].font = Font(color="6B7280", italic=True)
+    dashboard["A2"].alignment = Alignment(horizontal="center")
+    for column in "ABCDEFGHIJ":
+        dashboard.column_dimensions[column].width = 16
+
+    cards = [
+        ("Total Tasks", total),
+        ("Completion Rate", None if pd.isna(kpi_values.get("Task Completion Rate (%)")) else f"{float(kpi_values['Task Completion Rate (%)']):.1f}%"),
+        ("On-Time Rate", None if pd.isna(kpi_values.get("On-Time Completion Rate (%)")) else f"{float(kpi_values['On-Time Completion Rate (%)']):.1f}%"),
+        ("Open Overdue", kpi_values.get("Open Overdue Tasks")),
+        ("WIP", wip),
+        ("Average Lead Time", None if pd.isna(kpi_values.get("Average Lead Time (hours)")) else f"{float(kpi_values['Average Lead Time (hours)']):.1f} h"),
+        ("Workflow Exception Rate", None if pd.isna(kpi_values.get("Workflow Exception Rate (%)")) else f"{float(kpi_values['Workflow Exception Rate (%)']):.1f}%"),
+    ]
+    for index, (title, value) in enumerate(cards):
+        _department_card(dashboard, index, title, value)
+
+    weekly = _department_weekly_frame(result)
+    statuses = _department_status_rows(tasks)
+    due = _department_due_rows(tasks, cutoff)
+    employees = result.get("employee_breakdown", pd.DataFrame()).copy()
+    employee_rows = [
+        [row.get("Assignee", "Unknown"), row.get("Total Assigned", 0),
+         row.get("Completed", 0), row.get("Open", 0)]
+        for row in employees.to_dict("records")
+    ] or [["No data", 0, 0, 0]]
+    spaces = _department_space_breakdown(tasks, cutoff)
+    space_rows = spaces[["Space", "Total Tasks"]].values.tolist() if not spaces.empty else [["No data", 0]]
+    _department_dashboard_chart(dashboard, "line", "Weekly Task Flow", "A11", 45,
+                                ["Week Starting", "Tasks Created", "Tasks Completed"], weekly.values.tolist())
+    _department_dashboard_chart(dashboard, "bar", "Task Distribution by Status", "I11", 45 + len(weekly) + 3,
+                                ["Status", "Tasks"], statuses.values.tolist() or [["No data", 0]])
+    _department_dashboard_chart(dashboard, "bar", "Open Tasks by Due Status", "A27", 45 + len(weekly) + len(statuses) + 6,
+                                ["Due Status", "Tasks"], due.values.tolist())
+    _department_dashboard_chart(dashboard, "bar", "Work Distribution by Employee", "I27", 45 + len(weekly) + len(statuses) + len(due) + 9,
+                                ["Employee", "Total Assigned", "Completed", "Open"], employee_rows)
+    _department_dashboard_chart(dashboard, "bar", "Work Distribution by Space", "A43", 45 + len(weekly) + len(statuses) + len(due) + len(employee_rows) + 12,
+                                ["Space", "Tasks"], space_rows)
+    _fit_department_sheets = [dashboard]
+
+    summary = workbook.create_sheet("Department Summary")
     info = pd.DataFrame([
         ("Department", result["department_name"]),
-        ("Source Spaces", ", ".join(map(str, result.get("space_names", [result["space_name"]])))),
-        ("Data Source", result.get("data_source", "ClickUp")), ("Analysis Period End", result["cutoff"]),
-        ("Analyzed Tasks", len(result["tasks"])),
+        ("Data Source", result.get("data_source", "N/A")),
+        ("Spaces", source_spaces),
+        ("Analysis Cutoff", cutoff),
+        ("Total Tasks", total),
     ], columns=["Field", "Value"])
-    end = _write_frame(summary, info, title="Department Performance Report")
-    _write_frame(summary, result["kpis"], start_row=end + 3, title="KPI Summary")
-    _write_frame(wb.create_sheet("Employee Breakdown"), result["employee_breakdown"])
-    _write_frame(wb.create_sheet("Task Details"), result["tasks"])
-    exceptions = wb.create_sheet("Exceptions & Data Quality")
-    attention_columns = [c for c in ["Task ID", "Task Name", "Assignee", "Current Status", "Priority", "Due Date", "Issue"] if c in result["attention"]]
-    end = _write_frame(exceptions, result["attention"][attention_columns], title="Workflow Exceptions and Tasks Requiring Attention")
-    end = _write_frame(exceptions, result["bottlenecks"], start_row=end + 3, title="Bottleneck Candidates")
-    _write_frame(exceptions, result["department_quality"], start_row=end + 3, title="Data Quality Issues")
-    for ws in wb.worksheets:
-        ws.freeze_panes = "A2"
-        for column_cells in ws.columns:
-            ws.column_dimensions[column_cells[0].column_letter].width = min(max(len(str(c.value or "")) for c in column_cells) + 2, 45)
-    stream = BytesIO(); wb.save(stream); return stream.getvalue()
+    end = _write_frame(summary, info, title="Department Summary")
+    _write_frame(summary, result["kpis"], start_row=end + 2, title="Department KPI Summary")
+
+    _write_frame(workbook.create_sheet("Employee Breakdown"), employees)
+    _write_frame(workbook.create_sheet("Space Breakdown"), spaces)
+    _write_frame(workbook.create_sheet("Task Details"), tasks)
+    _write_frame(workbook.create_sheet("Status Summary"), statuses)
+    _write_frame(workbook.create_sheet("Weekly Flow"), weekly)
+
+    overdue_mask = tasks.get("Open?", pd.Series(False, index=tasks.index)).eq(True) & pd.to_numeric(
+        tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce"
+    ).gt(0)
+    _write_frame(workbook.create_sheet("Overdue Tasks"), tasks.loc[overdue_mask])
+    _write_frame(workbook.create_sheet("Tasks Requiring Attention"), result.get("attention", pd.DataFrame()))
+    _write_frame(workbook.create_sheet("Bottlenecks"), result.get("bottlenecks", pd.DataFrame()))
+    exceptions = result.get("attention", pd.DataFrame()).copy()
+    if "Issue" in exceptions:
+        exceptions = exceptions[exceptions["Issue"].fillna("").astype(str).str.contains("Workflow", case=False)]
+    _write_frame(workbook.create_sheet("Workflow Exceptions"), exceptions)
+    _write_frame(workbook.create_sheet("Data Quality"), result.get("department_quality", pd.DataFrame()))
+
+    _write_frame(workbook.create_sheet("Analysis Context"), pd.DataFrame([
+        ("Analysis Level", "Department"),
+        ("Department", result["department_name"]),
+        ("Data Source", result.get("data_source", "N/A")),
+        ("Spaces", source_spaces),
+        ("Analysis Cutoff", cutoff),
+        ("Task Scope", "All collected tasks in the department Spaces."),
+        ("Subtask Treatment", "Visible in Task Details and total count; excluded from completion-rate numerator and denominator."),
+    ], columns=["Field", "Value"]))
+    _write_frame(workbook.create_sheet("Metric Definitions"), pd.DataFrame([
+        ("Total Tasks", "All tasks collected from the department Spaces."),
+        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks."),
+        ("On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."),
+        ("Open Overdue", "Open tasks with a due date before the analysis cutoff."),
+        ("WIP", "Open tasks currently in the department's in-progress workflow statuses."),
+        ("Average Lead Time", "Average completion date minus creation date for completed tasks."),
+        ("Workflow Exception Rate", "Tasks with recorded workflow exceptions divided by tasks with valid workflow coverage."),
+    ], columns=["Metric", "Definition"]))
+
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        sheet.sheet_view.showGridLines = False
+        for column_cells in sheet.columns:
+            width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 45)
+            sheet.column_dimensions[column_cells[0].column_letter].width = max(12, width)
+    return _save_workbook(workbook)
 
 
-def _display(value: Any) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)): return "Unavailable"
-    if isinstance(value, float): return f"{value:.1f}"
-    return str(value)
+def _save_workbook(workbook: Workbook) -> bytes:
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
 
 
-def _bottleneck_word_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Normalize Jira and ClickUp bottleneck columns for the Word report."""
-    normalized = frame.copy()
-    normalized = normalized.rename(columns={
-        "status": "Status",
-        "tasks_visited": "Tasks",
-        "elapsed_mean_hours": "Average Hours",
-        "elapsed_total_hours": "Total Hours",
-        "business_mean_hours": "Business Average Hours",
-        "business_total_hours": "Business Total Hours",
-        "open_tasks_currently_here": "Open Tasks",
-    })
-    columns = [
-        "Status", "Tasks", "Average Hours", "Total Hours",
-        "Business Average Hours", "Business Total Hours",
-        "Open Tasks", "Interpretation",
-    ]
-    return normalized[[column for column in columns if column in normalized]].copy()
+def _word_table(document: Document, frame: pd.DataFrame, columns: list[str]) -> None:
+    visible = frame[[column for column in columns if column in frame.columns]].copy()
+    if visible.empty or visible.shape[1] == 0:
+        document.add_paragraph("No items were identified in this section.")
+        return
+    table = document.add_table(rows=1, cols=len(visible.columns))
+    table.style = "Table Grid"
+    for index, name in enumerate(visible.columns):
+        table.rows[0].cells[index].text = name
+    for values in visible.itertuples(index=False, name=None):
+        cells = table.add_row().cells
+        for index, value in enumerate(values):
+            cells[index].text = _display(value)
 
 
 def department_word(result: dict) -> bytes:
+    """Create the exact Department Performance Word report requested by the user."""
+    tasks = _department_task_frame(result)
+    kpis = result["kpis"].set_index("KPI")["Value"].to_dict()
+    source_spaces = ", ".join(map(str, result.get("space_names", [result.get("space_name", "Unknown")])))
     document = Document()
     section = document.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.75)
-    document.add_heading("Department Performance Evaluation Report", 0)
-    source_spaces = ", ".join(map(str, result.get("space_names", [result["space_name"]])))
-    document.add_paragraph(f"Department: {result['department_name']} | {result.get('data_source', 'ClickUp')} Source Spaces: {source_spaces} | Cutoff: {result['cutoff']}")
+    document.add_heading("Department Performance Report", 0)
+    document.add_paragraph(
+        f"Department: {result['department_name']} | Source: {result.get('data_source', 'N/A')} | "
+        f"Spaces: {source_spaces} | Analysis cutoff: {result.get('cutoff', 'N/A')}"
+    )
+
     document.add_heading("Executive Summary", level=1)
-    completion = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Task Completion Rate (%)")
-    overdue = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Open Overdue Tasks", 0)
-    document.add_paragraph(f"The department scope contains {len(result['tasks'])} tasks. Completion rate is {_display(completion)}% and {int(overdue or 0)} open overdue task(s) require review.")
-    bottleneck_frame = _bottleneck_word_frame(result["bottlenecks"])
-    for heading, frame, columns in [
-        ("Department KPI Summary", result["kpis"], ["KPI", "Value", "Numerator", "Denominator"]),
-        ("Employee Workload Summary", result["employee_breakdown"], ["Assignee", "Total Assigned", "Completed", "Open", "WIP", "Overdue"]),
-        ("Bottleneck Candidates", bottleneck_frame, ["Status", "Tasks", "Average Hours", "Total Hours", "Business Average Hours", "Business Total Hours", "Open Tasks", "Interpretation"]),
-        ("Tasks Requiring Attention", result["attention"], ["Task ID", "Task Name", "Assignee", "Current Status", "Priority", "Issue"]),
-        ("Data Quality Notes", result["department_quality"], ["Issue Type", "Count", "Analysis Impact"]),
-    ]:
-        document.add_heading(heading, level=1)
-        visible = frame[[c for c in columns if c in frame]].copy()
-        if visible.empty:
-            document.add_paragraph("No items were identified in this section.")
-            continue
-        table = document.add_table(rows=1, cols=len(visible.columns)); table.style = "Table Grid"
-        for i, name in enumerate(visible.columns): table.rows[0].cells[i].text = name
-        for values in visible.itertuples(index=False, name=None):
-            cells = table.add_row().cells
-            for i, value in enumerate(values): cells[i].text = _display(value)
+    completion = kpis.get("Task Completion Rate (%)")
+    completion_text = "N/A" if completion is None or pd.isna(completion) else f"{float(completion):.1f}%"
+    overdue = kpis.get("Open Overdue Tasks", 0)
+    document.add_paragraph(
+        f"The department contains {len(tasks)} task(s) across the listed Spaces. "
+        f"Completion rate is {completion_text}; open overdue work is {_display(overdue)} task(s)."
+    )
+
+    document.add_heading("Department KPI Summary", level=1)
+    _word_table(document, result["kpis"], ["KPI", "Value", "Numerator", "Denominator"])
+
+    employees = result.get("employee_breakdown", pd.DataFrame()).copy()
+    document.add_heading("Employee Work Distribution and Workload Summary", level=1)
+    _word_table(document, employees, ["Assignee", "Total Assigned", "Completed", "Open", "WIP", "Overdue", "Workflow Exceptions"])
+
+    document.add_heading("Space / Project Comparison", level=1)
+    _word_table(document, _department_space_breakdown(tasks, result.get("cutoff")), ["Space", "Total Tasks", "Completed", "Open", "Open Overdue"])
+
+    document.add_heading("Department Bottlenecks", level=1)
+    bottleneck_frame = _bottleneck_word_frame(result.get("bottlenecks", pd.DataFrame()))
+    _word_table(document, bottleneck_frame, [
+        "Status", "Tasks", "Average Hours", "Total Hours", "Open Tasks", "Interpretation",
+    ])
+
+    document.add_heading("Tasks Requiring Attention", level=1)
+    _word_table(document, result.get("attention", pd.DataFrame()), [
+        "Task ID", "Task Name", "Assignee", "Current Status", "Priority", "Due Date", "Issue",
+    ])
+
+    overdue_mask = tasks.get("Open?", pd.Series(False, index=tasks.index)).eq(True) & pd.to_numeric(
+        tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce"
+    ).gt(0)
+    late_mask = tasks.get("Completed?", pd.Series(False, index=tasks.index)).eq(True)
+    if "Due Variance (days)" in tasks:
+        late_mask &= pd.to_numeric(tasks["Due Variance (days)"], errors="coerce").gt(0)
+    elif "On Time?" in tasks:
+        late_mask &= tasks["On Time?"].eq(False)
+    document.add_heading("Overdue and Late Tasks", level=1)
+    document.add_paragraph("Open Overdue Tasks")
+    _word_table(document, tasks.loc[overdue_mask], ["Task ID", "Task Name", "Space", "Assignee", "Priority", "Due Date", "Current Status"])
+    document.add_paragraph("Late Completed Tasks")
+    _word_table(document, tasks.loc[late_mask], ["Task ID", "Task Name", "Space", "Assignee", "Priority", "Due Date", "Completed"])
+
     document.add_heading("Recommendations", level=1)
-    if int(overdue or 0): document.add_paragraph("Prioritize open overdue tasks, confirm blockers and owners, and agree recovery dates.", style="List Bullet")
-    if not result["employee_breakdown"].empty: document.add_paragraph("Review workload distribution before reassigning work; task counts alone do not measure individual contribution.", style="List Bullet")
-    document.add_paragraph("Treat listed bottlenecks as candidates requiring management validation, not confirmed root causes.", style="List Bullet")
-    stream = BytesIO(); document.save(stream); return stream.getvalue()
+    if overdue_mask.any():
+        document.add_paragraph("Prioritize open overdue tasks and confirm an owner and recovery date.", style="List Bullet")
+    if not employees.empty:
+        document.add_paragraph("Review employee workload distribution together with task priority and due dates.", style="List Bullet")
+    if result.get("bottlenecks") is not None and not result["bottlenecks"].empty:
+        document.add_paragraph("Validate bottleneck candidates with the responsible process owners.", style="List Bullet")
+    if not overdue_mask.any() and employees.empty and (result.get("bottlenecks") is None or result["bottlenecks"].empty):
+        document.add_paragraph("No additional recommendations were generated from the available evidence.", style="List Bullet")
+
+    document.add_heading("Data Quality and Limitations", level=1)
+    _word_table(document, result.get("department_quality", pd.DataFrame()), ["Issue Type", "Count", "Analysis Impact"])
+    document.add_paragraph(
+        "The Department report aggregates all selected Spaces. Full task detail remains in Excel; "
+        "Word lists only tasks requiring operational follow-up, overdue tasks, and late completed tasks."
+    )
+
+    document.add_heading("Metric Definitions", level=1)
+    definitions = pd.DataFrame([
+        ("Total Tasks", "All tasks collected from the department Spaces."),
+        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks."),
+        ("On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."),
+        ("Open Overdue", "Open tasks with a due date before the analysis cutoff."),
+        ("WIP", "Open tasks currently in the department's in-progress workflow statuses."),
+        ("Average Lead Time", "Average completion date minus creation date for completed tasks."),
+        ("Workflow Exception Rate", "Tasks with recorded workflow exceptions divided by tasks with valid workflow coverage."),
+    ], columns=["Metric", "Definition"])
+    _word_table(document, definitions, ["Metric", "Definition"])
+
+    stream = BytesIO()
+    document.save(stream)
+    return stream.getvalue()
+

@@ -29,29 +29,22 @@ from .kpis import BottleneckCandidate, Recommendation
 from .models import TaskPeriodSnapshot
 
 
-SUMMARY_SHEET = "Executive Dashboard"
+SUMMARY_SHEET = "Company_Executive_Dashboard"
 BREAKDOWN_SHEET = "Project Summary"
 DETAILS_SHEET = "Task Details"
 QUALITY_SHEET = "Data Quality"
 COMPANY_SHEET_NAMES = (
     SUMMARY_SHEET,
-    "Task Metrics",
-    "Overall Summary",
-    "Process Context",
-    "Workflow Events",
     BREAKDOWN_SHEET,
-    "Deadline Summary",
-    "Weekly Flow",
+    DETAILS_SHEET,
     "Overdue Tasks",
     "Late Completed Tasks",
-    "Open Tasks",
+    "Bottlenecks",
+    "Workflow Exceptions",
+    "Weekly Flow",
     QUALITY_SHEET,
-    "Process Findings",
+    "Analysis Context",
     "Metric Definitions",
-    "By Assignee",
-    "By Task Type",
-    DETAILS_SHEET,
-    "Source Coverage",
 )
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
@@ -260,12 +253,7 @@ def write_company_excel(
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
 ) -> Path:
-    """Write a reference-style Company Performance analytical workbook.
-
-    This changes only the presentation/export layer.  The model, period rules,
-    parent/subtask rules, and KPI calculations are supplied by the existing
-    Company analysis pipeline and are not recalculated here.
-    """
+    """Write the exact Company Performance workbook requested by the user."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     snapshots = tuple(snapshots)
@@ -275,178 +263,223 @@ def write_company_excel(
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    summary = workbook.create_sheet(SUMMARY_SHEET)
-    summary.sheet_view.showGridLines = False
-    summary.merge_cells("A1:F1")
-    # Keep the existing Company export title stable while the body follows the
-    # richer reference-report layout.
-    summary["A1"] = "Company Performance — Company-Wide Scope"
-    summary["A1"].font = Font(bold=True, size=18, color="1F4E78")
-    summary["A2"] = "Company-wide Jira and ClickUp performance workbook"
-    summary["A3"] = f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}"
-    summary["A4"] = f"{model.in_period_task_count} task(s) collected across {len(model.source_coverage)} source space(s)"
-    for cell in (summary["A2"], summary["A3"], summary["A4"]):
-        cell.font = Font(italic=True, color="666666")
-    _write_excel_table(summary, [("Metric", "Value", "Definition")] + [
-        (card.title, card.value, card.supporting_text) for card in model.cards
-    ], start_row=6)
-    summary["A6"].fill = _HEADER_FILL
-    for row_index in range(7, 6 + len(model.cards) + 1):
-        summary.cell(row_index, 1).fill = _CARD_FILL
-        summary.cell(row_index, 1).font = Font(bold=True)
-    row = 8 + len(model.cards)
-    _write_excel_table(summary, [
-        ("Metric", "Value", "Definition"),
-        ("Total Tasks", str(model.kpis.total_tasks), "All in-period tasks, including visible subtasks."),
-        ("Completed Tasks", str(model.kpis.completed_tasks), "Parent/standalone tasks completed by period end."),
-        ("Completion Rate", "N/A" if model.kpis.completion_rate is None else f"{model.kpis.completion_rate:.1f}%", "Completed tasks divided by KPI-counted tasks."),
-        ("On-Time Rate", "N/A" if model.kpis.on_time_completion_rate is None else f"{model.kpis.on_time_completion_rate:.1f}%", "Completed tasks finished on or before due date."),
-        ("Open Overdue", str(model.kpis.overdue_open_tasks), "Open KPI-counted tasks past due date."),
-    ], start_row=row)
-    # Chart source blocks stay visible for auditability and make the workbook
-    # useful even when opened without the application dashboard.
-    chart_start = row + 8
-    project_counts = sorted(Counter(r["Unified Project"] for r in rows).items())
-    _write_excel_table(summary, [("Project", "Tasks")] + project_counts or [("Project", "Tasks"), ("N/A", 0)], start_row=chart_start)
-    status_start = chart_start + max(3, len(project_counts) + 3)
-    status_counts = Counter(r["Final Status"] for r in rows)
-    _write_excel_table(summary, [("Final Status", "Tasks")] + sorted(status_counts.items()) or [("Final Status", "Tasks"), ("N/A", 0)], start_row=status_start)
-    weekly_start = status_start + max(3, len(status_counts) + 3)
-    weekly_values = _weekly_rows(rows)
-    _write_excel_table(summary, [("Week Starting", "Tasks Created", "Tasks Completed")] + weekly_values or [("Week Starting", "Tasks Created", "Tasks Completed")], start_row=weekly_start)
-    _chart(summary, "bar", "Tasks by Project", "E6", min_col=1, max_row=chart_start + max(1, len(project_counts)))
-    _chart(summary, "bar", "Final Status Distribution", "E21", min_col=1, max_row=status_start + max(1, len(status_counts)))
-    _chart(summary, "line", "Weekly Task Flow", "E36", min_col=1, max_row=weekly_start + max(1, len(weekly_values)))
-    _fit_columns(summary)
-    summary.column_dimensions["A"].width = 28
-    _format_dashboard_sheet(summary)
+    dashboard = workbook.create_sheet("Company_Executive_Dashboard")
+    dashboard.sheet_view.showGridLines = False
+    dashboard.merge_cells("A1:K1")
+    dashboard["A1"] = "Company Performance"
+    dashboard["A1"].fill = PatternFill("solid", fgColor="17324D")
+    dashboard["A1"].font = Font(color="FFFFFF", bold=True, size=16)
+    dashboard["A1"].alignment = Alignment(horizontal="center")
+    dashboard.merge_cells("A2:K2")
+    dashboard["A2"] = f"Jira and ClickUp | Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}"
+    dashboard["A2"].font = Font(color="6B7280", italic=True)
+    dashboard["A2"].alignment = Alignment(horizontal="center")
+    for column in "ABCDEFGHIJK":
+        dashboard.column_dimensions[column].width = 16
 
-    task_headers = tuple(rows[0].keys()) if rows else ("Source Tool", "Task ID")
-    task_metrics = workbook.create_sheet("Task Metrics")
-    _write_excel_table(task_metrics, [task_headers] + [tuple(row.get(header) for header in task_headers) for row in rows])
-    _fit_columns(task_metrics)
+    for index, card in enumerate(model.cards):
+        _dashboard_start = 1 + (index % 6) * 2
+        _dashboard_end = _dashboard_start + 1
+        dashboard.merge_cells(start_row=3, start_column=_dashboard_start, end_row=3, end_column=_dashboard_end)
+        dashboard.merge_cells(start_row=4, start_column=_dashboard_start, end_row=5, end_column=_dashboard_end)
+        dashboard.cell(3, _dashboard_start, card.title).fill = _HEADER_FILL
+        dashboard.cell(3, _dashboard_start).font = _HEADER_FONT
+        dashboard.cell(3, _dashboard_start).alignment = Alignment(horizontal="center")
+        dashboard.cell(4, _dashboard_start, card.value)
+        dashboard.cell(4, _dashboard_start).font = Font(size=16, bold=True, color="1F2937")
+        dashboard.cell(4, _dashboard_start).alignment = Alignment(horizontal="center", vertical="center")
+    dashboard["A7"] = f"Tasks in scope: {model.in_period_task_count}"
+    dashboard["D7"] = f"Projects: {len({row['Unified Project'] for row in rows})}"
+    dashboard["G7"] = f"Source spaces: {len(model.source_coverage)}"
+    for cell in ("A7", "D7", "G7"):
+        dashboard[cell].font = Font(bold=True)
 
-    overall = workbook.create_sheet("Overall Summary")
-    _write_excel_table(overall, [("Metric", "Value", "Unit", "Interpretation Basis"),
-        ("Total Tasks", model.kpis.total_tasks, "tasks", "All in-period tasks including subtasks"),
-        ("Completed Tasks", model.kpis.completed_tasks, "tasks", "KPI-counted tasks at period end"),
-        ("Completion Rate", model.kpis.completion_rate, "%", "Completed / KPI-counted tasks"),
-        ("On-Time Rate", model.kpis.on_time_completion_rate, "%", "Completed with due date on time"),
-        ("Current WIP", model.kpis.current_wip, "tasks", "In Execution or In Review at period end"),
-        ("Open Overdue", model.kpis.overdue_open_tasks, "tasks", "Open task with due date before period end")])
-    _fit_columns(overall)
+    counted = [row for row in rows if row["Counted in KPIs"]]
+    project_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in counted:
+        project_groups[str(row["Unified Project"] or "Unknown")].append(row)
+    project_counts = sorted((name, len(items)) for name, items in project_groups.items())
+    project_comparison = []
+    for name, items in sorted(project_groups.items()):
+        completed = [item for item in items if item["Final Status"] == "Completed"]
+        with_due = [item for item in completed if item["Due Variance (days)"] is not None]
+        on_time = [item for item in with_due if item["Due Variance (days)"] <= 0]
+        overdue = [
+            item for item in items
+            if item["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
+            and item["Due Date"] is not None and item["Due Date"] < model.period_end
+        ]
+        project_comparison.append([
+            name, len(items), len(completed),
+            None if not items else round(len(completed) / len(items) * 100.0, 1),
+            None if not with_due else round(len(on_time) / len(with_due) * 100.0, 1),
+            len(overdue),
+        ])
+    project_counts = project_counts or [("No data", 0)]
+    project_comparison = project_comparison or [["No data", 0, 0, None, None, 0]]
 
-    context = workbook.create_sheet("Process Context")
-    _write_excel_table(context, [("Field", "Value"),
-        ("Analysis Level", "Company"), ("Source Systems", "Jira; ClickUp"),
-        ("Period From", model.period_start), ("Period To", model.period_end),
-        ("Task Scope", "Active lifetime overlaps selected period"),
-        ("Subtask Treatment", "Visible in total task count; excluded from parent KPI rates"),
-        ("Status Treatment", "Original status preserved; final status normalized")])
-    _fit_columns(context)
+    weekly = defaultdict(lambda: [0, 0])
+    for row in counted:
+        if row["Created Date"]:
+            week = row["Created Date"] - timedelta(days=row["Created Date"].weekday())
+            weekly[week][0] += 1
+        if row["Completion Date"]:
+            week = row["Completion Date"] - timedelta(days=row["Completion Date"].weekday())
+            weekly[week][1] += 1
+    weekly_rows = [[week, values[0], values[1]] for week, values in sorted(weekly.items())] or [[model.period_start, 0, 0]]
+    status_counts = sorted(Counter(row["Final Status"] for row in counted).items()) or [("No data", 0)]
 
-    events = workbook.create_sheet("Workflow Events")
-    _write_excel_table(events, [("Source Tool", "Unified Project", "Task ID", "Task Name", "Event Date", "From Status", "To Status", "Event Type")]
-                       + _workflow_rows(rows))
-    _fit_columns(events)
+    weekly_start = 55
+    _write_excel_table(dashboard, [["Week Starting", "Tasks Created", "Tasks Completed"], *weekly_rows], start_row=weekly_start)
+    status_start = weekly_start + len(weekly_rows) + 3
+    _write_excel_table(dashboard, [["Status", "Tasks"], *status_counts], start_row=status_start)
+    project_start = status_start + len(status_counts) + 3
+    _write_excel_table(dashboard, [["Project", "Tasks"], *project_counts], start_row=project_start)
+    comparison_start = project_start + len(project_counts) + 3
+    _write_excel_table(dashboard, [["Project", "Completion Rate", "On-Time Rate"], *[
+        [row[0], row[3], row[4]] for row in project_comparison
+    ]], start_row=comparison_start)
 
-    breakdown = workbook.create_sheet(BREAKDOWN_SHEET)
-    _write_excel_table(breakdown, [("Unified Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue")]
-                       + _project_rows(rows, model.period_end))
-    _fit_columns(breakdown)
+    weekly_last = weekly_start + len(weekly_rows)
+    line = LineChart()
+    line.title = "Weekly Task Flow"
+    line.style = 13
+    line.height = 7
+    line.width = 13
+    line.add_data(Reference(dashboard, min_col=2, max_col=3, min_row=weekly_start, max_row=weekly_last), titles_from_data=True)
+    line.set_categories(Reference(dashboard, min_col=1, min_row=weekly_start + 1, max_row=weekly_last))
+    line.legend.position = "b"
+    dashboard.add_chart(line, "A10")
 
-    deadline = workbook.create_sheet("Deadline Summary")
-    _write_excel_table(deadline, [("Deadline Status", "Task Count"),
-        ("Completed On Time", sum(1 for r in rows if r["Counted in KPIs"] and r["Due Variance (days)"] is not None and r["Due Variance (days)"] <= 0)),
-        ("Completed Late", sum(1 for r in rows if r["Counted in KPIs"] and r["Due Variance (days)"] is not None and r["Due Variance (days)"] > 0)),
-        ("Open Overdue", sum(1 for r in rows if r["Counted in KPIs"] and r["Final Status"] not in {"Completed", "Cancelled", "Rejected"} and r["Due Date"] and r["Due Date"] < model.period_end)),
-        ("No Due Date", sum(1 for r in rows if r["Due Date"] is None))])
-    _fit_columns(deadline)
+    status_last = status_start + len(status_counts)
+    status_chart = BarChart()
+    status_chart.type = "col"
+    status_chart.style = 10
+    status_chart.title = "Task Distribution by Status"
+    status_chart.height = 7
+    status_chart.width = 13
+    status_chart.add_data(Reference(dashboard, min_col=2, max_col=2, min_row=status_start, max_row=status_last), titles_from_data=True)
+    status_chart.set_categories(Reference(dashboard, min_col=1, min_row=status_start + 1, max_row=status_last))
+    dashboard.add_chart(status_chart, "I10")
 
-    weekly_sheet = workbook.create_sheet("Weekly Flow")
-    _write_excel_table(weekly_sheet, [("Week Starting", "Tasks Created", "Tasks Completed", "Net Flow", "Cumulative Net")]
-                       + _weekly_rows(rows))
-    _fit_columns(weekly_sheet)
+    project_last = project_start + len(project_counts)
+    project_chart = BarChart()
+    project_chart.type = "col"
+    project_chart.style = 10
+    project_chart.title = "Work Distribution by Project"
+    project_chart.height = 7
+    project_chart.width = 13
+    project_chart.add_data(Reference(dashboard, min_col=2, max_col=2, min_row=project_start, max_row=project_last), titles_from_data=True)
+    project_chart.set_categories(Reference(dashboard, min_col=1, min_row=project_start + 1, max_row=project_last))
+    dashboard.add_chart(project_chart, "A26")
 
-    overdue_rows = [r for r in rows if r["Counted in KPIs"] and r["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
-                    and r["Due Date"] and r["Due Date"] < model.period_end]
-    overdue = workbook.create_sheet("Overdue Tasks")
-    _write_excel_table(overdue, [("Unified Project", "Task ID", "Task Name", "Assignee", "Priority", "Due Date", "Final Status")]
-                       + [tuple(r[key] for key in ("Unified Project", "Task ID", "Task Name", "Assignee", "Priority", "Due Date", "Final Status")) for r in overdue_rows])
-    _fit_columns(overdue)
+    comparison_last = comparison_start + len(project_comparison)
+    comparison_chart = BarChart()
+    comparison_chart.type = "col"
+    comparison_chart.style = 10
+    comparison_chart.title = "Project Comparison"
+    comparison_chart.height = 7
+    comparison_chart.width = 13
+    comparison_chart.add_data(Reference(dashboard, min_col=2, max_col=3, min_row=comparison_start, max_row=comparison_last), titles_from_data=True)
+    comparison_chart.set_categories(Reference(dashboard, min_col=1, min_row=comparison_start + 1, max_row=comparison_last))
+    comparison_chart.legend.position = "b"
+    dashboard.add_chart(comparison_chart, "I26")
+    _fit_columns(dashboard)
 
-    late = workbook.create_sheet("Late Completed Tasks")
-    late_rows = [r for r in rows if r["Counted in KPIs"] and r["Final Status"] == "Completed" and r["Due Variance (days)"] is not None and r["Due Variance (days)"] > 0]
-    _write_excel_table(late, [("Unified Project", "Task ID", "Task Name", "Assignee", "Due Date", "Completion Date", "Due Variance (days)")]
-                       + [tuple(r[key] for key in ("Unified Project", "Task ID", "Task Name", "Assignee", "Due Date", "Completion Date", "Due Variance (days)")) for r in late_rows])
-    _fit_columns(late)
+    project_sheet = workbook.create_sheet("Project Summary")
+    _write_excel_table(project_sheet, [["Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"], *project_comparison])
+    _fit_columns(project_sheet)
 
-    open_tasks = workbook.create_sheet("Open Tasks")
-    open_rows = [r for r in rows if r["Counted in KPIs"] and r["Final Status"] not in {"Completed", "Cancelled", "Rejected"}]
-    _write_excel_table(open_tasks, [("Unified Project", "Task ID", "Task Name", "Assignee", "Priority", "Final Status", "Due Date")]
-                       + [tuple(r[key] for key in ("Unified Project", "Task ID", "Task Name", "Assignee", "Priority", "Final Status", "Due Date")) for r in open_rows])
-    _fit_columns(open_tasks)
-
-    quality = workbook.create_sheet(QUALITY_SHEET)
-    _write_excel_table(quality, [("Flag", "Task Count")] + [
-        (item.flag, item.task_count) for item in model.data_quality
-    ])
-    row = quality.max_row + 2
-    _write_excel_table(quality, [("Source Tool", "History Mode", "Limitation / Reason")] + [
-        (item.source_tool, item.history_mode, item.reason or "N/A")
-        for item in model.source_coverage
-        if not item.source_available or item.history_mode.casefold() != "complete" or item.reason
-    ], start_row=row)
-    _fit_columns(quality)
-
-    findings = workbook.create_sheet("Process Findings")
-    _write_excel_table(findings, [("Type", "Severity", "Finding", "Evidence / Action")]
-                       + [("Bottleneck", item.strength, item.status.value, item.evidence) for item in bottlenecks]
-                       + [("Recommendation", item.severity, item.title, item.suggested_action) for item in recommendations])
-    _fit_columns(findings)
-
-    definitions = workbook.create_sheet("Metric Definitions")
-    _write_excel_table(definitions, [("Metric", "Definition", "Scope / Exclusions"),
-        ("Total Tasks", "Count of all in-period task rows.", "Subtasks remain visible."),
-        ("Completion Rate", "Completed / KPI-counted tasks × 100.", "Subtasks and container parents excluded from rate."),
-        ("On-Time Rate", "Completed tasks finished on or before due date / completed tasks with due date.", "Tasks without due dates excluded."),
-        ("Open Overdue", "Open tasks with due date before period end.", "Cancelled, rejected, and completed excluded."),
-        ("Current WIP", "Tasks in In Execution or In Review at period end.", "Unknown status excluded.")])
-    _fit_columns(definitions)
-
-    by_assignee = workbook.create_sheet("By Assignee")
-    _write_excel_table(by_assignee, [("Assignee", "Total Tasks", "Completed", "Completion Rate", "Open Overdue")]
-                       + _project_rows(rows, model.period_end, key="Assignee"))
-    _fit_columns(by_assignee)
-
-    by_type = workbook.create_sheet("By Task Type")
-    _write_excel_table(by_type, [("Task Type", "Total Tasks", "Completed", "Completion Rate", "Open Overdue")]
-                       + _project_rows(rows, model.period_end, key="Parent Classification"))
-    _fit_columns(by_type)
-
-    details = workbook.create_sheet(DETAILS_SHEET)
-    detail_headers = ("Source Tool", "Source Space", "Task ID", "Task Name", "Unified Project", "Original Status", "Final Status",
-                      "Assignee Group", "Assignees", "Priority", "Created Date", "Due Date", "Actual Start Date", "Final Completion Date",
-                      "Workflow Events", "Exception Events", "Data Quality Flags", "Parent ID", "Parent Classification", "Is Subtask",
-                      "In Analysis Period", "Counted in KPIs", "Exclusion Reason")
-    _write_excel_table(details, [detail_headers] + [tuple(getattr(item, field) for field in (
-        "source_tool", "source_space", "task_id", "task_name", "unified_project", "original_status", "final_status", "assignee_group",
-        "assignees", "priority", "created_date", "due_date", "actual_start_date", "final_completion_date", "workflow_events",
-        "exception_events", "data_quality_flags", "parent_id", "parent_classification", "is_subtask", "in_analysis_period",
-        "counted_in_kpis", "exclusion_reason")) for item in model.task_details])
+    detail_headers = tuple(rows[0].keys()) if rows else ("Source Tool", "Task ID")
+    details = workbook.create_sheet("Task Details")
+    _write_excel_table(details, [detail_headers] + [tuple(row.get(header) for header in detail_headers) for row in rows])
     _fit_columns(details)
 
-    coverage = workbook.create_sheet("Source Coverage")
-    _write_excel_table(coverage, [("Source Tool", "Source Space", "Unified Project", "Available", "Tasks in Analysis Period", "History Mode", "Reason", "Flags")] + [
-        (item.source_tool, item.source_space, item.unified_project, item.source_available, item.task_count,
-         item.history_mode, item.reason, item.flags) for item in model.source_coverage])
-    _fit_columns(coverage)
+    overdue_rows = [
+        row for row in rows
+        if row["Counted in KPIs"] and row["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
+        and row["Due Date"] is not None and row["Due Date"] < model.period_end
+    ]
+    late_rows = [
+        row for row in rows
+        if row["Counted in KPIs"] and row["Final Status"] == "Completed"
+        and row["Due Variance (days)"] is not None and row["Due Variance (days)"] > 0
+    ]
+    exception_rows = [
+        [row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"], row["Source Space"], event]
+        for row in rows for event in row["Exception Events"] or ()
+    ] or [["No workflow exception", "", "", "", "", ""]]
+    bottleneck_rows = [
+        [item.status.value, item.strength, "; ".join(item.evidence),
+         item.metrics.average_days, item.metrics.open_tasks_now, item.metrics.overdue_open_tasks]
+        for item in bottlenecks
+    ] or [["No candidate", "N/A", "No bottleneck candidate was identified.", None, 0, 0]]
 
+    _write_excel_table(
+        workbook.create_sheet("Overdue Tasks"),
+        [["Project", "Task ID", "Task Name", "Source", "Space", "Assignee", "Priority", "Due Date", "Final Status"]] + [
+            [row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"], row["Source Space"],
+             row["Assignee"], row["Priority"], row["Due Date"], row["Final Status"]]
+            for row in overdue_rows
+        ],
+    )
+    _write_excel_table(
+        workbook.create_sheet("Late Completed Tasks"),
+        [["Project", "Task ID", "Task Name", "Source", "Space", "Assignee", "Due Date", "Completion Date", "Due Variance (days)"]] + [
+            [row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"], row["Source Space"],
+             row["Assignee"], row["Due Date"], row["Completion Date"], row["Due Variance (days)"]]
+            for row in late_rows
+        ],
+    )
+    _write_excel_table(workbook.create_sheet("Bottlenecks"), [["Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"], *bottleneck_rows])
+    _write_excel_table(workbook.create_sheet("Workflow Exceptions"), [["Project", "Task ID", "Task Name", "Source", "Space", "Exception"], *exception_rows])
+    _write_excel_table(
+        workbook.create_sheet("Weekly Flow"),
+        [["Week Starting", "Tasks Created", "Tasks Completed"]] + weekly_rows,
+    )
+
+    quality = workbook.create_sheet("Data Quality")
+    _write_excel_table(quality, [["Data Quality Flag", "Task Count"]] + [
+        [item.flag, item.task_count] for item in model.data_quality
+    ] or [["Data Quality Flag", "Task Count"], ["No findings", 0]])
+    coverage_start = quality.max_row + 2
+    _write_excel_table(quality, [["Source", "Space", "Project", "Tasks", "History Coverage", "Notes"]] + [
+        [item.source_tool, item.source_space, item.unified_project, item.task_count, item.history_mode, item.reason or "N/A"]
+        for item in model.source_coverage
+    ], start_row=coverage_start)
+    _fit_columns(quality)
+
+    context = workbook.create_sheet("Analysis Context")
+    _write_excel_table(context, [["Field", "Value"],
+        ["Analysis Level", "Company"],
+        ["Source Systems", "Jira and ClickUp"],
+        ["Analysis Period", f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"],
+        ["Task Scope", "All collected source Spaces unified into Company Performance."],
+        ["Deduplication", "Distinct Source Tool + Task ID."],
+        ["Subtasks", "Visible in Task Details; excluded from KPI rates."],
+    ])
+    _fit_columns(context)
+
+    definitions = workbook.create_sheet("Metric Definitions")
+    _write_excel_table(definitions, [["Metric", "Definition"],
+        ["Total Tasks", "All tasks in the selected Company scope; subtasks remain visible."],
+        ["Completed", "Tasks with normalized Completed status at period end."],
+        ["Completion Rate", "Completed tasks divided by KPI-counted tasks."],
+        ["On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."],
+        ["Open Overdue", "Open tasks with a due date earlier than the period end."],
+        ["WIP", "Open tasks currently in In Execution or In Review."],
+        ["Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."],
+        ["Average Execution Time", "Average completion date minus actual start date for completed tasks where both dates are known."],
+        ["Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."],
+    ])
+    _fit_columns(definitions)
+
+    for sheet in workbook.worksheets:
+        sheet.sheet_view.showGridLines = False
     if tuple(workbook.sheetnames) != COMPANY_SHEET_NAMES:
         raise AssertionError("Company Performance workbook sheet order changed unexpectedly")
     workbook.save(output)
     return output
-
 
 def write_company_raw_data(snapshots: Iterable[TaskPeriodSnapshot], output_path: str | Path) -> Path:
     """Write audit/raw task fields to a separate workbook, never the executive file."""
@@ -572,138 +605,150 @@ def write_company_word_report(
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
 ) -> Path:
-    """Create the Company report in the same evidence-led shape as the reference."""
+    """Create the exact Company Performance Word report requested by the user."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    snapshots = tuple(snapshots)
     bottlenecks = tuple(bottlenecks)
     recommendations = tuple(recommendations)
-    snapshots = tuple(snapshots)
-    task_rows = _task_rows(model, snapshots)
+    rows = _task_rows(model, snapshots)
     document = Document()
     _configure_document(document)
-    title = document.add_heading("Company Performance Analysis", 0)
+    title = document.add_heading("Company Performance Report", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle = document.add_paragraph("Company-wide analysis across all collected Jira projects and ClickUp spaces")
+    subtitle = document.add_paragraph("Company-wide Jira and ClickUp analysis")
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for run in subtitle.runs:
-        run.font.name = "Arial"
-        run.font.size = Pt(11)
-        run.font.color.rgb = RGBColor(89, 89, 89)
     _add_table(document, ("Report Field", "Value"), [
         ("Analysis Level", "Company"),
-        ("Source Systems", "Jira and ClickUp"),
-        ("Observation Period", f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"),
+        ("Data Sources", "Jira and ClickUp"),
+        ("Analysis Period", f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"),
         ("Tasks in Scope", model.in_period_task_count),
-        ("Tasks Counted in KPI Rates", model.kpis.total_tasks),
     ])
 
-    document.add_heading("1. Executive Summary", level=1)
+    document.add_heading("Company Executive Summary", level=1)
     document.add_paragraph(
-        f"The analysis includes {_display(model.in_period_task_count)} task(s) within the selected analysis period, "
-        f"of which {_display(model.kpis.total_tasks)} are included in headline KPI calculations. "
-        f"Completion rate: {_display(model.kpis.completion_rate)}%; current WIP: {_display(model.kpis.current_wip)}; "
-        f"open overdue work: {_display(model.kpis.overdue_open_tasks)}. The report combines all accessible "
-        f"projects and source spaces under one Company view; it does not evaluate a space as a separate analysis level."
+        f"The analysis covers {model.in_period_task_count} task(s) from the selected Jira projects and ClickUp Spaces. "
+        f"{model.kpis.completed_tasks} task(s) are completed, completion rate is {_display(model.kpis.completion_rate)}, "
+        f"on-time rate is {_display(model.kpis.on_time_completion_rate)}, WIP is {model.kpis.current_wip}, "
+        f"and {model.kpis.overdue_open_tasks} open overdue task(s) need attention."
     )
 
-    document.add_heading("2. Scope and Analysis Period", level=1)
-    document.add_paragraph(
-        "Tasks are included when their active period overlaps the selected analysis period. "
-        "Headline KPIs use the final task status at the end of that period. The selected From/To dates are "
-        "preserved in the report so the same period can be reproduced in Dashboard, Excel, and Word."
-    )
-
-    document.add_heading("3. Data Sources and Coverage", level=1)
-    _add_table(document, ("Source", "Space", "Unified Project", "Tasks in Analysis Period", "History Coverage", "Notes"), [
+    document.add_heading("Data Sources and Analysis Scope", level=1)
+    _add_table(document, ("Source", "Space", "Project", "Tasks", "History Coverage", "Notes"), [
         (item.source_tool, item.source_space, item.unified_project, item.task_count,
-         item.history_mode, item.reason) for item in model.source_coverage
-    ])
-
-    document.add_heading("4. Methodology and Assignment Rules", level=1)
-    _add_table(document, ("Step", "Company-level rule"), [
-        ("Collection", "Read all accessible Jira projects and ClickUp spaces."),
-        ("Grouping", "Keep the original source space and group records under the unified Company view."),
-        ("Period", "Keep only tasks whose active lifetime overlaps the selected From/To period."),
-        ("Status", "Preserve original status and expose a normalized final status."),
-        ("Hierarchy", "Keep parent/subtask relationships; show subtasks in totals but exclude them from KPI rates."),
+         item.history_mode, item.reason or "N/A")
+        for item in model.source_coverage
     ])
     document.add_paragraph(
-        "Statuses are normalised across Jira and ClickUp. Actual Start is the first entry into In Progress; "
-        "a direct completion without that event remains N/A and is flagged. Multiple assignees are reported "
-        "as a separate group, while the underlying names remain available in Task Details. "
-        "Parent tasks and subtasks are identified from the source parent relationship; subtasks remain visible "
-        "in the task count but are excluded from parent-level performance KPIs."
+        "The Company view combines Jira and ClickUp records, removes duplicate Source Tool + Task ID pairs, "
+        "and keeps original source and Space identifiers available in Excel Task Details."
     )
 
-    document.add_heading("5. Headline KPIs", level=1)
-    _add_table(document, ("KPI", "Value", "Definition"), [
-        (card.title, card.value, _compact_kpi_definition(card.title, card.supporting_text)) for card in model.cards
+    document.add_heading("Company KPI Summary", level=1)
+    _add_table(document, ("KPI", "Value"), [
+        ("Total Tasks", model.kpis.total_tasks),
+        ("Completed", model.kpis.completed_tasks),
+        ("Completion Rate", _display(model.kpis.completion_rate)),
+        ("On-Time Rate", _display(model.kpis.on_time_completion_rate)),
+        ("Open Overdue", model.kpis.overdue_open_tasks),
+        ("WIP", model.kpis.current_wip),
+        ("Average Lead Time", _display(model.kpis.average_lead_time_days)),
+        ("Average Execution Time", _display(model.kpis.average_execution_duration_days)),
     ])
 
-    document.add_heading("6. Delivery Outcome", level=1)
-    delivery = next(chart for chart in model.executive_charts if chart.key == "delivery-outcome")
-    _add_table(document, ("Final Status", "Task Count"), [(point.label, point.value) for point in delivery.points])
-    if delivery.note:
-        document.add_paragraph(delivery.note)
+    counted = [item for item in snapshots if item.counted_in_kpis]
+    projects: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
+    departments: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
+    for item in counted:
+        projects[item.task.unified_project or "Unknown"].append(item)
+        departments[item.task.department or "Unknown"].append(item)
 
-    document.add_heading("7. Workload and Overdue Work", level=1)
-    workload = next(chart for chart in model.executive_charts if chart.key == "workload-by-project")
-    overdue = next(chart for chart in model.executive_charts if chart.key == "overdue-by-priority")
-    _add_table(document, ("Unified Project", "Task Count"), [(point.label, point.value) for point in workload.points])
-    _add_table(document, ("Overdue Priority", "Open Task Count"), [(point.label, point.value) for point in overdue.points])
-    _add_table(document, ("Unified Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
-               _project_rows(task_rows, model.period_end))
-
-    document.add_heading("8. Workflow Efficiency", level=1)
-    _add_table(document, ("Metric", "Value"), [
-        ("Average Time to Start (days)", model.kpis.average_time_to_start_days),
-        ("Average Execution Duration (days)", model.kpis.average_execution_duration_days),
-        ("Average Lead Time (days)", model.kpis.average_lead_time_days),
-        ("On-Time Completion Rate", None if model.kpis.on_time_completion_rate is None else f"{model.kpis.on_time_completion_rate:.1f}%"),
+    document.add_heading("Department Performance Comparison", level=1)
+    department_rows = []
+    for name, items in sorted(departments.items()):
+        completed = [item for item in items if item.status_at_period_end.value == "Completed"]
+        with_due = [item for item in completed if item.task.due_date and item.final_completion_date]
+        on_time = [item for item in with_due if item.final_completion_date <= item.task.due_date]
+        overdue = [
+            item for item in items
+            if item.status_at_period_end.is_open and item.task.due_date and item.task.due_date < item.period_end
+        ]
+        department_rows.append((
+            name, len(items), len(completed),
+            f"{len(completed) / len(items) * 100.0:.1f}%" if items else "N/A",
+            f"{len(on_time) / len(with_due) * 100.0:.1f}%" if with_due else "N/A",
+            len(overdue),
+        ))
+    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"), department_rows or [
+        ("Unknown", 0, 0, "N/A", "N/A", 0)
     ])
 
-    document.add_heading("9. Bottleneck Candidates", level=1)
-    document.add_paragraph("Candidates indicate evidence requiring follow-up; they do not confirm a root cause.")
-    _add_table(document, ("Status", "Assessment", "Evidence"), [
-        (item.status.value, item.strength, item.evidence) for item in bottlenecks
+    document.add_heading("Company-wide Bottlenecks", level=1)
+    _add_table(document, ("Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"), [
+        (item.status.value, item.strength, "; ".join(item.evidence),
+         item.metrics.average_days, item.metrics.open_tasks_now, item.metrics.overdue_open_tasks)
+        for item in bottlenecks
+    ] or [("N/A", "No candidate", "No bottleneck candidate was identified.", "N/A", 0, 0)])
+
+    overdue_rows = [
+        (row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"],
+         row["Source Space"], row["Assignee"], row["Due Date"])
+        for row in rows
+        if row["Counted in KPIs"] and row["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
+        and row["Due Date"] is not None and row["Due Date"] < model.period_end
+    ]
+    document.add_heading("Key Risks and Overdue Tasks", level=1)
+    _add_table(document, ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date"), overdue_rows or [
+        ("N/A", "N/A", "No open overdue tasks", "", "", "", "")
     ])
 
-    document.add_heading("10. Data Quality and Limitations", level=1)
+    document.add_heading("Workflow Exceptions", level=1)
+    exception_rows = [
+        (row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"], event)
+        for row in rows for event in row["Exception Events"] or ()
+    ]
+    _add_table(document, ("Project", "Task ID", "Task", "Source", "Exception"), exception_rows or [
+        ("N/A", "N/A", "No workflow exceptions", "", "")
+    ])
+
+    document.add_heading("Top Departments Requiring Attention", level=1)
+    attention_rows = [
+        row for row in department_rows
+        if row[5] > 0 or row[3] == "N/A" or float(row[3].rstrip("%")) < 70.0
+    ]
+    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"), attention_rows or [
+        ("N/A", 0, 0, "N/A", "N/A", 0)
+    ])
+
+    document.add_heading("Executive Recommendations", level=1)
+    _add_table(document, ("Severity", "Recommendation", "Evidence", "Suggested Action"), [
+        (item.severity, item.title, item.evidence, item.suggested_action)
+        for item in recommendations
+    ] or [("N/A", "No recommendations generated", "", "")])
+
+    document.add_heading("Data Quality and Coverage Limitations", level=1)
     _add_table(document, ("Data Quality Flag", "Task Count"), [
         (item.flag, item.task_count) for item in model.data_quality
+    ] or [("No findings", 0)])
+    document.add_paragraph(
+        "History-dependent workflow metrics remain unavailable where the source does not provide complete history. "
+        "Department labels are shown from the source record when available; records without a reliable department "
+        "label remain under Unknown. Unavailable values are not converted to zero."
+    )
+
+    document.add_heading("Metric Definitions", level=1)
+    _add_table(document, ("Metric", "Definition"), [
+        ("Total Tasks", "All tasks in the selected Company scope; subtasks remain visible."),
+        ("Completed", "Tasks with normalized Completed status at period end."),
+        ("Completion Rate", "Completed tasks divided by KPI-counted tasks."),
+        ("On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."),
+        ("Open Overdue", "Open tasks with a due date earlier than the analysis period end."),
+        ("WIP", "Open tasks currently in In Execution or In Review."),
+        ("Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."),
+        ("Average Execution Time", "Average completion date minus actual start date for completed tasks with both dates known."),
+        ("Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."),
     ])
-    document.add_paragraph(
-        "Historical status metrics are excluded when history is unavailable for a past period end. "
-        "A current-status fallback is permitted only for a collection-date snapshot and is flagged."
-    )
-
-    document.add_heading("11. Recommendations and Next Steps", level=1)
-    _add_table(document, ("Severity", "Recommendation", "Evidence", "Suggested Action"), [
-        (item.severity, item.title, item.evidence, item.suggested_action) for item in recommendations
-    ])
-
-    document.add_heading("12. Workbook Architecture and Data Roles", level=1)
-    document.add_paragraph(
-        "The Excel output is organized for both executive reading and auditability. Executive Dashboard and "
-        "Overall Summary contain the headline view; Project Summary, By Assignee, and By Task Type provide "
-        "Company-level breakdowns; Task Metrics, Task Details, Workflow Events, and Source Coverage preserve "
-        "the evidence used to explain the results; Deadline Summary, Weekly Flow, Overdue Tasks, and Late "
-        "Completed Tasks support operational follow-up."
-    )
-    document.add_heading("13. Interpretation Rules and Handoff Objective", level=1)
-    document.add_paragraph(
-        "Use the Company dashboard and exported files to answer: What is the overall state of the company-wide "
-        "workload across Jira and ClickUp during the selected period? Counts in the dashboard, Excel, and Word "
-        "must match because each output is generated from the same Company model and the same selected task set. "
-        "Subtasks may increase the visible Total Tasks count, but they do not independently increase completion "
-        "or completion-rate numerators and denominators."
-    )
-
-    for paragraph in document.paragraphs:
-        if paragraph.style.name.startswith("Heading"):
-            paragraph.paragraph_format.keep_with_next = True
-        if paragraph.text.startswith("6. Delivery Outcome"):
-            paragraph.paragraph_format.page_break_before = True
 
     document.save(output)
     return output
+

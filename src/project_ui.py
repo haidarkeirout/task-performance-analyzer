@@ -1070,143 +1070,220 @@ def _format_project_average(value: float | None, unit: str) -> str:
 
 
 def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> bytes:
+    """Build the exact Project Performance workbook requested by the user."""
     model = result.model
-    period = _project_period_label(result)
-    summary_values = _project_summary_values(result.snapshots)
+    values = _project_summary_values(result.snapshots)
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    dashboard = workbook.create_sheet("Executive_Dashboard")
+    dashboard = workbook.create_sheet("Project_Executive_Dashboard")
     dashboard.sheet_view.showGridLines = False
     dashboard.merge_cells("A1:K1")
-    dashboard["A1"] = "Project Performance Analysis"
+    dashboard["A1"] = "Project Performance"
     dashboard["A1"].fill = PatternFill("solid", fgColor="17324D")
     dashboard["A1"].font = Font(color="FFFFFF", bold=True, size=16)
     dashboard["A1"].alignment = Alignment(horizontal="center")
     dashboard.merge_cells("A2:K2")
-    dashboard["A2"] = f"Scope: {scope_label} | Analysis period: {_project_period_token(result)}"
+    dashboard["A2"] = f"Project: {scope_label} | Analysis period: {_project_period_token(result)}"
     dashboard["A2"].font = Font(color="6B7280", italic=True)
     dashboard["A2"].alignment = Alignment(horizontal="center")
-    dashboard.column_dimensions["A"].width = 18
-    for column in "BCDEFGHIJK":
-        dashboard.column_dimensions[column].width = 14
+    for column in "ABCDEFGHIJK":
+        dashboard.column_dimensions[column].width = 16
 
-    card_values = [
-        ("Total Tasks", summary_values["total_tasks"]),
-        ("Completed", summary_values["completed_tasks"]),
-        ("Completion Rate", f'{summary_values["completion_rate"]:.1f}%' if summary_values["completion_rate"] is not None else "N/A"),
-        ("On-Time Rate", f'{summary_values["on_time_completion_rate"]:.1f}%' if summary_values["on_time_completion_rate"] is not None else "N/A"),
-        ("Open Overdue", summary_values["overdue_open_tasks"]),
-        ("WIP Tasks", summary_values["wip_tasks"]),
+    cards = [
+        ("Total Tasks", values["total_tasks"]),
+        ("Completed", values["completed_tasks"]),
+        ("Completion Rate", "N/A" if values["completion_rate"] is None else f'{values["completion_rate"]:.1f}%'),
+        ("On-Time Rate", "N/A" if values["on_time_completion_rate"] is None else f'{values["on_time_completion_rate"]:.1f}%'),
+        ("Open Overdue", values["overdue_open_tasks"]),
+        ("WIP", values["wip_tasks"]),
+        ("Average Lead Time", _format_project_average(_project_management_averages(result)["Avg Lead Time (Completed)"], "h")),
     ]
-    for index, (title, value) in enumerate(card_values):
-        _dashboard_card(dashboard, 1 + index * 2, title, value)
-
-    management_averages = _project_management_averages(result)
-    secondary = [
-        ("Avg Execution Time (Completed)", management_averages["Avg Execution Time (Completed)"], "h"),
-        ("Avg Lead Time (Completed)", management_averages["Avg Lead Time (Completed)"], "h"),
-        ("Avg Time to Start", management_averages["Avg Time to Start"], "h"),
-        ("Avg Late Completion", management_averages["Avg Late Completion"], "days"),
-        ("Avg Open Overdue", management_averages["Avg Open Overdue"], "days"),
-        ("Avg Due Variance (Completed)", management_averages["Avg Due Variance (Completed)"], "days"),
-    ]
-    for index, (title, value, unit) in enumerate(secondary):
-        start_col = 1 + index * 2
-        dashboard.merge_cells(start_row=7, start_column=start_col, end_row=7, end_column=start_col + 1)
-        dashboard.merge_cells(start_row=8, start_column=start_col, end_row=8, end_column=start_col + 1)
-        dashboard.cell(7, start_col, title).fill = _HEADER_FILL
-        dashboard.cell(7, start_col).font = _HEADER_FONT
-        display = _format_project_average(value, unit)
-        dashboard.cell(8, start_col, display)
-        dashboard.cell(7, start_col).alignment = Alignment(horizontal="center")
-        dashboard.cell(8, start_col).alignment = Alignment(horizontal="center")
-    dashboard["A11"] = f"Completed late: {summary_values['total_tasks'] - summary_values['completed_tasks'] - summary_values['rejected_tasks'] if False else sum(1 for item in result.snapshots if item.status_at_period_end.value == 'Completed' and item.task.due_date and item.final_completion_date and item.final_completion_date > item.task.due_date)}"
-    dashboard["D11"] = f"Status unavailable: {summary_values['unknown_status_tasks']}"
-    dashboard["A11"].font = Font(bold=True)
-    dashboard["D11"].font = Font(bold=True)
+    for index, (title, value) in enumerate(cards):
+        if index < 6:
+            _dashboard_card(dashboard, 1 + index * 2, title, value)
+        else:
+            dashboard.merge_cells(start_row=7, start_column=1, end_row=7, end_column=2)
+            dashboard.merge_cells(start_row=8, start_column=1, end_row=8, end_column=2)
+            dashboard["A7"] = title
+            dashboard["A7"].fill = _HEADER_FILL
+            dashboard["A7"].font = _HEADER_FONT
+            dashboard["A8"] = value
 
     weekly_headers, weekly_rows = _project_weekly_rows(result)
     status_counts = _project_status_counts(result.snapshots)
-    status_rows = [[status, status_counts.get(status, 0)] for status in sorted(status_counts)]
-    if not status_rows:
-        status_rows = [["No data", 0]]
-    due_rows = [
-        ["Open overdue", next((row[1] for row in _project_deadline_rows(result)[1] if row[0] == "Open overdue"), 0)],
-        ["Open within due date", next((row[1] for row in _project_deadline_rows(result)[1] if row[0] == "Open within due date"), 0)],
-        ["Open without due date", next((row[1] for row in _project_deadline_rows(result)[1] if row[0] == "Open without due date"), 0)],
-    ]
-    assignee_rows = []
-    assignee_groups: dict[str, dict[str, int]] = defaultdict(lambda: {"Completed": 0, "Open": 0, "Rejected": 0})
+    status_rows = [[status, status_counts.get(status, 0)] for status in sorted(status_counts)] or [["No data", 0]]
+    deadline_rows = _project_deadline_rows(result)[1]
+    due_rows = [[row[0], row[1]] for row in deadline_rows] or [["No data", 0]]
+    assignee_groups: dict[str, dict[str, int]] = defaultdict(lambda: {"Total Tasks": 0, "Completed": 0, "Open": 0})
     for item in result.snapshots:
+        if not item.counted_in_kpis:
+            continue
         group = assignee_groups[item.task.assignee_group]
+        group["Total Tasks"] += 1
         if item.status_at_period_end.value == "Completed":
             group["Completed"] += 1
-        elif item.status_at_period_end.value == "Rejected":
-            group["Rejected"] += 1
         elif item.status_at_period_end.is_open:
             group["Open"] += 1
-    for name, values in sorted(assignee_groups.items()):
-        assignee_rows.append([name, values["Completed"], values["Open"], values["Rejected"]])
-    if not assignee_rows:
-        assignee_rows = [["No data", 0, 0, 0]]
-    _add_project_dashboard_charts(dashboard, weekly_rows, status_rows, due_rows, assignee_rows)
+    assignee_rows = [
+        [name, data["Total Tasks"], data["Completed"], data["Open"]]
+        for name, data in sorted(assignee_groups.items())
+    ] or [["No data", 0, 0, 0]]
 
+    weekly_start = 60
+    _write_excel_table(dashboard, [["Week Starting", "Tasks Created", "Tasks Completed"]] + [
+        [row[0], row[1], row[2]] for row in weekly_rows
+    ] or [["Week Starting", "Tasks Created", "Tasks Completed"]], start_row=weekly_start)
+    status_start = weekly_start + max(3, len(weekly_rows) + 3)
+    _write_excel_table(dashboard, [["Status", "Tasks"]] + status_rows, start_row=status_start)
+    due_start = status_start + len(status_rows) + 3
+    _write_excel_table(dashboard, [["Due Status", "Tasks"]] + due_rows, start_row=due_start)
+    assignee_start = due_start + len(due_rows) + 3
+    _write_excel_table(dashboard, [["Assignee", "Total Tasks", "Completed", "Open"]] + assignee_rows, start_row=assignee_start)
+
+    weekly_last = weekly_start + max(1, len(weekly_rows))
+    line = LineChart()
+    line.title = "Weekly Task Flow"
+    line.style = 13
+    line.height = 7
+    line.width = 13
+    line.add_data(Reference(dashboard, min_col=2, max_col=3, min_row=weekly_start, max_row=weekly_last), titles_from_data=True)
+    line.set_categories(Reference(dashboard, min_col=1, min_row=weekly_start + 1, max_row=weekly_last))
+    line.legend.position = "b"
+    dashboard.add_chart(line, "A11")
+
+    status_last = status_start + len(status_rows)
+    status_chart = BarChart()
+    status_chart.type = "col"
+    status_chart.style = 10
+    status_chart.title = "Task Distribution by Status"
+    status_chart.height = 7
+    status_chart.width = 13
+    status_chart.add_data(Reference(dashboard, min_col=2, max_col=2, min_row=status_start, max_row=status_last), titles_from_data=True)
+    status_chart.set_categories(Reference(dashboard, min_col=1, min_row=status_start + 1, max_row=status_last))
+    dashboard.add_chart(status_chart, "I11")
+
+    due_last = due_start + len(due_rows)
+    due_chart = BarChart()
+    due_chart.type = "col"
+    due_chart.style = 10
+    due_chart.title = "Open Tasks by Due Status"
+    due_chart.height = 7
+    due_chart.width = 13
+    due_chart.add_data(Reference(dashboard, min_col=2, max_col=2, min_row=due_start, max_row=due_last), titles_from_data=True)
+    due_chart.set_categories(Reference(dashboard, min_col=1, min_row=due_start + 1, max_row=due_last))
+    dashboard.add_chart(due_chart, "A27")
+
+    assignee_last = assignee_start + len(assignee_rows)
+    work_chart = BarChart()
+    work_chart.type = "col"
+    work_chart.grouping = "stacked"
+    work_chart.overlap = 100
+    work_chart.style = 10
+    work_chart.title = "Work Distribution by Assignee"
+    work_chart.height = 7
+    work_chart.width = 13
+    work_chart.add_data(Reference(dashboard, min_col=2, max_col=4, min_row=assignee_start, max_row=assignee_last), titles_from_data=True)
+    work_chart.set_categories(Reference(dashboard, min_col=1, min_row=assignee_start + 1, max_row=assignee_last))
+    work_chart.legend.position = "b"
+    dashboard.add_chart(work_chart, "I27")
+    _fit_sheet(dashboard)
+
+    source_spaces = " / ".join(
+        f"{item.source_tool}: {item.source_space or 'N/A'}"
+        for item in model.source_coverage
+    ) or "N/A"
+    summary = pd.DataFrame([{
+        "Project": scope_label,
+        "Source Spaces": source_spaces,
+        "Analysis Period": _project_period_label(result),
+        "Total Tasks": values["total_tasks"],
+        "Completed": values["completed_tasks"],
+        "Completion Rate": values["completion_rate"],
+        "On-Time Rate": values["on_time_completion_rate"],
+        "Open Overdue": values["overdue_open_tasks"],
+        "WIP": values["wip_tasks"],
+        "Average Lead Time (hours)": _project_management_averages(result)["Avg Lead Time (Completed)"],
+    }])
+    status_detail_headers, status_detail_rows = _project_detail_rows(result)
     task_headers, task_rows = _project_task_metrics_rows(result)
-    sheets = [
-        ("task_metrics", task_headers, task_rows),
-        ("overall_summary", _project_summary_headers(), [_project_metric_row(result.snapshots, summary_values)]),
-        ("process_context", ["Field", "Value"], [
-            ["Process Name", scope_label],
-            ["Evaluation Scope", "Selected Jira and ClickUp Spaces"],
-            ["Dataset Type", "Combined Jira and ClickUp API collection"],
-            ["Evaluation Period", period],
-            ["Selected Spaces", " / ".join(
-                f"{item.source_tool}: {item.source_space or 'N/A'}" for item in model.source_coverage
-            ) or "N/A"],
-            ["Work Item Count", summary_values["total_tasks"]],
-            ["History", "Source history is used where available; unavailable measures remain N/A."],
-            ["Metric Scope", "Selected period with period-end status reconstruction."],
-            ["Interpretation", "Residence is process time, not recorded labor or productivity."],
-        ]),
-        ("workflow_events", *_project_events_rows(result)),
-        ("stage_summary", *_project_stage_rows(result)),
-        ("deadline_summary", *_project_deadline_rows(result)),
-        ("weekly_flow", *_project_weekly_rows(result)),
-        ("overdue_tasks", *_project_detail_rows(result, [
-            item for item in result.snapshots
-            if item.status_at_period_end.is_open and item.task.due_date and item.task.due_date < item.period_end
-        ])),
-        ("late_completed_tasks", *_project_detail_rows(result, [
-            item for item in result.snapshots
-            if item.status_at_period_end.value == "Completed"
-            and item.task.due_date and item.final_completion_date and item.final_completion_date > item.task.due_date
-        ])),
-        ("open_tasks", *_project_detail_rows(result, [
-            item for item in result.snapshots if item.status_at_period_end.is_open
-        ])),
-        ("data_quality", ["data_quality_flag", "task_count"], [
-            [item.flag, item.task_count] for item in model.data_quality
-        ] or [["No findings", 0]]),
-        ("process_findings", *_project_findings_rows(result)),
-        ("metric_definitions", ["Metric", "Definition"], [
-            ["Completion rate", "Completed tasks / all tasks in the selected project scope."],
-            ["On-time completion rate", "On-time completed tasks / completed tasks with a known completion and due date."],
-            ["Open overdue rate", "Overdue open tasks / open tasks with a known due date."],
-            ["Rework rate", "Reviewed tasks returning from In Review to In Execution."],
-            ["Replanning rate", "Reviewed tasks returning from In Review to To Do."],
-            ["Re-evaluation rate", "Reviewed tasks returning from In Review to In Triage."],
-            ["Review exception rate", "Tasks with any rework, replanning, or re-evaluation evidence."],
-            ["Stage durations", "Status intervals are summed per task through the selected period; elapsed hours are date-based."],
-            ["Coverage", "Missing or inconsistent history disables transition-derived metrics."],
-            ["Time scope", "History is reconstructed through the selected analysis period."],
-        ]),
-        ("by_assignee", *_project_assignee_rows(result)),
-        ("by_issue_type", *_project_issue_type_rows(result)),
+    assignee_headers, assignee_rows_detail = _project_assignee_rows(result)
+    definitions = [
+        ["Total Tasks", "Count of all tasks in the selected Project scope; subtasks remain visible."],
+        ["Completed", "Tasks with normalized Completed status at period end."],
+        ["Completion Rate", "Completed tasks divided by KPI-counted tasks."],
+        ["On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."],
+        ["Open Overdue", "Open tasks with a due date earlier than the analysis period end."],
+        ["WIP", "Open tasks currently in In Execution or In Review."],
+        ["Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."],
+        ["Due Variance", "Completion date minus due date; positive values indicate late completion."],
+        ["Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."],
     ]
-    for name, headers, rows in sheets:
+    stage_headers, stage_rows = _project_stage_rows(result)
+    bottleneck_rows = [
+        [item.status.value, item.strength, "; ".join(item.evidence),
+         item.metrics.average_days, item.metrics.open_tasks_now, item.metrics.overdue_open_tasks]
+        for item in result.bottlenecks
+    ] or [["No candidate", "N/A", "No bottleneck candidate was identified.", None, 0, 0]]
+    finding_headers, finding_rows = _project_findings_rows(result)
+    overdue = [
+        item for item in result.snapshots
+        if item.counted_in_kpis and item.status_at_period_end.is_open
+        and item.task.due_date and item.task.due_date < item.period_end
+    ]
+    late = [
+        item for item in result.snapshots
+        if item.counted_in_kpis and item.status_at_period_end.value == "Completed"
+        and item.task.due_date and item.final_completion_date
+        and item.final_completion_date > item.task.due_date
+    ]
+    completed_with_due = [
+        item for item in result.snapshots
+        if item.counted_in_kpis and item.status_at_period_end.value == "Completed"
+        and item.task.due_date and item.final_completion_date
+    ]
+    due_variance_rows = [
+        ["Completed On Time", sum(item.final_completion_date <= item.task.due_date for item in completed_with_due)],
+        ["Late Completed", len(late)],
+        ["Open Overdue", len(overdue)],
+        ["Open Without Due Date", sum(
+            item.counted_in_kpis and item.status_at_period_end.is_open and not item.task.due_date
+            for item in result.snapshots
+        )],
+    ]
+    exception_rows = [
+        [item.task.task_id, item.task.task_name, item.task.source_tool, item.task.source_space or "N/A",
+         exception]
+        for item in result.snapshots for exception in item.exception_events
+    ] or [["No workflow exception", "", "", "", ""]]
+    quality_rows = [[item.flag, item.task_count] for item in model.data_quality] or [["No findings", 0]]
+    context_rows = [
+        ["Project", scope_label],
+        ["Source Spaces", source_spaces],
+        ["Analysis Period", _project_period_label(result)],
+        ["Task Scope", "Selected Spaces unified into one Project scope; duplicate Source Tool + Task ID records removed."],
+        ["Subtask Treatment", "Visible in task-level data; excluded from KPI rates."],
+        ["Status Treatment", "Original source status is retained and normalized status is used for cross-source metrics."],
+    ]
+    sheet_specs = [
+        ("Project Summary", list(summary.columns), summary.astype(object).where(pd.notna(summary), None).values.tolist()),
+        ("Task Evaluation", task_headers, task_rows),
+        ("Assignee Summary", assignee_headers, assignee_rows_detail),
+        ("Status Summary", ["Status", "Task Count"], status_rows),
+        ("Status Detail", status_detail_headers, status_detail_rows),
+        ("Weekly Flow", weekly_headers, weekly_rows),
+        ("Due Variance", ["Due Variance Category", "Task Count"], due_variance_rows),
+        ("Overdue Tasks", status_detail_headers, _project_detail_rows(result, overdue)[1]),
+        ("Late Completed Tasks", status_detail_headers, _project_detail_rows(result, late)[1]),
+        ("Bottlenecks", ["Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"], bottleneck_rows),
+        ("Findings", finding_headers, finding_rows),
+        ("Data Quality", ["Data Quality Flag", "Task Count"], quality_rows),
+        ("Analysis Context", ["Field", "Value"], context_rows),
+        ("Metric Definitions", ["Metric", "Definition"], definitions),
+    ]
+    for name, headers, rows in sheet_specs:
         sheet = workbook.create_sheet(name)
-        _write_excel_table(sheet, headers, rows, start_row=1)
+        _write_excel_table(sheet, [headers, *rows])
         _fit_sheet(sheet)
 
     for sheet in workbook.worksheets:
@@ -1214,7 +1291,6 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
-
 
 def _docx_value(value):
     if value is None or value == "":
@@ -1287,198 +1363,148 @@ def _project_stage_word_rows(result: CompanyAnalysisResult) -> list[tuple[str, A
 
 
 def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> bytes:
+    """Build the exact Project Performance Word report requested by the user."""
     model = result.model
+    values = _project_summary_values(result.snapshots)
     period = _project_period_label(result)
     document = Document()
     configure_report_document(
         document,
-        header_label="PROCESS PERFORMANCE REPORT | PERFORMANCE EVALUATION",
+        header_label="PROJECT PERFORMANCE REPORT | PERFORMANCE EVALUATION",
     )
     add_report_title(
         document,
-        "Project Task Execution Performance Evaluation",
-        f"Selected Project Scope: {scope_label}",
+        "Project Performance Report",
+        scope_label,
         metadata=(
-            f"Analysis period: {_project_period_token(result)}",
-            f"Combined Jira and ClickUp scope | {len(result.snapshots)} task(s)",
+            f"Source Spaces: {' / '.join(item.source_tool + ': ' + (item.source_space or 'N/A') for item in model.source_coverage) or 'N/A'}",
+            f"Analysis period: {period}",
         ),
     )
 
     document.add_heading("Executive Summary", level=1)
-    values = _project_summary_values(result.snapshots)
-    completion = "Unavailable" if values["completion_rate"] is None else f"{values['completion_rate']:.1f}%"
-    on_time = "Unavailable" if values["on_time_completion_rate"] is None else f"{values['on_time_completion_rate']:.1f}%"
+    completion = "N/A" if values["completion_rate"] is None else f'{values["completion_rate"]:.1f}%'
+    on_time = "N/A" if values["on_time_completion_rate"] is None else f'{values["on_time_completion_rate"]:.1f}%'
     document.add_paragraph(
-        f"This report evaluates the project scope represented by the selected Jira and ClickUp Spaces "
-        f"for the period {period}. It summarizes task outcomes, timing, workflow exceptions, "
-        f"assignment distribution, data quality, and task-level evidence. "
-        f"The scope contains {values['total_tasks']} task(s); {values['completed_tasks']} completed "
-        f"with a {completion} completion rate and {on_time} on-time completion."
+        f"The selected Spaces were unified as one Project scope for {period}. "
+        f"The scope contains {values['total_tasks']} task(s), including visible subtasks, "
+        f"with {values['completed_tasks']} completed. Completion rate is {completion}; "
+        f"on-time rate is {on_time}; {values['overdue_open_tasks']} open overdue task(s) "
+        "require follow-up."
     )
 
-    document.add_heading("Process Context and Scope", level=1)
-    _add_docx_table(document, ["Metric", "Value"], [
-        ("Process Name", scope_label),
-        ("Evaluation Scope", "Selected Jira and ClickUp Spaces"),
-        ("Dataset Type", "Combined Jira and ClickUp API collection"),
-        ("Analysis Period", _project_period_token(result)),
-        ("Selected Spaces", " / ".join(
-            f"{item.source_tool}: {item.source_space or 'Unavailable'}"
+    document.add_heading("Project Scope and Context", level=1)
+    _add_docx_table(document, ["Field", "Value"], [
+        ("Project", scope_label),
+        ("Source", "Jira and/or ClickUp selected Spaces"),
+        ("Source Spaces", " / ".join(
+            f"{item.source_tool}: {item.source_space or 'N/A'}"
             for item in model.source_coverage
-        ) or "Unavailable"),
-        ("Work Item Count", values["total_tasks"]),
-        ("History", "Source history is used where available; unavailable measures remain unavailable."),
-        ("Metric Scope", "Selected period with period-end status reconstruction."),
-        ("Interpretation", "Process residence is not recorded labor, productivity, or individual contribution."),
+        ) or "N/A"),
+        ("Analysis Period", period),
+        ("Scope Rule", "Selected Spaces are unified into one Project scope and duplicate Source Tool + Task ID records are removed."),
+        ("Subtask Rule", "Subtasks remain visible in task-level output but are excluded from KPI rates."),
     ])
 
-    document.add_heading("Overall Performance Indicators", level=1)
-    overall_rows = [
-        ("Total tasks", values["total_tasks"]),
-        ("Completed tasks", values["completed_tasks"]),
-        ("Rejected tasks", values["rejected_tasks"]),
-        ("Open tasks", values["open_tasks"]),
-        ("WIP tasks", values["wip_tasks"]),
-        ("Status unavailable", values["unknown_status_tasks"]),
-        ("Complete histories", values["history_complete_tasks"]),
-        ("Histories excluded", values["history_excluded_tasks"]),
-        ("Reviewed eligible tasks", values["reviewed_valid_tasks"]),
+    document.add_heading("Project Indicators", level=1)
+    _add_docx_table(document, ["Indicator", "Value"], [
+        ("Total Tasks", values["total_tasks"]),
+        ("Completed", values["completed_tasks"]),
+        ("Completion Rate", completion),
+        ("On-Time Rate", on_time),
+        ("Open Overdue", values["overdue_open_tasks"]),
+        ("WIP", values["wip_tasks"]),
+        ("Average Lead Time", _format_project_average(_project_management_averages(result)["Avg Lead Time (Completed)"], "hours")),
+    ])
+
+    document.add_heading("Task Distribution", level=1)
+    status_counts = _project_status_counts(result.snapshots)
+    _add_docx_table(document, ["Status", "Task Count"], [
+        [status, status_counts.get(status, 0)] for status in sorted(status_counts)
+    ] or [["N/A", 0]])
+    priority_counts = Counter(
+        (item.task.priority or "Unknown")
+        for item in result.snapshots if item.counted_in_kpis
+    )
+    document.add_paragraph("Priority")
+    _add_docx_table(document, ["Priority", "Task Count"], sorted(priority_counts.items()) or [["N/A", 0]])
+    type_counts = Counter(
+        "Subtask" if item.task.parent_id else "Task"
+        for item in result.snapshots if item.in_scope
+    )
+    document.add_paragraph("Task Type")
+    _add_docx_table(document, ["Task Type", "Task Count"], sorted(type_counts.items()) or [["N/A", 0]])
+
+    document.add_heading("Weekly Progress", level=1)
+    weekly_headers, weekly_rows = _project_weekly_rows(result)
+    _add_docx_table(document, ["Week Starting", "Tasks Opened", "Tasks Completed", "Net Flow", "Cumulative Net Flow"], weekly_rows)
+
+    document.add_heading("Bottlenecks by Project Stage", level=1)
+    bottleneck_rows = [
+        (item.status.value, item.strength, "; ".join(item.evidence),
+         item.metrics.average_days, item.metrics.open_tasks_now, item.metrics.overdue_open_tasks)
+        for item in result.bottlenecks
     ]
-    _add_docx_table(document, ["Metric", "Value"], overall_rows)
-    document.add_paragraph(f"Completion: {completion} ({values['completed_tasks']}/{values['total_tasks']} tasks).")
-    document.add_paragraph(
-        f"On-time completion: {on_time} ({values['on_time_tasks']}/{values['on_time_valid_tasks']} tasks with known due dates)."
-    )
-    overdue_rate = "Unavailable" if values["open_overdue_rate"] is None else f"{values['open_overdue_rate']:.1f}%"
-    document.add_paragraph(
-        f"Open overdue: {overdue_rate} ({values['overdue_open_tasks']}/{values['overdue_valid_tasks']} open tasks with known due dates)."
-    )
-    rework_rate = "Unavailable" if values["rework_rate"] is None else f"{values['rework_rate']:.1f}%"
-    replanning_rate = "Unavailable" if values["replanning_rate"] is None else f"{values['replanning_rate']:.1f}%"
-    reevaluation_rate = "Unavailable" if values["re_evaluation_rate"] is None else f"{values['re_evaluation_rate']:.1f}%"
-    review_rate = "Unavailable" if values["review_exception_rate"] is None else f"{values['review_exception_rate']:.1f}%"
-    for label, text_value in (
-        ("Rework", f"{rework_rate} ({values['tasks_with_rework']}/{values['rework_valid_tasks']} reviewed tasks)."),
-        ("Replanning", f"{replanning_rate} ({values['tasks_with_replanning']}/{values['reviewed_valid_tasks']} reviewed tasks)."),
-        ("Re-evaluation", f"{reevaluation_rate} ({values['tasks_with_re_evaluation']}/{values['reviewed_valid_tasks']} reviewed tasks)."),
-        ("Any review exception", f"{review_rate} ({values['review_exception_tasks']}/{values['reviewed_valid_tasks']} reviewed tasks)."),
-    ):
-        document.add_paragraph(f"{label}: {text_value}")
-    _add_docx_table(document, ["Metric", "Value"], [
-        ("Rework events", values["total_rework_count"]),
-        ("Replanning events", values["total_replanning_count"]),
-        ("Re-evaluation events", values["total_re_evaluation_count"]),
+    _add_docx_table(document, ["Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"], bottleneck_rows or [
+        ("N/A", "No candidate", "No bottleneck candidate was identified.", "N/A", 0, 0)
     ])
 
-    document.add_heading("Process Timing", level=1)
-    document.add_paragraph(
-        f"Execution: mean {values['mean_execution_elapsed_hours'] or 'Unavailable'} elapsed hours; "
-        f"business-hour value unavailable; valid tasks: {values['execution_elapsed_hours_valid_tasks']}."
-    )
-    document.add_paragraph(
-        f"Lead Time: mean {values['mean_lead_time_elapsed_hours'] or 'Unavailable'} elapsed hours; "
-        f"business-hour value unavailable; valid tasks: {values['lead_time_elapsed_hours_valid_tasks']}."
-    )
-    document.add_paragraph(
-        f"Time To Start: mean {values['mean_time_to_start_elapsed_hours'] or 'Unavailable'} elapsed hours; "
-        f"business-hour value unavailable; valid tasks: {values['time_to_start_elapsed_hours_valid_tasks']}."
-    )
-    document.add_paragraph(
-        "Elapsed values are date-based because the source-neutral project model normalizes calendar dates. "
-        "Business-hour measures are kept unavailable rather than inferred."
-    )
+    overdue = [
+        item for item in result.snapshots
+        if item.counted_in_kpis and item.status_at_period_end.is_open
+        and item.task.due_date and item.task.due_date < item.period_end
+    ]
+    document.add_heading("Open Overdue Tasks", level=1)
+    _add_docx_table(document, ["Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Overdue Days"], [
+        (
+            item.task.task_id, item.task.task_name or "N/A", item.task.source_tool,
+            item.task.source_space or "N/A", item.task.assignee_group, item.task.due_date,
+            (item.period_end - item.task.due_date).days,
+        )
+        for item in overdue
+    ] or [("N/A", "No open overdue tasks", "", "", "", "", 0)])
 
-    document.add_heading("Management Averages", level=1)
-    management_averages = _project_management_averages(result)
-    _add_docx_table(document, ["Metric", "Value", "Definition"], [
+    late = [
+        item for item in result.snapshots
+        if item.counted_in_kpis and item.status_at_period_end.value == "Completed"
+        and item.task.due_date and item.final_completion_date
+        and item.final_completion_date > item.task.due_date
+    ]
+    document.add_heading("Late Completed Tasks", level=1)
+    _add_docx_table(document, ["Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Completed", "Variance (days)"], [
         (
-            "Avg Execution Time (Completed)",
-            _format_project_average(management_averages["Avg Execution Time (Completed)"], "h"),
-            "Average completion date minus actual start date for completed tasks.",
-        ),
-        (
-            "Avg Lead Time (Completed)",
-            _format_project_average(management_averages["Avg Lead Time (Completed)"], "h"),
-            "Average completion date minus creation date for completed tasks.",
-        ),
-        (
-            "Avg Time to Start",
-            _format_project_average(management_averages["Avg Time to Start"], "h"),
-            "Average actual start date minus creation date.",
-        ),
-        (
-            "Avg Late Completion",
-            _format_project_average(management_averages["Avg Late Completion"], "days"),
-            "Average completion date minus due date for completed tasks that finished late.",
-        ),
-        (
-            "Avg Open Overdue",
-            _format_project_average(management_averages["Avg Open Overdue"], "days"),
-            "Average period end date minus due date for open overdue tasks.",
-        ),
-        (
-            "Avg Due Variance (Completed)",
-            _format_project_average(management_averages["Avg Due Variance (Completed)"], "days"),
-            "Average completion date minus due date for completed tasks with a due date; negative means early.",
-        ),
+            item.task.task_id, item.task.task_name or "N/A", item.task.source_tool,
+            item.task.source_space or "N/A", item.task.assignee_group, item.task.due_date,
+            item.final_completion_date, (item.final_completion_date - item.task.due_date).days,
+        )
+        for item in late
+    ] or [("N/A", "No late completed tasks", "", "", "", "", "", 0)])
+
+    document.add_heading("Workload by Assignee", level=1)
+    assignee_headers, assignee_rows = _project_assignee_rows(result)
+    simple_assignees = [
+        (row[0], row[1], row[2], row[4], row[7])
+        for row in assignee_rows
+    ]
+    _add_docx_table(document, ["Assignee", "Total Tasks", "Completed", "Open", "Completion Rate"], simple_assignees or [
+        ("N/A", 0, 0, 0, "N/A")
     ])
 
-    document.add_heading("Stage Residence and Open Work", level=1)
-    for metric in calculate_status_metrics(result.snapshots):
-        document.add_heading(metric.status.value, level=2)
-        intervals = [
-            interval.days * 24.0
-            for snapshot in result.snapshots
-            if snapshot.counted_in_kpis and snapshot.history_available
-            for interval in snapshot.status_intervals
-            if interval.status is metric.status
-        ]
-        _add_docx_table(document, ["Metric", "Value"], [
-            ("Tasks visited", len(intervals)),
-            ("Mean elapsed / business hours", f"{_project_average(intervals) or 0:.2f} / Unavailable"),
-            ("Median elapsed / business hours", f"{_project_median(intervals) or 0:.2f} / Unavailable"),
-            ("Total elapsed / business hours", f"{sum(intervals):.2f} / Unavailable"),
-            ("Open tasks currently here", metric.open_tasks_now),
-        ])
-    document.add_paragraph(
-        "Stage statistics sum the available visits per task through the selected period. "
-        "High residence identifies a review candidate; it does not establish a cause."
-    )
-
-    document.add_heading("Bottlenecks, Exceptions, and Follow-up", level=1)
-    findings_headers, findings_rows = _project_findings_rows(result)
-    for row in findings_rows:
-        document.add_paragraph(f"{row[0]}: {row[3]} {row[4]}")
-    if not findings_rows:
-        document.add_paragraph("No bottleneck or exception findings were recorded for this scope.")
+    document.add_heading("Workflow Exceptions", level=1)
+    exception_rows = [
+        (item.task.task_id, item.task.task_name or "N/A", item.task.source_tool,
+         item.task.source_space or "N/A", exception)
+        for item in result.snapshots for exception in item.exception_events
+    ]
+    _add_docx_table(document, ["Task ID", "Task", "Source", "Space", "Exception"], exception_rows or [
+        ("N/A", "No workflow exceptions", "", "", "")
+    ])
 
     document.add_heading("Recommendations", level=1)
-    document.add_paragraph(
-        "The following recommendations are generated from the selected project Spaces and are limited "
-        "to the selected period."
-    )
-    for item in result.recommendations:
-        document.add_paragraph(
-            f"{item.title}: {item.evidence} Suggested action: {item.suggested_action}",
-            style="List Bullet",
-        )
-    if not result.recommendations:
-        document.add_paragraph("No recommendations were generated from the selected evidence.")
-
-    document.add_heading("Individual Achievements and Assignment Summary", level=1)
-    assignee_headers, assignee_rows = _project_assignee_rows(result)
-    assignment_text = []
-    for row in assignee_rows:
-        name = row[0]
-        assignment_text.append(
-            f"{name}: {row[1]} tasks, {row[2]} completed, {row[4]} open, {row[3]} rejected."
-        )
-    document.add_paragraph(
-        "Assignment uses the assignee recorded in the source snapshot. These values support workload "
-        "visibility and do not establish individual contribution or ownership at completion."
-    )
-    for text_value in assignment_text:
-        document.add_paragraph(text_value)
+    _add_docx_table(document, ["Severity", "Recommendation", "Evidence", "Suggested Action"], [
+        (item.severity, item.title, item.evidence, item.suggested_action)
+        for item in result.recommendations
+    ] or [("N/A", "No recommendations generated", "", "")])
 
     document.add_heading("Task-Level Evaluation", level=1)
     for snapshot in result.snapshots:
@@ -1488,38 +1514,30 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
         )
         _add_docx_table(document, ["Metric", "Value"], _project_word_task_pairs(snapshot))
 
-    document.add_heading("Data Quality and Limitations", level=1)
-    if model.data_quality:
-        _add_docx_table(document, ["Data Quality Flag", "Task Count"], [
-            (item.flag, item.task_count) for item in model.data_quality
-        ])
-    else:
-        document.add_paragraph("No data-quality findings were recorded by these validation checks.")
+    document.add_heading("Data Quality", level=1)
+    _add_docx_table(document, ["Data Quality Flag", "Task Count"], [
+        (item.flag, item.task_count) for item in model.data_quality
+    ] or [("No findings", 0)])
     document.add_paragraph(
-        "Unavailable source fields are reported as unavailable rather than being converted to zero. "
-        "Cross-source totals are calculated only from tasks in the selected Spaces and selected period. "
-        "Original source, Space, status, and task identifiers remain available for auditability."
+        "Unavailable values remain N/A. Source and Space identifiers are preserved, and "
+        "cross-source totals use the same deduplicated Project dataset shown in Excel."
     )
 
     document.add_heading("Metric Definitions", level=1)
     _add_docx_table(document, ["Metric", "Definition"], [
-        ("Completion rate", "Completed tasks / all tasks in the selected project scope."),
-        ("On-time completion rate", "On-time completed tasks / completed tasks with a known completion and due date."),
-        ("Open overdue rate", "Overdue open tasks / open tasks with a known due date."),
-        ("Rework rate", "Reviewed tasks returning from In Review to In Execution."),
-        ("Replanning rate", "Reviewed tasks returning from In Review to To Do."),
-        ("Re-evaluation rate", "Reviewed tasks returning from In Review to In Triage."),
-        ("Review exception rate", "Tasks with any rework, replanning, or re-evaluation evidence."),
-        ("Stage durations", "Visits to each status are summed per task through the selected period."),
-        ("Coverage", "Missing or inconsistent history disables transition-derived metrics."),
-        ("Time scope", "History is reconstructed through the explicit selected analysis period."),
-        ("Source scope", "Only tasks collected from the selected Jira and ClickUp Spaces are included."),
+        ("Total Tasks", "All tasks in the selected Project scope; subtasks remain visible."),
+        ("Completed", "Tasks with normalized Completed status at period end."),
+        ("Completion Rate", "Completed tasks divided by KPI-counted tasks."),
+        ("On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."),
+        ("Open Overdue", "Open tasks with a due date earlier than period end."),
+        ("WIP", "Open tasks in In Execution or In Review at period end."),
+        ("Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."),
+        ("Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."),
     ])
 
     stream = BytesIO()
     document.save(stream)
     return stream.getvalue()
-
 
 def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: str, scope_slug: str) -> None:
     if st.button("Start New Project Analysis", key="project_new_analysis"):
