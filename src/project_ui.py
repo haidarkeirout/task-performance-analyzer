@@ -783,10 +783,35 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
 
     document.add_heading("11. Task-Level Detail", level=1)
     details = _task_detail_frame(result)
+    identity_columns = [
+        "Source", "Space", "Task ID", "Task", "Assignee", "Priority",
+        "Task Type", "Original Status", "Final Status",
+    ]
+    date_columns = [
+        "Source", "Space", "Task ID", "Created Date", "Start Date", "Due Date",
+        "Completed Date", "Completed Late", "Open Overdue",
+    ]
+    quality_columns = [
+        "Source", "Space", "Task ID", "Workflow History Available", "Data Quality Flags",
+    ]
+    detail_rows = details.astype(object).to_dict("records") if not details.empty else []
+    document.add_heading("Task Identity and Outcome", level=2)
     _add_docx_table(
         document,
-        list(details.columns),
-        details.astype(object).values.tolist() if not details.empty else [],
+        identity_columns,
+        [[row.get(column) for column in identity_columns] for row in detail_rows],
+    )
+    document.add_heading("Task Dates and Delivery Timing", level=2)
+    _add_docx_table(
+        document,
+        date_columns,
+        [[row.get(column) for column in date_columns] for row in detail_rows],
+    )
+    document.add_heading("Task Quality and Source Traceability", level=2)
+    _add_docx_table(
+        document,
+        quality_columns,
+        [[row.get(column) for column in quality_columns] for row in detail_rows],
     )
 
     document.add_heading("12. Workflow Events and Exceptions", level=1)
