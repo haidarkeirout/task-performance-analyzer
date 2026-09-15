@@ -1088,7 +1088,7 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
         dashboard.merge_cells(start_row=8, start_column=start_col, end_row=8, end_column=start_col + 1)
         dashboard.cell(7, start_col, title).fill = _HEADER_FILL
         dashboard.cell(7, start_col).font = _HEADER_FONT
-        display = "Unavailable" if value is None else f"{value:.1f} {unit}".strip()
+        display = _format_project_average(value, unit)
         dashboard.cell(8, start_col, display)
         dashboard.cell(7, start_col).alignment = Alignment(horizontal="center")
         dashboard.cell(8, start_col).alignment = Alignment(horizontal="center")
