@@ -448,6 +448,22 @@ def _save_workbook(workbook: Workbook) -> bytes:
     return stream.getvalue()
 
 
+def _display(value: Any) -> str:
+    """Render report values safely for Word tables and narrative text."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, (list, tuple, dict)):
+        return str(value)
+    try:
+        if pd.isna(value):
+            return "N/A"
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return str(value)
+
+
 def _word_table(document: Document, frame: pd.DataFrame, columns: list[str]) -> None:
     visible = frame[[column for column in columns if column in frame.columns]].copy()
     if visible.empty or visible.shape[1] == 0:
