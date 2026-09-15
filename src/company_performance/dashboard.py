@@ -316,20 +316,6 @@ def _cards(
 
 
 
-    """The approved executive headline: exactly five cards."""
-    return (
-        KpiCard("total-tasks", "Total Tasks", str(kpis.total_tasks), "Selected projects and sources"),
-        KpiCard("completion-rate", "Completion Rate", _format_rate(kpis.completion_rate),
-                f"{kpis.completed_tasks} completed at period end"),
-        KpiCard("current-wip", "Current WIP", str(kpis.current_wip),
-                "In Execution and In Review"),
-        KpiCard("overdue-open", "Overdue Open Tasks", str(kpis.overdue_open_tasks),
-                f"{kpis.high_priority_overdue_tasks} high-priority"),
-        KpiCard("on-time-rate", "On-Time Completion Rate", _format_rate(kpis.on_time_completion_rate),
-                "Completed tasks with a due date"),
-    )
-
-
 def _chart(key: str, title: str, points: Sequence[ChartPoint], note: str | None = None) -> ExecutiveChart:
     return ExecutiveChart(key=key, title=title, chart_type="bar", points=tuple(points), note=note)
 
