@@ -28,10 +28,14 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     is_subtask = tasks.get("Is Subtask", pd.Series(False, index=tasks.index)).fillna(False).astype(bool)
     parent_tasks = tasks.loc[~is_subtask].copy()
     cancelled = int(parent_tasks["Cancelled?"].sum()) if not parent_tasks.empty else 0
-    eligible = len(parent_tasks) - cancelled
     completed = int(parent_tasks["Completed?"].sum()) if not parent_tasks.empty else 0
+    completion_denominator = len(parent_tasks)
     open_tasks = int(tasks["Open?"].sum()) if total else 0
-    overdue = int((tasks["Open?"] & tasks["Overdue Days"].notna()).sum()) if total else 0
+    open_due_tasks = int((tasks["Open?"] & tasks["Due Date"].notna()).sum()) if total else 0
+    overdue = int((
+        tasks["Open?"]
+        & pd.to_numeric(tasks["Overdue Days"], errors="coerce").gt(0)
+    ).sum()) if total else 0
     due_known = (
         parent_tasks["Completed?"] & parent_tasks["Due Date"].notna() & parent_tasks["Completed"].notna()
         if not parent_tasks.empty else pd.Series(dtype=bool)
@@ -40,10 +44,10 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
 
     kpis = pd.DataFrame([
         ("Total Tasks", total, total, total),
-        ("Task Completion Rate (%)", _rate(completed, eligible), completed, eligible),
+        ("Task Completion Rate (%)", _rate(completed, completion_denominator), completed, completion_denominator),
         ("On-Time Completion Rate (%)", _rate(on_time, int(due_known.sum())), on_time, int(due_known.sum())),
-        ("Open Overdue Tasks", overdue, overdue, open_tasks),
-        ("Open Overdue Rate (%)", _rate(overdue, open_tasks), overdue, open_tasks),
+        ("Open Overdue Tasks", overdue, overdue, open_due_tasks),
+        ("Open Overdue Rate (%)", _rate(overdue, open_due_tasks), overdue, open_due_tasks),
         ("Average Lead Time (hours)", pd.to_numeric(tasks.loc[tasks["Completed?"], "Lead Time Hours"], errors="coerce").mean(), completed, completed),
         ("Workflow Exception Rate (%)", None, 0, 0),
         ("Cancelled/Rejected Tasks", cancelled, cancelled, total),
@@ -53,7 +57,7 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     employees = clickup_result["assignee_summary"].copy()
     if not employees.empty:
         employees = employees.rename(columns={"Total Tasks": "Total Assigned"})
-        overdue_by_employee = (tasks.assign(_overdue=tasks["Open?"] & tasks["Overdue Days"].notna())
+        overdue_by_employee = (tasks.assign(_overdue=tasks["Open?"] & pd.to_numeric(tasks["Overdue Days"], errors="coerce").gt(0))
                                .groupby("Assignee", dropna=False)["_overdue"].sum())
         employees["Overdue"] = employees["Assignee"].map(overdue_by_employee).fillna(0).astype(int)
         employees["Workflow Exceptions"] = None
@@ -71,8 +75,8 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     if not attention.empty:
         def issue(row):
             issues = []
-            if row["Open?"] and pd.notna(row["Overdue Days"]): issues.append("Open overdue")
-            if str(row.get("Priority", "")).casefold() in {"urgent", "high"} and row["Open?"] and pd.notna(row["Overdue Days"]): issues.append("High-priority overdue")
+            if row["Open?"] and pd.notna(pd.to_numeric(row["Overdue Days"], errors="coerce")) and pd.to_numeric(row["Overdue Days"], errors="coerce") > 0: issues.append("Open overdue")
+            if str(row.get("Priority", "")).casefold() in {"urgent", "high"} and row["Open?"] and pd.notna(pd.to_numeric(row["Overdue Days"], errors="coerce")) and pd.to_numeric(row["Overdue Days"], errors="coerce") > 0: issues.append("High-priority overdue")
             if row.get("Assignee") in (None, "", "Unassigned"): issues.append("Unassigned")
             if pd.isna(row.get("Due Date")): issues.append("Missing due date")
             return "; ".join(issues)
@@ -118,8 +122,10 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
         "Execution Hours": source.get("execution_business_hours"),
         "On Time?": source.get("on_time_completion"), "Overdue Days": source.get("overdue_days"),
     })
-    total = len(tasks); cancelled = int(tasks["Cancelled?"].eq(True).sum()); eligible = total - cancelled
+    total = len(tasks); cancelled = int(tasks["Cancelled?"].eq(True).sum())
     completed = int(tasks["Completed?"].eq(True).sum()); open_count = int(tasks["Open?"].eq(True).sum())
+    completion_denominator = total
+    open_due_tasks = int((tasks["Open?"].eq(True) & tasks["Due Date"].notna()).sum())
     overdue = int((tasks["Open?"].eq(True) & pd.to_numeric(tasks["Overdue Days"], errors="coerce").gt(0)).sum())
     due_known = tasks["Completed?"].eq(True) & tasks["Due Date"].notna() & tasks["Completed"].notna()
     on_time = int((due_known & tasks["On Time?"].eq(True)).sum())
@@ -132,10 +138,10 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
     exception_count = int((history_valid & exception).sum()); exception_denominator = int(history_valid.sum())
     kpis = pd.DataFrame([
         ("Total Tasks", total, total, total),
-        ("Task Completion Rate (%)", _rate(completed, eligible), completed, eligible),
+        ("Task Completion Rate (%)", _rate(completed, completion_denominator), completed, completion_denominator),
         ("On-Time Completion Rate (%)", _rate(on_time, int(due_known.sum())), on_time, int(due_known.sum())),
-        ("Open Overdue Tasks", overdue, overdue, open_count),
-        ("Open Overdue Rate (%)", _rate(overdue, open_count), overdue, open_count),
+        ("Open Overdue Tasks", overdue, overdue, open_due_tasks),
+        ("Open Overdue Rate (%)", _rate(overdue, open_due_tasks), overdue, open_due_tasks),
         ("Average Lead Time (hours)", pd.to_numeric(tasks.loc[tasks["Completed?"].eq(True), "Lead Time Hours"], errors="coerce").mean(), completed, completed),
         ("Workflow Exception Rate (%)", _rate(exception_count, exception_denominator), exception_count, exception_denominator),
         ("Cancelled/Rejected Tasks", cancelled, cancelled, total),
@@ -235,6 +241,26 @@ def _display(value: Any) -> str:
     return str(value)
 
 
+def _bottleneck_word_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize Jira and ClickUp bottleneck columns for the Word report."""
+    normalized = frame.copy()
+    normalized = normalized.rename(columns={
+        "status": "Status",
+        "tasks_visited": "Tasks",
+        "elapsed_mean_hours": "Average Hours",
+        "elapsed_total_hours": "Total Hours",
+        "business_mean_hours": "Business Average Hours",
+        "business_total_hours": "Business Total Hours",
+        "open_tasks_currently_here": "Open Tasks",
+    })
+    columns = [
+        "Status", "Tasks", "Average Hours", "Total Hours",
+        "Business Average Hours", "Business Total Hours",
+        "Open Tasks", "Interpretation",
+    ]
+    return normalized[[column for column in columns if column in normalized]].copy()
+
+
 def department_word(result: dict) -> bytes:
     document = Document()
     section = document.sections[0]
@@ -246,10 +272,11 @@ def department_word(result: dict) -> bytes:
     completion = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Task Completion Rate (%)")
     overdue = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Open Overdue Tasks", 0)
     document.add_paragraph(f"The department scope contains {len(result['tasks'])} tasks. Completion rate is {_display(completion)}% and {int(overdue or 0)} open overdue task(s) require review.")
+    bottleneck_frame = _bottleneck_word_frame(result["bottlenecks"])
     for heading, frame, columns in [
         ("Department KPI Summary", result["kpis"], ["KPI", "Value", "Numerator", "Denominator"]),
         ("Employee Workload Summary", result["employee_breakdown"], ["Assignee", "Total Assigned", "Completed", "Open", "WIP", "Overdue"]),
-        ("Bottleneck Candidates", result["bottlenecks"], ["Status", "Tasks", "Average Hours", "Total Hours", "Interpretation"]),
+        ("Bottleneck Candidates", bottleneck_frame, ["Status", "Tasks", "Average Hours", "Total Hours", "Business Average Hours", "Business Total Hours", "Open Tasks", "Interpretation"]),
         ("Tasks Requiring Attention", result["attention"], ["Task ID", "Task Name", "Assignee", "Current Status", "Priority", "Issue"]),
         ("Data Quality Notes", result["department_quality"], ["Issue Type", "Count", "Analysis Impact"]),
     ]:
