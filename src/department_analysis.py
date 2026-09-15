@@ -25,13 +25,18 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     """Create the isolated department view without changing legacy metrics."""
     tasks = clickup_result["tasks"].copy()
     total = len(tasks)
-    cancelled = int(tasks["Cancelled?"].sum()) if total else 0
-    eligible = total - cancelled
-    completed = int(tasks["Completed?"].sum()) if total else 0
+    is_subtask = tasks.get("Is Subtask", pd.Series(False, index=tasks.index)).fillna(False).astype(bool)
+    parent_tasks = tasks.loc[~is_subtask].copy()
+    cancelled = int(parent_tasks["Cancelled?"].sum()) if not parent_tasks.empty else 0
+    eligible = len(parent_tasks) - cancelled
+    completed = int(parent_tasks["Completed?"].sum()) if not parent_tasks.empty else 0
     open_tasks = int(tasks["Open?"].sum()) if total else 0
     overdue = int((tasks["Open?"] & tasks["Overdue Days"].notna()).sum()) if total else 0
-    due_known = tasks["Completed?"] & tasks["Due Date"].notna() & tasks["Completed"].notna() if total else pd.Series(dtype=bool)
-    on_time = int((due_known & tasks["On Time?"].eq(True)).sum()) if total else 0
+    due_known = (
+        parent_tasks["Completed?"] & parent_tasks["Due Date"].notna() & parent_tasks["Completed"].notna()
+        if not parent_tasks.empty else pd.Series(dtype=bool)
+    )
+    on_time = int((due_known & parent_tasks["On Time?"].eq(True)).sum()) if not parent_tasks.empty else 0
 
     kpis = pd.DataFrame([
         ("Total Tasks", total, total, total),
@@ -93,6 +98,7 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
         "attention": attention,
         "bottlenecks": bottlenecks,
         "department_quality": quality,
+        "space_names": getattr(prepared_data, "space_names", [prepared_data.space_name]),
         "data_source": "ClickUp",
     }
 
@@ -192,7 +198,8 @@ def department_excel(result: dict) -> bytes:
     wb.remove(wb.active)
     summary = wb.create_sheet("Department Summary")
     info = pd.DataFrame([
-        ("Department", result["department_name"]), ("ClickUp Space", result["space_name"]),
+        ("Department", result["department_name"]),
+        ("Source Spaces", ", ".join(map(str, result.get("space_names", [result["space_name"]])))),
         ("Data Source", result.get("data_source", "ClickUp")), ("Analysis Period End", result["cutoff"]),
         ("Analyzed Tasks", len(result["tasks"])),
     ], columns=["Field", "Value"])
@@ -223,7 +230,8 @@ def department_word(result: dict) -> bytes:
     section = document.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.75)
     document.add_heading("Department Performance Evaluation Report", 0)
-    document.add_paragraph(f"Department: {result['department_name']} | {result.get('data_source', 'ClickUp')} Space: {result['space_name']} | Cutoff: {result['cutoff']}")
+    source_spaces = ", ".join(map(str, result.get("space_names", [result["space_name"]])))
+    document.add_paragraph(f"Department: {result['department_name']} | {result.get('data_source', 'ClickUp')} Source Spaces: {source_spaces} | Cutoff: {result['cutoff']}")
     document.add_heading("Executive Summary", level=1)
     completion = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Task Completion Rate (%)")
     overdue = _metric({"overall": result["kpis"].rename(columns={"KPI":"Metric"})}, "Open Overdue Tasks", 0)

@@ -1,0 +1,352 @@
+"""Department-first ClickUp collection.
+
+This module is intentionally isolated from the existing Company, Project, and
+Employee collection paths. A ClickUp List is treated as a department, and the
+same List name may be present in more than one Space.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, time, timezone
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+from clickup_export import collect_data
+from clickup_filters import assignees, filter_options, filter_tasks, status_name, timestamp
+from clickup_gateway import ClickUpCollectionError, ClickUpGateway
+
+
+def _gateway(settings, workspace_id: str = "") -> ClickUpGateway:
+    return ClickUpGateway(
+        settings.clickup_token,
+        workspace_id=str(workspace_id or settings.clickup_workspace_id or ""),
+    )
+
+
+def _name(value: Any, fallback: str = "") -> str:
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("status") or value.get("id")
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def _department_key(name: str) -> str:
+    return " ".join(str(name or "").split()).casefold()
+
+
+def _catalog_spaces(settings):
+    gateway = _gateway(settings)
+    try:
+        workspaces = gateway.workspaces()
+        workspace_id = str(settings.clickup_workspace_id or (workspaces[0]["id"] if workspaces else ""))
+        if not workspace_id:
+            raise ClickUpCollectionError("No ClickUp Workspace was found for this connection.")
+        spaces = gateway.spaces(workspace_id)
+        catalog = {}
+        for space in spaces:
+            space_id = str(space.get("id") or "")
+            if not space_id:
+                continue
+            for current_list in gateway.all_lists_for_space(space_id):
+                list_id = str(current_list.get("id") or "")
+                list_name = _name(current_list.get("name"))
+                if not list_id or not list_name:
+                    continue
+                key = _department_key(list_name)
+                catalog.setdefault(key, {
+                    "name": list_name,
+                    "lists": [],
+                })
+                catalog[key]["lists"].append({
+                    "list_id": list_id,
+                    "list_name": list_name,
+                    "space_id": space_id,
+                    "space_name": _name(space.get("name"), space_id),
+                    "folder_name": _name(current_list.get("folder_name")),
+                })
+        return workspace_id, catalog
+    finally:
+        gateway.close()
+
+
+def _annotate_task(task: dict, source: dict) -> dict:
+    item = dict(task)
+    item["_department_space_id"] = source["space_id"]
+    item["_department_space_name"] = source["space_name"]
+    item["_department_list_id"] = source["list_id"]
+    item["_department_list_name"] = source["list_name"]
+    item["_department_folder_name"] = source.get("folder_name", "")
+    item.setdefault("space_id", source["space_id"])
+    item.setdefault("space", {"id": source["space_id"], "name": source["space_name"]})
+    item.setdefault("list", {"id": source["list_id"], "name": source["list_name"]})
+    return item
+
+
+def _merge_sources(target: dict, source: dict) -> None:
+    for field in ("_department_space_names", "_department_list_names"):
+        current = list(target.get(field) or [])
+        values = source.get(field) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            if value and value not in current:
+                current.append(value)
+        target[field] = current
+    source_pairs = list(target.get("_department_sources") or [])
+    pair = {
+        "space_id": source.get("_department_space_id", ""),
+        "space_name": source.get("_department_space_name", ""),
+        "list_id": source.get("_department_list_id", ""),
+        "list_name": source.get("_department_list_name", ""),
+    }
+    if pair not in source_pairs:
+        source_pairs.append(pair)
+    target["_department_sources"] = source_pairs
+
+
+def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> list[dict]:
+    cached_key = st.session_state.get("department_tasks_cache_key")
+    if cached_key == cache_key:
+        return list(st.session_state.get("department_tasks_cache", []))
+
+    gateway = _gateway(settings)
+    try:
+        collected = {}
+        raw_count = 0
+        for source in sources:
+            tasks = gateway.all_tasks_for_list(source["list_id"])
+            for raw_task in tasks:
+                task_id = str(raw_task.get("id") or "")
+                if task_id:
+                    raw_count += 1
+                if not task_id:
+                    continue
+                annotated = _annotate_task(raw_task, source)
+                annotated["_department_space_names"] = [source["space_name"]]
+                annotated["_department_list_names"] = [source["list_name"]]
+                annotated["_department_sources"] = [{
+                    "space_id": source["space_id"],
+                    "space_name": source["space_name"],
+                    "list_id": source["list_id"],
+                    "list_name": source["list_name"],
+                }]
+                if task_id in collected:
+                    _merge_sources(collected[task_id], annotated)
+                else:
+                    collected[task_id] = annotated
+        tasks = list(collected.values())
+    finally:
+        gateway.close()
+
+    st.session_state["department_tasks_cache_key"] = cache_key
+    st.session_state["department_tasks_cache"] = tasks
+    st.session_state["department_duplicate_count"] = max(0, raw_count - len(tasks))
+    return tasks
+
+
+def _date_value(value):
+    if isinstance(value, tuple):
+        return value[0] if value else None
+    return value
+
+
+def _period_filter(tasks: list[dict], start_date, end_date):
+    start = pd.Timestamp(datetime.combine(_date_value(start_date), time.min), tz="UTC")
+    end = pd.Timestamp(datetime.combine(_date_value(end_date), time.max), tz="UTC")
+    filtered = []
+    missing_created = 0
+    for task in tasks:
+        created = timestamp(task.get("date_created"))
+        if pd.isna(created):
+            missing_created += 1
+            continue
+        if start <= created <= end:
+            filtered.append(task)
+    return filtered, missing_created
+
+
+def _preview(tasks: list[dict]) -> pd.DataFrame:
+    rows = []
+    for task in tasks:
+        rows.append({
+            "Task ID": str(task.get("id", "")),
+            "Task Name": task.get("name"),
+            "Space": task.get("_department_space_name", ""),
+            "List": task.get("_department_list_name", ""),
+            "Assignee": ", ".join(assignees(task)),
+            "Status": status_name(task),
+            "Created": timestamp(task.get("date_created")),
+            "Due Date": timestamp(task.get("due_date")),
+            "Parent Task ID": str(task.get("parent") or ""),
+            "Subtask": bool(task.get("parent")),
+        })
+    return pd.DataFrame(rows)
+
+
+def render_department_collection(settings):
+    """Render the approved Department-first ClickUp collection flow."""
+    st.session_state["data_source"] = "ClickUp"
+    st.subheader("Department data collection")
+    st.caption(
+        "Choose a department, set the analysis period, and the system will scan "
+        "all matching ClickUp Lists across every Space."
+    )
+
+    try:
+        workspace_id, catalog = _catalog_spaces(settings)
+    except ClickUpCollectionError as exc:
+        st.error(str(exc))
+        return None, False
+
+    if not catalog:
+        st.warning("No ClickUp department Lists were found in the connected Workspace.")
+        return None, False
+
+    department_keys = sorted(catalog, key=lambda key: catalog[key]["name"].casefold())
+    selected_key = st.selectbox(
+        "Choose Department",
+        [None, *department_keys],
+        format_func=lambda key: "Choose a department" if key is None else catalog[key]["name"],
+        key="department_selected_name",
+    )
+    if selected_key is None:
+        return None, False
+
+    selected = catalog[selected_key]
+    sources = selected["lists"]
+    source_spaces = sorted({item["space_name"] for item in sources}, key=str.casefold)
+    source_caption = ", ".join(source_spaces)
+
+    left, right = st.columns(2)
+    with left:
+        start_date = st.date_input("From date", value=None, key="department_period_start")
+    with right:
+        end_date = st.date_input("To date", value=None, key="department_period_end")
+
+    start_date = _date_value(start_date)
+    end_date = _date_value(end_date)
+    if start_date is None or end_date is None:
+        st.info("Select both From and To dates to load the department scope.")
+        return None, False
+    if start_date > end_date:
+        st.error("The From date must be on or before the To date.")
+        return None, False
+
+    st.caption(
+        f"Department: {selected['name']} · Matching Lists: {len(sources)} · "
+        f"Spaces: {source_caption}"
+    )
+
+    cache_key = json.dumps(
+        {"department": selected_key, "sources": sources},
+        sort_keys=True,
+        default=str,
+    )
+    try:
+        with st.spinner("Scanning all matching ClickUp Lists..."):
+            all_tasks = _collect_department_tasks(settings, sources, cache_key)
+    except ClickUpCollectionError as exc:
+        st.error(str(exc))
+        return None, False
+
+    period_tasks, missing_created = _period_filter(all_tasks, start_date, end_date)
+    options = filter_options(period_tasks)
+    st.subheader("Department filters")
+
+    filter_left, filter_middle, filter_right = st.columns(3)
+    with filter_left:
+        keyword = st.text_input("Search tasks", key="department_search")
+        selected_statuses = st.multiselect("Status", options["status"], key="department_status")
+    with filter_middle:
+        selected_assignees = st.multiselect("Assignee", options["assignee"], key="department_assignee")
+        selected_priorities = st.multiselect("Priority", options["priority"], key="department_priority")
+    with filter_right:
+        match = st.selectbox("Match filters", ["All (AND)", "Any (OR)"], key="department_match")
+
+    criteria = {
+        "keyword": keyword,
+        "status": selected_statuses,
+        "assignee": selected_assignees,
+        "priority": selected_priorities,
+        "due_date": {"mode": "Any time"},
+        "match": match,
+        "extras": {},
+    }
+    filtered_tasks = filter_tasks(period_tasks, criteria)
+    filter_summary = (
+        f"Department: {selected['name']} · Period: {start_date} to {end_date} · "
+        f"Source Spaces: {source_caption}"
+    )
+
+    st.subheader("Matching tasks")
+    st.caption(
+        f"{len(filtered_tasks)} of {len(period_tasks)} tasks in period · "
+        f"{len(all_tasks)} total tasks collected · {missing_created} missing created date"
+    )
+    st.dataframe(_preview(filtered_tasks), hide_index=True, use_container_width=True)
+    if not filtered_tasks:
+        st.warning("No tasks match the selected department, period, and filters.")
+
+    fingerprint = "department:" + json.dumps({
+        "department": selected_key,
+        "sources": sources,
+        "from": str(start_date),
+        "to": str(end_date),
+        "criteria": criteria,
+        "task_ids": [str(task.get("id", "")) for task in filtered_tasks],
+    }, sort_keys=True, default=str)
+
+    previous = st.session_state.get("clickup_prepared_data")
+    if previous is not None and previous.fingerprint != fingerprint:
+        st.session_state.pop("clickup_prepared_data", None)
+        st.session_state.pop("department_analysis", None)
+
+    if st.button("Done", type="primary", key="department_done", disabled=not filtered_tasks):
+        st.session_state.pop("clickup_error", None)
+        try:
+            end_cutoff = pd.Timestamp(datetime.combine(end_date, time.max), tz="UTC").isoformat()
+            with st.status("Preparing department tasks for analysis...", expanded=True) as progress:
+                prepared = collect_data(
+                    None,
+                    filtered_tasks,
+                    selected["name"],
+                    fingerprint,
+                    settings.source_timezone,
+                    progress=lambda message: progress.update(label=message),
+                    space_id="multiple",
+                    time_status_data={},
+                    time_status_error="",
+                    filter_summary=filter_summary,
+                    filter_criteria=criteria,
+                    analysis_mode="department",
+                    department_name=selected["name"],
+                    department_id=selected_key,
+                    cutoff=end_cutoff,
+                )
+                prepared.space_names = source_spaces
+                prepared.period_start = str(start_date)
+                prepared.period_end = str(end_date)
+                prepared.duplicate_count = st.session_state.get("department_duplicate_count", 0)
+                st.session_state["clickup_prepared_data"] = prepared
+                st.session_state["clickup_run_analysis"] = True
+                progress.update(label="Department task collection completed.", state="complete", expanded=False)
+        except Exception as exc:
+            st.session_state["clickup_error"] = str(exc)
+            st.error(f"Department collection could not be completed: {exc}")
+
+    prepared = st.session_state.get("clickup_prepared_data")
+    if prepared is not None:
+        st.success(
+            f"Department collection completed: {prepared.count} tasks from "
+            f"{len(source_spaces)} Space(s)."
+        )
+        st.download_button(
+            "Download Department source Excel",
+            prepared.xlsx,
+            prepared.filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            on_click="ignore",
+        )
+    return prepared, bool(st.session_state.pop("clickup_run_analysis", False))

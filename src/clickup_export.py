@@ -80,7 +80,7 @@ def _current_status_info(payload):
 
 def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None,
                  space_id=None, time_status_data=None, time_status_error="", filter_summary="",
-                 filter_criteria=None, analysis_mode="existing", department_name="", department_id=""):
+                 filter_criteria=None, analysis_mode="existing", department_name="", department_id="", cutoff=None):
     """Prepare ClickUp tasks and explicitly supplied status-duration data.
 
     This function never calls a status/activity endpoint itself.  The UI only
@@ -88,7 +88,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     filter, then passes the returned map here. Jira's collector and workbook
     are untouched.
     """
-    cutoff = datetime.now(timezone.utc).isoformat()
+    cutoff = str(cutoff) if cutoff is not None else datetime.now(timezone.utc).isoformat()
     time_status = {}
     time_status_error = str(time_status_error or "")
     activity_notes = []
@@ -118,7 +118,9 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
         current_minutes, current_since = _current_status_info(payload)
         history_ids = ""
         rows.append([
-            task_space_id, task_id, task.get("name"),
+            task_space_id, task.get("_department_space_name") or "",
+            task.get("_department_list_name") or "",
+            task_id, task.get("name"),
             ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
             priority.get("priority") if isinstance(priority, dict) else priority,
             status.get("status") if isinstance(status, dict) else status,
@@ -135,7 +137,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     wb = Workbook()
     wb.remove(wb.active)
     data_headers = [
-        "Space ID", "Task ID", "Task Name", "Assignee", "Priority", "Current Status",
+        "Space ID", "Space Name", "List Name", "Task ID", "Task Name", "Assignee", "Priority", "Current Status",
         "Created", "Due Date", "Completed", "Time Estimate (ms)", "Time Spent (ms)",
         "Total Time in Status (JSON)", "Current Status Time (min)", "Current Status Since", "History IDs",
         *[f"Time in Status - {name} (min)" for name in status_names],
@@ -144,6 +146,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     _sheet(wb, "Activity", ["Space ID", "Task ID", "History ID", "Timestamp", "User", "Event Type", "Field", "From", "To", "Comment"], activity_rows)
     context_rows = [
         ["Process Name", space_name], ["Space ID", space_id or ""],
+        ["Department", department_name or ""],
         ["Evaluation Scope", filter_summary or "All tasks in the selected ClickUp Space"],
         ["Dataset Type", "ClickUp API collection"],
         ["Evaluation Cutoff Date", cutoff], ["Source Timezone", source_timezone], ["Task Count", len(tasks)],

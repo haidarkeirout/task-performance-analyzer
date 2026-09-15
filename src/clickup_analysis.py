@@ -292,7 +292,11 @@ def analyze_clickup(prepared_data):
             "Priority": (task.get("priority") or {}).get("priority") if isinstance(task.get("priority"), dict) else task.get("priority"),
             "Task Type": task_type(task),
             "Tags": ", ".join(tags(task)) or "No tags",
-            "Location/List": _first_location(task),
+            "Location/List": task.get("_department_list_name") or _first_location(task),
+            "Space": task.get("_department_space_name") or "",
+            "List": task.get("_department_list_name") or "",
+            "Parent Task ID": str(task.get("parent") or ""),
+            "Is Subtask": bool(task.get("parent")),
             "Current Status": status,
             "Status State": state or "Unavailable",
             "Created": created,
@@ -327,6 +331,7 @@ def analyze_clickup(prepared_data):
 
     columns = [
         "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
+        "Space", "List", "Parent Task ID", "Is Subtask",
         "Current Status", "Status State", "Created", "Updated", "Start Date", "Due Date", "Completed",
         "Completed?", "Cancelled?", "Open?", "WIP?", "Elapsed Hours", "Lead Time Hours", "Execution Hours",
         "Time to Start Hours", "Timing Data Status", "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category",
@@ -389,18 +394,26 @@ def analyze_clickup(prepared_data):
         "Available" if status_duration_available
         else ("Unavailable for this scope/account." if getattr(prepared_data, "clickup_time_status_error", "") else "Not requested")
     )
+    source_spaces = getattr(prepared_data, "space_names", None) or [prepared_data.space_name]
     analysis_context = pd.DataFrame([
         ("Process Name", prepared_data.space_name),
+        ("Department", getattr(prepared_data, "department_name", "")),
+        ("Source Spaces", ", ".join(map(str, source_spaces))),
         ("Evaluation Scope", getattr(prepared_data, "filter_summary", "All tasks in the selected ClickUp Space")),
         ("Dataset Type", "ClickUp API collection"),
+        ("Evaluation Period Start", getattr(prepared_data, "period_start", "")),
+        ("Evaluation Period End", getattr(prepared_data, "period_end", "")),
         ("Evaluation Cutoff", prepared_data.cutoff),
         ("Source Timezone", prepared_data.source_timezone),
         ("Task Count", total),
+        ("Duplicate task records removed", getattr(prepared_data, "duplicate_count", 0)),
         ("Activity History", "Not collected; browser collector is disabled."),
         ("Total time in Status", time_status_state),
     ], columns=["Field", "Value"])
     quality = pd.DataFrame([
         ("Task rows collected", total, "OK" if total else "Unavailable"),
+        ("Duplicate task records removed", getattr(prepared_data, "duplicate_count", 0),
+         "OK" if getattr(prepared_data, "duplicate_count", 0) == 0 else "Deduplicated"),
         ("Tasks with status-duration data", status_duration_available, "OK" if status_duration_available else "Unavailable"),
         ("Tasks missing created date", int(task_frame["Created"].isna().sum()) if total else 0,
          "Review" if total and task_frame["Created"].isna().any() else "OK"),
@@ -448,6 +461,8 @@ def analyze_clickup(prepared_data):
         "cutoff": prepared_data.cutoff,
         "source_timezone": prepared_data.source_timezone,
         "space_name": prepared_data.space_name,
+        "space_names": source_spaces,
+        "department_name": getattr(prepared_data, "department_name", ""),
         "filter_summary": getattr(prepared_data, "filter_summary", "All tasks in the selected ClickUp Space"),
     }
 

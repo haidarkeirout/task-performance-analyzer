@@ -1145,7 +1145,8 @@ def show_department_analysis(result: dict) -> None:
 
     st.success("Department performance analysis completed.")
     st.caption(
-        f"Department: {result['department_name']} · Space: {result['space_name']} · "
+        f"Department: {result['department_name']} · Source Spaces: "
+        f"{', '.join(map(str, result.get('space_names', [result['space_name']])))} · "
         f"Cutoff: {result['cutoff']}"
     )
     cards = st.columns(6)
@@ -1246,6 +1247,9 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "clickup_analysis", "department_analysis", "company_analysis",
         "task_metrics", "process_data", "validation_log",
         "clickup_prepared_data", "clickup_run_analysis",
+        "department_selected_name", "department_period_start", "department_period_end",
+        "department_search", "department_status", "department_assignee", "department_priority",
+        "department_match", "department_tasks_cache_key", "department_tasks_cache",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint",
         "company_prepared_items", "company_collection_attempted",
