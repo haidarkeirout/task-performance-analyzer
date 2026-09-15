@@ -168,13 +168,11 @@ def _preview_filters(st: Any, rows: Any):
 
 def render_company_launcher(st: Any) -> None:
     """Render the automatic Company preview and date-only run controls."""
-    if st.session_state.get("company_analysis") is not None:
-        return
-
     prepared_items = tuple(st.session_state.get("company_prepared_items") or ())
+    has_analysis = st.session_state.get("company_analysis") is not None
     with st.expander(
-        "Company Performance — All Projects",
-        expanded=bool(prepared_items),
+        "Company Performance — All Projects" if not has_analysis else "Collected Tasks & Analysis Period",
+        expanded=bool(prepared_items) and not has_analysis,
     ):
         if not prepared_items:
             if st.session_state.get("company_collection_error"):
@@ -240,9 +238,9 @@ def render_company_launcher(st: Any) -> None:
         )
         dates_ready = period_start is not None and period_end is not None
         if st.button(
-            "Run Company Analysis",
+            "Run Company Analysis" if not has_analysis else "Re-run Company Analysis",
             type="primary",
-            key="run_company_performance",
+            key="run_company_performance" if not has_analysis else "rerun_company_performance",
             disabled=not dates_ready,
         ):
             try:
