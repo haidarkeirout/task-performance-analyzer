@@ -133,23 +133,29 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str) -> Pre
     query = f'project = "{project_key}" ORDER BY created DESC'
     gateway = JiraGateway(settings)
     try:
-        issues = gateway.all_issues(query, progress=lambda message: st.caption(message))
+        collection_progress = st.progress(0, text="Finding tasks in Jira...")
+        issues = gateway.all_issues(query)
+        total = len(issues)
+        collection_progress.progress(0, text=f"Collecting tasks: 0 / {total}")
         definitions = gateway.fields()
         histories: dict[str, dict[str, Any]] = {}
         complete: list[dict[str, Any]] = []
         for index, issue in enumerate(issues, 1):
-            with st.status(
-                f"Reading Jira task {index} of {len(issues)}...",
-                expanded=False,
-            ) as status:
-                current, history = gateway.complete_issue(issue)
-                if history.get("history_complete") is not True or not history.get("history_through"):
-                    raise CollectionError(
-                        "A Jira task history is incomplete. No partial project export was prepared."
-                    )
-                complete.append(current)
-                histories[current["key"]] = history
-                status.update(label=f"Read {current['key']}", state="complete")
+            current, history = gateway.complete_issue(issue)
+            if history.get("history_complete") is not True or not history.get("history_through"):
+                raise CollectionError(
+                    "A Jira task history is incomplete. No partial project export was prepared."
+                )
+            complete.append(current)
+            histories[current["key"]] = history
+            collection_progress.progress(
+                index / total if total else 1.0,
+                text=f"Collecting tasks: {index} / {total}",
+            )
+        collection_progress.progress(
+            1.0,
+            text=f"Collection complete: {len(complete)} / {total} tasks",
+        )
 
         cutoff = datetime.now(timezone.utc).isoformat()
         collected_at = datetime.now(timezone.utc).isoformat()
@@ -190,12 +196,12 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
         settings.clickup_token,
         workspace_id=str(settings.clickup_workspace_id or ""),
     )
+    collection_progress = st.progress(
+        0,
+        text=f"Loading task list from ClickUp — {space_name}...",
+    )
     try:
-        with st.spinner(f"Loading tasks from ClickUp — {space_name}..."):
-            tasks = gateway.all_tasks_for_space(
-                space_id,
-                progress=lambda message: st.caption(message),
-            )
+        tasks = gateway.all_tasks_for_space(space_id)
     finally:
         gateway.close()
 
@@ -206,17 +212,35 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
         copy_task["project_space_name"] = space_name
         prepared_tasks.append(copy_task)
 
-    return collect_clickup_data(
+    total = len(prepared_tasks)
+    collection_progress.progress(0, text=f"Collecting tasks: 0 / {total}")
+    collected = 0
+
+    def update_progress(_message):
+        nonlocal collected
+        collected += 1
+        collection_progress.progress(
+            collected / total if total else 1.0,
+            text=f"Collecting tasks: {collected} / {total}",
+        )
+
+    prepared = collect_clickup_data(
         None,
         prepared_tasks,
         space_name,
         fingerprint,
         settings.source_timezone,
+        progress=update_progress,
         space_id=space_id,
         filter_summary=f"Selected ClickUp Space: {space_name}",
         filter_criteria={"space": space_name, "space_id": space_id},
         analysis_mode="project",
     )
+    collection_progress.progress(
+        1.0,
+        text=f"Collection complete: {total} / {total} tasks",
+    )
+    return prepared
 
 
 def _preview_frame(preview) -> pd.DataFrame:
