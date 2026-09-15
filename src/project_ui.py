@@ -1073,13 +1073,14 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     for index, (title, value) in enumerate(card_values):
         _dashboard_card(dashboard, 1 + index * 2, title, value)
 
+    management_averages = _project_management_averages(result)
     secondary = [
-        ("Avg Execution Time", summary_values["mean_execution_elapsed_hours"], "h"),
-        ("Avg Lead Time", summary_values["mean_lead_time_elapsed_hours"], "h"),
-        ("Avg Time to Start", summary_values["mean_time_to_start_elapsed_hours"], "h"),
-        ("Avg Late Completion", "Unavailable", ""),
-        ("Avg Open Overdue", None, "days"),
-        ("Avg Start Variance", None, "days"),
+        ("Avg Execution Time (Completed)", management_averages["Avg Execution Time (Completed)"], "h"),
+        ("Avg Lead Time (Completed)", management_averages["Avg Lead Time (Completed)"], "h"),
+        ("Avg Time to Start", management_averages["Avg Time to Start"], "h"),
+        ("Avg Late Completion", management_averages["Avg Late Completion"], "days"),
+        ("Avg Open Overdue", management_averages["Avg Open Overdue"], "days"),
+        ("Avg Due Variance (Completed)", management_averages["Avg Due Variance (Completed)"], "days"),
     ]
     for index, (title, value, unit) in enumerate(secondary):
         start_col = 1 + index * 2
