@@ -17,7 +17,6 @@ from standard_report_style import (
     add_report_heading,
     add_report_key_value_table,
     add_report_paragraph,
-    add_report_table,
     add_report_title,
     configure_report_document,
 )
@@ -160,7 +159,7 @@ def _set_table_geometry(table, widths: list[int]):
         for index, cell in enumerate(row.cells):
             _set_cell_width(cell, widths[index])
             _set_cell_margins(cell)
-            cell.vertical_ali
+            cell.vertical_alignment = WD_CELL_VERTI
 def set_document_style(document: Document) -> None:
     configure_report_document(
         document,
@@ -188,7 +187,7 @@ def add_key_value_table(document: Document, values: dict[str, Any]) -> None:
     add_report_key_value_table(document, values)
 
 
-         run = paragraph.add_run(str(content))
+ph.add_run(str(content))
             _set_run_font(run, size=9, bold=(index == 0))
     _set_table_geometry(table, [2700, 6660])
     document.add_paragraph().paragraph_format.space_after = Pt(4)
