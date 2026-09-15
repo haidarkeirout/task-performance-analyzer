@@ -162,10 +162,10 @@ def build_company_preview(
         _, project_name, _ = _prepared_metadata(prepared)
         sources.append(_adapt_jira_prepared(prepared, project_name or "Preview"))
     for prepared in _prepared_items(clickup_prepared):
-        _, project_name, source_space = _prepared_metadata(prepared)
+        prepared_data, project_name, source_space = _prepared_metadata(prepared)
         sources.append(
             adapt_clickup_prepared(
-                prepared,
+                prepared_data,
                 unified_project=project_name or "Preview",
                 source_space=source_space,
             )
@@ -271,13 +271,13 @@ def build_company_analysis(
 
     if clickup_items:
         for item in clickup_items:
-            _, item_project, source_space = _prepared_metadata(item)
+            prepared_data, item_project, source_space = _prepared_metadata(item)
             project = shared_project or item_project or (clickup_project or "").strip()
             if not project:
                 raise ValueError("A project mapping is missing for one ClickUp Space.")
             sources.append(
                 adapt_clickup_prepared(
-                    item,
+                    prepared_data,
                     unified_project=project,
                     source_space=source_space,
                 )
