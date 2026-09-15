@@ -40,6 +40,16 @@ class CompanyAnalysisResult:
 
 
 @dataclass(frozen=True)
+class CompanyPreparedItem:
+    """Prepared source data plus the company mapping metadata for one Space."""
+
+    prepared: Any
+    source_tool: str
+    source_space: str
+    project_name: str
+
+
+@dataclass(frozen=True)
 class CompanyPreviewRow:
     """One source-neutral task row shown before Company Performance analysis."""
 
@@ -51,6 +61,7 @@ class CompanyPreviewRow:
     assignee: str
     priority: str
     due_date: date | None
+    project_name: str | None = None
 
 
 def _value(row: Mapping[str, Any], name: str) -> Any:
@@ -109,12 +120,24 @@ def _jira_histories(prepared_data: Any) -> dict[str, Mapping[str, Any]]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _adapt_jira_prepared(prepared_data: Any, unified_project: str):
+def _prepared_metadata(item: Any) -> tuple[Any, str | None, str | None]:
+    """Unwrap automatic Company collection metadata when present."""
+    if isinstance(item, CompanyPreparedItem):
+        return item.prepared, item.project_name, item.source_space
+    return (
+        item,
+        None,
+        getattr(item, "space_name", None),
+    )
+
+
+def _adapt_jira_prepared(item: Any, unified_project: str):
+    prepared_data, _, source_space = _prepared_metadata(item)
     return adapt_jira_collection(
         _jira_export_issues(prepared_data),
         _jira_histories(prepared_data),
         unified_project=unified_project,
-        source_space=getattr(prepared_data, "space_name", None),
+        source_space=source_space,
         collection_timestamp=getattr(prepared_data, "collected_at", None),
     )
 
@@ -136,9 +159,17 @@ def build_company_preview(
     """Build the combined source preview without running historical analysis."""
     sources = []
     for prepared in _prepared_items(jira_prepared):
-        sources.append(_adapt_jira_prepared(prepared, "Preview"))
+        _, project_name, _ = _prepared_metadata(prepared)
+        sources.append(_adapt_jira_prepared(prepared, project_name or "Preview"))
     for prepared in _prepared_items(clickup_prepared):
-        sources.append(adapt_clickup_prepared(prepared, unified_project="Preview"))
+        _, project_name, source_space = _prepared_metadata(prepared)
+        sources.append(
+            adapt_clickup_prepared(
+                prepared,
+                unified_project=project_name or "Preview",
+                source_space=source_space,
+            )
+        )
 
     if not sources:
         return ()
@@ -153,6 +184,7 @@ def build_company_preview(
             assignee=assignee_group(task),
             priority=normalize_priority(task.source_tool, task.priority),
             due_date=task.due_date,
+            project_name=task.unified_project,
         )
         for task in records
     )
@@ -230,16 +262,26 @@ def build_company_analysis(
     sources = []
 
     if jira_items:
-        project = shared_project or (jira_project or "").strip()
-        if not project:
-            raise ValueError("Enter a Unified Project name for the selected Jira space.")
-        sources.extend(_adapt_jira_prepared(item, project) for item in jira_items)
+        for item in jira_items:
+            _, item_project, _ = _prepared_metadata(item)
+            project = shared_project or item_project or (jira_project or "").strip()
+            if not project:
+                raise ValueError("A project mapping is missing for one Jira Space.")
+            sources.append(_adapt_jira_prepared(item, project))
 
     if clickup_items:
-        project = shared_project or (clickup_project or "").strip()
-        if not project:
-            raise ValueError("Enter a Unified Project name for the selected ClickUp space.")
-        sources.extend(adapt_clickup_prepared(item, unified_project=project) for item in clickup_items)
+        for item in clickup_items:
+            _, item_project, source_space = _prepared_metadata(item)
+            project = shared_project or item_project or (clickup_project or "").strip()
+            if not project:
+                raise ValueError("A project mapping is missing for one ClickUp Space.")
+            sources.append(
+                adapt_clickup_prepared(
+                    item,
+                    unified_project=project,
+                    source_space=source_space,
+                )
+            )
 
     if not sources:
         raise ValueError("Collect at least one Jira or ClickUp space before running Company Performance.")
