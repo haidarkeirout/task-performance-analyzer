@@ -339,6 +339,18 @@ def _average_text(values: list[int | float]) -> str:
 
 
 def _management_average_rows(snapshots: Any, period_end: date) -> list[dict[str, str]]:
+    if not snapshots:
+        return [
+            {"Metric": label, "Value": "Unavailable"}
+            for label in (
+                "Avg Execution Time (Completed)",
+                "Avg Lead Time (Completed)",
+                "Avg Time to Start",
+                "Avg Late Completion",
+                "Avg Open Overdue",
+                "Avg Due Variance (Completed)",
+            )
+        ]
     core = build_company_dashboard(snapshots).kpis
     completed = [
         item for item in snapshots
