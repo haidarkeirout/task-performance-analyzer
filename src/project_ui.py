@@ -1566,6 +1566,8 @@ def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: 
             st.subheader(chart.title)
             if chart.points:
                 st.bar_chart({point.label: point.value for point in chart.points}, use_container_width=True)
+            if chart.note:
+                st.caption(chart.note)
             else:
                 st.info("No eligible data is available for this chart.")
 
