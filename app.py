@@ -1248,6 +1248,8 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "clickup_prepared_data", "clickup_run_analysis",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint",
+        "company_prepared_items", "company_collection_attempted",
+        "company_collection_error", "company_collection_errors",
         "company_prepared_jira", "company_prepared_clickup",
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
@@ -1270,15 +1272,9 @@ if analysis_mode == "project":
         st.info("Select a Jira Space, a ClickUp Space, or one from each, then choose the analysis period.")
     st.stop()
 
-# Company Performance is intentionally additive.  A prepared Jira or ClickUp
-# result remains available while the user collects the other source, and the
-# established source-specific analysis flow below is left unchanged.
+# Company Performance collects the complete Jira + ClickUp scope
+# automatically; the source-specific flows below remain unchanged.
 if analysis_mode == "company":
-    remember_prepared_source(
-        st.session_state,
-        st.session_state.get("data_source", "Jira"),
-        prepared_data,
-    )
     render_company_launcher(st)
     if st.session_state.get("company_analysis") is not None:
         render_company_result(st, st.session_state["company_analysis"])
