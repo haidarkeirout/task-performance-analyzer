@@ -228,42 +228,44 @@ def _department_status_rows(tasks: pd.DataFrame) -> pd.DataFrame:
     return tasks[column].fillna("Unknown").value_counts().rename_axis("Status").reset_index(name="Tasks")
 
 
-def _cutoff_date(value) -> date:
-    if type(value) is date:
-        return value
-    if isinstance(value, date):
-        return value.date()
-    parsed = pd.to_datetime(value, errors="coerce")
-    return parsed.date() if not pd.isna(parsed) else date.today()
+def _cutoff_timestamp(value):
+    """Return a timezone-consistent cutoff for Department date comparisons."""
+    return pd.to_datetime(value, utc=True, errors="coerce")
 
 
 def _department_due_rows(tasks: pd.DataFrame, cutoff) -> pd.DataFrame:
-    cutoff_date = _cutoff_date(cutoff)
+    cutoff_timestamp = _cutoff_timestamp(cutoff)
     if tasks.empty or "Open?" not in tasks:
         return pd.DataFrame([("Open overdue", 0), ("Open within due date", 0), ("Open without due date", 0)],
                             columns=["Due Status", "Tasks"])
     open_mask = tasks["Open?"].eq(True)
     due = tasks["Due Date"] if "Due Date" in tasks else pd.Series(pd.NaT, index=tasks.index)
-    due_dates = pd.to_datetime(due, errors="coerce").dt.date
+    due_timestamps = pd.to_datetime(due, utc=True, errors="coerce")
     overdue_days = pd.to_numeric(tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce")
-    overdue_mask = open_mask & (overdue_days.gt(0) | (due_dates.notna() & due_dates.lt(cutoff_date)))
+    overdue_mask = open_mask & (
+        overdue_days.gt(0)
+        | (due_timestamps.notna() & due_timestamps.lt(cutoff_timestamp))
+    )
     return pd.DataFrame([
         ("Open overdue", int(overdue_mask.sum())),
-        ("Open within due date", int((open_mask & due.notna() & ~overdue_mask).sum())),
-        ("Open without due date", int((open_mask & due.isna()).sum())),
+        ("Open within due date", int((open_mask & due_timestamps.notna() & ~overdue_mask).sum())),
+        ("Open without due date", int((open_mask & due_timestamps.isna()).sum())),
     ], columns=["Due Status", "Tasks"])
 
 
 def _department_space_breakdown(tasks: pd.DataFrame, cutoff=None) -> pd.DataFrame:
     if tasks.empty:
         return pd.DataFrame(columns=["Space", "Total Tasks", "Completed", "Open", "Open Overdue"])
-    cutoff_date = _cutoff_date(cutoff)
+    cutoff_timestamp = _cutoff_timestamp(cutoff)
     completed = tasks.get("Completed?", pd.Series(False, index=tasks.index)).eq(True)
     open_mask = tasks.get("Open?", pd.Series(False, index=tasks.index)).eq(True)
     due = tasks.get("Due Date", pd.Series(pd.NaT, index=tasks.index))
-    due_dates = pd.to_datetime(due, errors="coerce").dt.date
+    due_timestamps = pd.to_datetime(due, utc=True, errors="coerce")
     overdue_days = pd.to_numeric(tasks.get("Overdue Days", pd.Series(index=tasks.index)), errors="coerce")
-    overdue = open_mask & (overdue_days.gt(0) | (due_dates.notna() & due_dates.lt(cutoff_date)))
+    overdue = open_mask & (
+        overdue_days.gt(0)
+        | (due_timestamps.notna() & due_timestamps.lt(cutoff_timestamp))
+    )
     grouped = tasks.assign(
         _completed=completed, _open=open_mask, _overdue=overdue,
     ).groupby("Space", dropna=False).agg(
