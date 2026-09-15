@@ -20,7 +20,8 @@ def _clear_employee_state() -> None:
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint", "prepared_data", "data_source",
         "clickup_prepared_data", "clickup_analysis", "task_metrics", "process_data",
-        "validation_log", "department_analysis",
+        "validation_log", "department_analysis", "employee_run_requested",
+        "clickup_run_analysis", "cutoff_text", "prepared_data",
     ):
         st.session_state.pop(key, None)
 
@@ -183,6 +184,17 @@ def render_employee_collection(settings):
     st.caption(f"Department: {record.department or 'Not specified'} · Source detected automatically: {record.primary_source.title()}")
 
     snapshot_key = f"{record.name}:{record.primary_source}:{record.jira_account_id}:{record.clickup_user_id}"
+    # Defensive cleanup: widget callbacks can be skipped during fragment reruns,
+    # so never allow a prior employee's snapshot or analysis to survive a key change.
+    if (
+        st.session_state.get("employee_snapshot_key")
+        and st.session_state.get("employee_snapshot_key") != snapshot_key
+    ):
+        _clear_employee_state()
+        st.session_state["employee_selected_spaces"] = []
+        st.session_state["employee_snapshot_key"] = snapshot_key
+        st.rerun()
+
     if st.button("Load Employee Tasks", type="primary", key="employee_load"):
         _clear_employee_state()
         try:
