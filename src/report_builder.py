@@ -159,7 +159,17 @@ def _set_table_geometry(table, widths: list[int]):
         for index, cell in enumerate(row.cells):
             _set_cell_width(cell, widths[index])
             _set_cell_margins(cell)
-            cell.vertical_alignment = WD_CELL_VERTI
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+
+
+def _set_repeat_table_header(row):
+    tr_pr = row._tr.get_or_add_trPr()
+    header = OxmlElement("w:tblHeader")
+    header.set(qn("w:val"), "true")
+    tr_pr.append(header)
+
+
+
 def set_document_style(document: Document) -> None:
     configure_report_document(
         document,
@@ -185,12 +195,6 @@ def _add_bullet(document: Document, text: str) -> None:
 
 def add_key_value_table(document: Document, values: dict[str, Any]) -> None:
     add_report_key_value_table(document, values)
-
-
-ph.add_run(str(content))
-            _set_run_font(run, size=9, bold=(index == 0))
-    _set_table_geometry(table, [2700, 6660])
-    document.add_paragraph().paragraph_format.space_after = Pt(4)
 
 
 def _jira_recommendations(row, task_metrics: pd.DataFrame) -> list[str]:
