@@ -288,7 +288,7 @@ def _cards(
     period_end: date,
     scope: str,
 ) -> tuple[KpiCard, ...]:
-    """The approved executive headline: exactly five cards."""
+    """Build the company headline cards with project count first."""
     help_text = build_kpi_help(
         snapshots,
         kpis,
@@ -296,7 +296,14 @@ def _cards(
         period_end=period_end,
         scope=scope,
     )
+    project_count = len({
+        item.task.unified_project or "Unmapped Project"
+        for item in snapshots
+        if item.counted_in_kpis
+    })
     return (
+        KpiCard("total-projects", "Total Projects", str(project_count),
+                "Distinct inferred project names in the selected scope."),
         KpiCard("total-tasks", "Total Tasks", str(kpis.total_tasks), help_text["total-tasks"]),
         KpiCard("completion-rate", "Completion Rate", _format_rate(kpis.completion_rate),
                 f"{kpis.completed_tasks} completed at period end\n\n{help_text['completion-rate']}"),
@@ -438,7 +445,7 @@ def build_company_dashboard(
 ) -> CompanyDashboardModel:
     """Build a complete Company Performance dashboard view model.
 
-    The five cards and three charts are fixed by design.  Details, coverage,
+    The six cards and three charts are fixed by design.  Details, coverage,
     and Data Quality remain available for executive drill-down rather than
     expanding the headline dashboard.
     """
@@ -463,15 +470,15 @@ def build_company_dashboard(
             selected,
             period_start=period_start,
             period_end=period_end,
-            scope="Selected Project scope",
+            scope="Company-wide scope",
         ),
         executive_charts=_executive_charts(selected),
         source_coverage=_coverage_views(coverages),
         data_quality=_quality_items(selected),
         task_details=_task_details(selected),
     )
-    if len(model.cards) != 5 or len(model.executive_charts) != 3:
-        raise AssertionError("Company dashboard contract requires five cards and three charts")
+    if len(model.cards) != 6 or len(model.executive_charts) != 3:
+        raise AssertionError("Company dashboard contract requires six cards and three charts")
     return model
 
 
@@ -479,7 +486,7 @@ def render_company_performance_dashboard(st: Any, model: CompanyDashboardModel) 
     """Minimal optional Streamlit renderer for a prepared dashboard model."""
     st.subheader("Company Performance — Selected Projects")
     st.caption(f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}")
-    columns = st.columns(5)
+    columns = st.columns(6)
     for column, card in zip(columns, model.cards):
         column.metric(card.title, card.value, help=card.supporting_text)
     for chart in model.executive_charts:
