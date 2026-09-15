@@ -125,6 +125,11 @@ def _mean(frame: pd.DataFrame, column: str, mask=None):
     return None if values.empty else float(values.mean())
 
 
+def _utc_datetime_series(values):
+    """Normalize mixed ClickUp datetime values before pandas comparisons."""
+    return pd.to_datetime(values, utc=True, errors="coerce")
+
+
 def _weekly_flow(task_frame: pd.DataFrame, cutoff=None) -> pd.DataFrame:
     """Build Monday-starting created/completed flow through the evaluation cutoff.
 
@@ -137,6 +142,9 @@ def _weekly_flow(task_frame: pd.DataFrame, cutoff=None) -> pd.DataFrame:
 
     created = task_frame.loc[task_frame["Created"].notna(), ["Created"]].copy()
     completed = task_frame.loc[task_frame["Completed"].notna(), ["Completed"]].copy()
+    created["Created"] = _utc_datetime_series(created["Created"])
+    completed["Completed"] = _utc_datetime_series(completed["Completed"])
+    cutoff = pd.to_datetime(cutoff, utc=True, errors="coerce")
 
     if pd.notna(cutoff):
         created = created[created["Created"].le(cutoff)]
@@ -175,8 +183,10 @@ def _due_status_summary(frame: pd.DataFrame, cutoff) -> pd.DataFrame:
     if open_tasks.empty:
         return pd.DataFrame(columns=columns)
 
+    cutoff = pd.to_datetime(cutoff, utc=True, errors="coerce")
+
     def bucket(row):
-        due = row["Due Date"]
+        due = pd.to_datetime(row["Due Date"], utc=True, errors="coerce")
         if pd.isna(due):
             return "No due date"
         if pd.notna(cutoff) and due < cutoff:
@@ -235,7 +245,7 @@ def analyze_clickup(prepared_data):
     payload = json.loads(prepared_data.history_json.decode("utf-8"))
     raw_tasks = payload.get("tasks") if isinstance(payload, dict) else []
     time_payloads = payload.get("time_in_status", {}) if isinstance(payload, dict) else {}
-    cutoff = timestamp(prepared_data.cutoff)
+    cutoff = pd.to_datetime(timestamp(prepared_data.cutoff), utc=True, errors="coerce")
     rows: list[dict[str, Any]] = []
     status_rows: list[dict[str, Any]] = []
 
@@ -339,6 +349,8 @@ def analyze_clickup(prepared_data):
         "Current Status Since", "Total Time in Status (min)", "Time in Status",
     ]
     task_frame = pd.DataFrame(rows, columns=columns)
+    for date_column in ("Created", "Updated", "Start Date", "Due Date", "Completed", "Current Status Since"):
+        task_frame[date_column] = _utc_datetime_series(task_frame[date_column])
     status_frame = pd.DataFrame(status_rows, columns=["Status", "Task ID", "Minutes", "Hours"])
     total = len(task_frame)
     completed = task_frame[task_frame["Completed?"]] if total else task_frame
