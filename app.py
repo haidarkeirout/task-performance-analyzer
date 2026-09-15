@@ -102,6 +102,7 @@ def create_word_report_download(
     task_metrics: pd.DataFrame,
     cutoff: str,
     tables=None,
+    title: str = "Employee Task Execution Performance Evaluation",
 ) -> bytes:
     temporary_file = tempfile.NamedTemporaryFile(
         suffix=".docx",
@@ -118,7 +119,7 @@ def create_word_report_download(
         build_report(
             task_metrics,
             temporary_path,
-            title="Jira Process Performance Evaluation Report",
+            title=title,
             process_data=tables,
             evaluation_cutoff=cutoff,
             timezone_name="Asia/Damascus",
@@ -1306,6 +1307,11 @@ if "task_metrics" in st.session_state:
 
     with download_columns[1]:
         try:
+            report_title = (
+                "Employee Task Execution Performance Evaluation"
+                if analysis_mode == "employee"
+                else "Jira Process Performance Evaluation Report"
+            )
             report_bytes = create_word_report_download(
                 task_metrics,
                 st.session_state.get(
@@ -1313,6 +1319,7 @@ if "task_metrics" in st.session_state:
                     cutoff_text,
                 ),
                 tables=process_data,
+                title=report_title,
             )
 
             st.download_button(
