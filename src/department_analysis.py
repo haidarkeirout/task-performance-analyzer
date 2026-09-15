@@ -10,7 +10,7 @@ from docx import Document
 from docx.shared import Inches
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 def _metric(result: dict, name: str, default=None):
