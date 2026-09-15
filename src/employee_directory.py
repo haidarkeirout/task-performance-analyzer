@@ -1,11 +1,9 @@
 """Employee directory loaded from the admin-maintained OneDrive workbook."""
 from __future__ import annotations
 
-import csv
 import os
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
 from typing import Iterable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -13,7 +11,6 @@ import pandas as pd
 import requests
 
 
-DIRECTORY_PATH = Path(__file__).resolve().parents[1] / "config" / "employee_directory.csv"
 DEFAULT_DIRECTORY_URL = (
     "https://1drv.ms/x/c/39dd675097cd5e3d/"
     "IQBA5U9zjQJTTrJ_U0unXsHWAVOMMDwUnBNZa5Xq3KyuAyg?e=K4tgrD"
@@ -77,10 +74,7 @@ def _direct_download_url(url: str) -> str | None:
     resid = query.get("resid")
     if not resid:
         return None
-    return (
-        "https://onedrive.live.com/download?"
-        + urlencode({"resid": resid})
-    )
+    return "https://onedrive.live.com/download?" + urlencode({"resid": resid})
 
 
 def _download_workbook(url: str) -> bytes:
@@ -115,8 +109,6 @@ def _download_workbook(url: str) -> bytes:
         if payload.startswith(b"PK") or "spreadsheet" in content_type:
             return payload
 
-        # OneDrive may redirect a share URL to a page whose final URL contains
-        # the resource ID. Try its download endpoint before reporting failure.
         redirected = _direct_download_url(response.url)
         if redirected and redirected not in visited:
             candidates.insert(0, redirected)
@@ -159,13 +151,6 @@ def _remote_rows(url: str) -> list[dict[str, object]]:
         "The online employee directory does not contain the required columns "
         f"in any sheet. Available sheets: {available or 'none'}."
     )
-
-
-def _csv_rows(path: Path) -> list[dict[str, object]]:
-    if not path.exists():
-        raise ValueError(f"Employee directory is missing: {path}")
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        return list(csv.DictReader(handle))
 
 
 def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> list[EmployeeRecord]:
@@ -214,11 +199,7 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
     return [record for record in records if record.active]
 
 
-def load_employee_directory(path: Path | None = None) -> list[EmployeeRecord]:
-    """Load the online directory; accept an explicit CSV path for tests/fallbacks."""
-    if path is not None:
-        rows = _csv_rows(path)
-        return _build_records(rows, str(path))
-
+def load_employee_directory() -> list[EmployeeRecord]:
+    """Load and validate the online employee directory."""
     rows = _remote_rows(_directory_url())
     return _build_records(rows, "the online Excel directory")
