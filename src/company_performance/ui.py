@@ -8,9 +8,12 @@ APIs; source collection remains in the established collector screens.
 from __future__ import annotations
 
 import tempfile
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 from .application import (
     CompanyAnalysisResult,
@@ -163,81 +166,93 @@ def _preview_filters(st: Any, rows: Any):
 
 
 def render_company_launcher(st: Any) -> None:
-    """Render independent source selectors, combined preview, and run controls."""
-    jira_spaces = available_prepared_spaces(st.session_state, "Jira")
-    clickup_spaces = available_prepared_spaces(st.session_state, "ClickUp")
+    """Render the automatic Company preview and date-only run controls."""
+    if st.session_state.get("company_analysis") is not None:
+        return
 
-    with st.expander("Company Performance — Selected Projects", expanded=bool(jira_spaces or clickup_spaces)):
+    prepared_items = tuple(st.session_state.get("company_prepared_items") or ())
+    with st.expander(
+        "Company Performance — All Projects",
+        expanded=bool(prepared_items),
+    ):
+        if not prepared_items:
+            if st.session_state.get("company_collection_error"):
+                st.info("Company collection could not prepare a usable preview. Retry above.")
+            else:
+                st.info("Collecting all Jira projects and ClickUp Spaces...")
+            return
+
+        failures = tuple(st.session_state.get("company_collection_errors") or ())
+        if failures:
+            st.warning(
+                f"{len(failures)} Space(s) could not be collected. "
+                "The dashboard will use the successfully collected sources."
+            )
+
         st.caption(
-            "Select any collected Jira and/or ClickUp spaces. "
-            "Existing source-specific analyses remain separate."
+            "The system collected every accessible Jira project and ClickUp Space. "
+            "Source Spaces are grouped under inferred project names; the original "
+            "source Space remains visible in task details."
         )
-        if not jira_spaces and not clickup_spaces:
-            st.info("No source data is ready yet. Collect at least one Jira or ClickUp space first.")
-            return
 
-        selectors = st.columns(2)
-        selected_jira_names = selectors[0].multiselect(
-            "Select Jira Spaces",
-            list(jira_spaces),
-            default=list(jira_spaces),
-            key="company_selected_jira_spaces",
-        )
-        selected_clickup_names = selectors[1].multiselect(
-            "Select ClickUp Spaces",
-            list(clickup_spaces),
-            default=list(clickup_spaces),
-            key="company_selected_clickup_spaces",
-        )
-        selected_jira = tuple(jira_spaces[name] for name in selected_jira_names)
-        selected_clickup = tuple(clickup_spaces[name] for name in selected_clickup_names)
+        project_rows = []
+        grouped: dict[str, list[str]] = defaultdict(list)
+        for item in prepared_items:
+            label = str(getattr(item, "project_name", "") or "Unmapped Project")
+            source = str(getattr(item, "source_tool", "") or "")
+            space = str(getattr(item, "source_space", "") or "")
+            grouped[label].append(f"{source}: {space}")
+        for project_name, source_spaces in sorted(grouped.items(), key=lambda pair: pair[0].casefold()):
+            project_rows.append({
+                "Project": project_name,
+                "Source Spaces": " | ".join(sorted(source_spaces)),
+            })
 
-        if not (selected_jira or selected_clickup):
-            st.info("Select at least one Jira or ClickUp space to preview tasks and run Company Performance.")
-            return
+        st.subheader("Detected Projects")
+        st.dataframe(project_rows, hide_index=True, use_container_width=True)
 
+        jira_items = tuple(item for item in prepared_items if getattr(item, "source_tool", "") == "Jira")
+        clickup_items = tuple(item for item in prepared_items if getattr(item, "source_tool", "") == "ClickUp")
         preview = build_company_preview(
-            jira_prepared=selected_jira,
-            clickup_prepared=selected_clickup,
+            jira_prepared=jira_items,
+            clickup_prepared=clickup_items,
         )
-        st.subheader("Combined Task Preview")
-        filtered_preview = _preview_filters(st, preview)
+        st.subheader("Complete Task Preview")
+        st.caption(f"{len(preview)} task(s) collected across {len(prepared_items)} source Space(s).")
         st.dataframe(
-            _preview_table_rows(filtered_preview),
+            _preview_table_rows(preview),
             hide_index=True,
             use_container_width=True,
         )
 
-        # The approved run order starts only after source selection and preview.
-        unified_project = st.text_input("Unified Project Name", key="company_unified_project")
-        default_start, default_end = _period_defaults((*selected_jira, *selected_clickup))
+        default_start, default_end = _period_defaults(prepared_items)
         period_columns = st.columns(2)
         period_start = period_columns[0].date_input(
-            "Analysis Period Start",
+            "Analysis Period From",
             value=default_start,
             key="company_period_start",
         )
         period_end = period_columns[1].date_input(
-            "Analysis Period End",
+            "Analysis Period To",
             value=default_end,
             key="company_period_end",
         )
+        dates_ready = period_start is not None and period_end is not None
         if st.button(
-            "Run Analysis",
+            "Run Company Analysis",
             type="primary",
             key="run_company_performance",
-            disabled=not unified_project.strip(),
+            disabled=not dates_ready,
         ):
             try:
                 st.session_state["company_analysis"] = build_company_analysis(
                     period_start=period_start,
                     period_end=period_end,
-                    jira_prepared=selected_jira,
-                    clickup_prepared=selected_clickup,
-                    unified_project=unified_project,
+                    jira_prepared=jira_items,
+                    clickup_prepared=clickup_items,
                 )
                 st.success("Company Performance analysis completed.")
-            except ValueError as exc:
+            except (ValueError, TypeError) as exc:
                 st.error(str(exc))
 
 
@@ -317,16 +332,108 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
     return excel, raw, word
 
 
+def _average_text(values: list[int | float]) -> str:
+    usable = [float(value) for value in values if value is not None]
+    return "Unavailable" if not usable else f"{sum(usable) / len(usable):.1f} days"
+
+
+def _management_average_rows(snapshots: Any, period_end: date) -> list[dict[str, str]]:
+    core = build_company_dashboard(snapshots).kpis
+    completed = [
+        item for item in snapshots
+        if item.counted_in_kpis
+        and item.status_at_period_end is UnifiedStatus.COMPLETED
+    ]
+    due_variance = [
+        (item.final_completion_date - item.task.due_date).days
+        for item in completed
+        if item.final_completion_date is not None and item.task.due_date is not None
+    ]
+    late_completion = [value for value in due_variance if value > 0]
+    open_overdue = [
+        (period_end - item.task.due_date).days
+        for item in snapshots
+        if item.counted_in_kpis
+        and item.status_at_period_end.is_open
+        and item.task.due_date is not None
+        and item.task.due_date < period_end
+    ]
+    return [
+        {"Metric": "Avg Execution Time (Completed)", "Value": _average_text([core.average_execution_duration_days])},
+        {"Metric": "Avg Lead Time (Completed)", "Value": _average_text([core.average_lead_time_days])},
+        {"Metric": "Avg Time to Start", "Value": _average_text([core.average_time_to_start_days])},
+        {"Metric": "Avg Late Completion", "Value": _average_text(late_completion)},
+        {"Metric": "Avg Open Overdue", "Value": _average_text(open_overdue)},
+        {"Metric": "Avg Due Variance (Completed)", "Value": _average_text(due_variance)},
+    ]
+
+
+def _project_summary_frame(snapshots: Any) -> pd.DataFrame:
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for item in snapshots:
+        if item.counted_in_kpis:
+            grouped[item.task.unified_project or "Unmapped Project"].append(item)
+
+    rows = []
+    for project, items in sorted(grouped.items(), key=lambda pair: pair[0].casefold()):
+        completed = [item for item in items if item.status_at_period_end is UnifiedStatus.COMPLETED]
+        completed_with_due = [
+            item for item in completed
+            if item.task.due_date is not None and item.final_completion_date is not None
+        ]
+        on_time = [
+            item for item in completed_with_due
+            if item.final_completion_date <= item.task.due_date
+        ]
+        overdue = [
+            item for item in items
+            if item.status_at_period_end.is_open
+            and item.task.due_date is not None
+            and item.task.due_date < item.period_end
+        ]
+        total = len(items)
+        rows.append({
+            "Project": project,
+            "Total Tasks": total,
+            "Completed": len(completed),
+            "Completion Rate": round(len(completed) / total * 100, 1) if total else 0.0,
+            "On-Time Rate": round(len(on_time) / len(completed_with_due) * 100, 1) if completed_with_due else None,
+            "Open Overdue": len(overdue),
+        })
+    return pd.DataFrame(rows, columns=[
+        "Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"
+    ])
+
+
+def _weekly_company_flow_frame(snapshots: Any) -> pd.DataFrame:
+    values: dict[date, dict[str, int]] = defaultdict(lambda: {
+        "Tasks Created": 0,
+        "Tasks Completed": 0,
+    })
+    for item in snapshots:
+        if not item.counted_in_kpis:
+            continue
+        if item.task.created_date:
+            week = item.task.created_date - timedelta(days=item.task.created_date.weekday())
+            values[week]["Tasks Created"] += 1
+        if item.final_completion_date:
+            week = item.final_completion_date - timedelta(days=item.final_completion_date.weekday())
+            values[week]["Tasks Completed"] += 1
+    rows = [{"Week Starting": week, **counts} for week, counts in sorted(values.items())]
+    return pd.DataFrame(rows, columns=["Week Starting", "Tasks Created", "Tasks Completed"])
+
+
 def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
-    """Render company results, drill-downs, and the separate audited outputs."""
+    """Render a concise company dashboard plus detailed drill-down outputs."""
     st.divider()
     heading, action = st.columns([5, 1])
-    heading.title("Company Performance")
+    heading.title("Company Performance Analysis")
     if action.button("Close Company View", key="close_company_view", use_container_width=True):
         st.session_state.pop("company_analysis", None)
         st.rerun()
 
-    filters = _filters(st, result)
+    with st.expander("Optional dashboard filters", expanded=False):
+        filters = _filters(st, result)
     model = build_company_dashboard(
         result.snapshots,
         coverages=result.collection.coverages,
@@ -344,18 +451,70 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         "Executive Dashboard", "Workflow & Recommendations", "Task Details", "Coverage & Data Quality"
     ])
     with dashboard:
-        st.caption(f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}")
-        cards = st.columns(5)
-        for column, card in zip(cards, model.cards):
-            column.metric(card.title, card.value, help=card.supporting_text)
-        for chart in model.executive_charts:
-            st.subheader(chart.title)
-            if chart.points:
-                st.bar_chart({point.label: point.value for point in chart.points}, use_container_width=True)
-            else:
-                st.info("No eligible data for this chart.")
-            if chart.note:
-                st.caption(chart.note)
+        st.caption(
+            f"Company-wide analysis period: {model.period_start.isoformat()} "
+            f"to {model.period_end.isoformat()}"
+        )
+        kpis = model.kpis
+        project_count = len({
+            item.task.unified_project or "Unmapped Project"
+            for item in selected
+            if item.counted_in_kpis
+        })
+        card_values = [
+            ("Total Projects", str(project_count), "Distinct inferred project names in the selected scope."),
+            ("Total Tasks", str(kpis.total_tasks), "Count of distinct counted tasks in the selected period."),
+            ("Completed Tasks", str(kpis.completed_tasks), "Tasks whose status is Completed at period end."),
+            ("Completion Rate", "Unavailable" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / total tasks × 100."),
+            ("On-Time Rate", "Unavailable" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
+            ("Open Overdue", str(kpis.overdue_open_tasks), "Open tasks with a valid due date before period end."),
+        ]
+        cards = st.columns(6)
+        for column, (label, value, help_text) in zip(cards, card_values):
+            column.metric(label, value, help=help_text)
+
+        st.subheader("Management Averages")
+        st.caption("Values are elapsed calendar days calculated from the same selected task snapshots.")
+        average_cards = st.columns(6)
+        for column, row in zip(average_cards, _management_average_rows(selected, model.period_end)):
+            column.metric(row["Metric"], row["Value"], help="Hover for the metric definition and calculation basis.")
+
+        st.subheader("Project Performance Comparison")
+        summary = _project_summary_frame(selected)
+        if summary.empty:
+            st.info("No project-level data is available for the selected scope.")
+        else:
+            st.bar_chart(
+                summary.set_index("Project")[["Completion Rate", "On-Time Rate"]].fillna(0),
+                use_container_width=True,
+            )
+
+        st.subheader("Task Status by Project")
+        status_rows: dict[tuple[str, str], int] = defaultdict(int)
+        for item in selected:
+            if item.counted_in_kpis:
+                status_rows[(item.task.unified_project or "Unmapped Project", item.status_at_period_end.value)] += 1
+        status_frame = pd.DataFrame([
+            {"Project": project, "Status": status, "Tasks": count}
+            for (project, status), count in sorted(status_rows.items())
+        ])
+        if status_frame.empty:
+            st.info("No status data is available for the selected scope.")
+        else:
+            st.bar_chart(
+                status_frame.pivot(index="Project", columns="Status", values="Tasks").fillna(0),
+                use_container_width=True,
+            )
+
+        st.subheader("Company Weekly Task Flow")
+        flow = _weekly_company_flow_frame(selected)
+        if flow.empty:
+            st.info("No created/completed dates are available for the selected scope.")
+        else:
+            st.line_chart(flow.set_index("Week Starting"), use_container_width=True)
+
+        st.subheader("Project Summary")
+        st.dataframe(summary, hide_index=True, use_container_width=True)
 
     with workflow:
         st.subheader("Bottleneck Candidates")
@@ -397,3 +556,4 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         _MIME_DOCX,
         use_container_width=True,
     )
+
