@@ -985,6 +985,61 @@ def _add_project_dashboard_charts(sheet, weekly_rows, status_rows, due_rows, ass
     sheet.add_chart(work_chart, "I29")
 
 
+
+def _project_management_averages(result: CompanyAnalysisResult) -> dict[str, float | None]:
+    """Return management timing averages for the selected project scope."""
+    items = [item for item in result.snapshots if item.counted_in_kpis]
+    completed = [item for item in items if item.status_at_period_end.value == "Completed"]
+    execution_hours = [
+        value for value in (
+            _project_elapsed_hours(item.actual_start_date, item.final_completion_date)
+            for item in completed
+        ) if value is not None
+    ]
+    lead_hours = [
+        value for value in (
+            _project_elapsed_hours(item.task.created_date, item.final_completion_date)
+            for item in completed
+        ) if value is not None
+    ]
+    start_hours = [
+        value for value in (
+            _project_elapsed_hours(item.task.created_date, item.actual_start_date)
+            for item in items
+        ) if value is not None
+    ]
+    late_completion_days = [
+        float((item.final_completion_date - item.task.due_date).days)
+        for item in completed
+        if item.final_completion_date and item.task.due_date
+        and item.final_completion_date > item.task.due_date
+    ]
+    open_overdue_days = [
+        float((item.period_end - item.task.due_date).days)
+        for item in items
+        if item.status_at_period_end.is_open
+        and item.task.due_date
+        and item.task.due_date < item.period_end
+    ]
+    due_variance_days = [
+        float((item.final_completion_date - item.task.due_date).days)
+        for item in completed
+        if item.final_completion_date and item.task.due_date
+    ]
+    return {
+        "Avg Execution Time (Completed)": _project_average(execution_hours),
+        "Avg Lead Time (Completed)": _project_average(lead_hours),
+        "Avg Time to Start": _project_average(start_hours),
+        "Avg Late Completion": _project_average(late_completion_days),
+        "Avg Open Overdue": _project_average(open_overdue_days),
+        "Avg Due Variance (Completed)": _project_average(due_variance_days),
+    }
+
+
+def _format_project_average(value: float | None, unit: str) -> str:
+    return "Unavailable" if value is None else f"{value:.1f} {unit}"
+
+
 def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> bytes:
     model = result.model
     period = _project_period_label(result)
