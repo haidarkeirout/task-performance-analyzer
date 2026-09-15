@@ -91,6 +91,24 @@ class MappingAndAttributionTests(unittest.TestCase):
         self.assertTrue(
             task(parent_classification=ParentClassification.INDEPENDENT).counted_in_kpis
         )
+        self.assertFalse(
+            task(parent_classification=ParentClassification.SUBTASK).counted_in_kpis
+        )
+
+    def test_subtasks_remain_in_total_but_are_excluded_from_performance_kpis(self):
+        parent = reconstruct_task(
+            task(task_id="parent", raw_status="Done", workflow_history=(
+                event("To Do", "Done", "2026-09-05T09:00:00"),
+            )), START, END
+        )
+        child = reconstruct_task(
+            task(task_id="child", parent_id="parent", parent_classification=ParentClassification.SUBTASK),
+            START, END
+        )
+        metrics = calculate_core_kpis([parent, child])
+        self.assertEqual(metrics.total_tasks, 2)
+        self.assertEqual(metrics.completed_tasks, 1)
+        self.assertEqual(metrics.completion_rate, 100.0)
 
 
 class WorkflowTests(unittest.TestCase):

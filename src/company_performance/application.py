@@ -300,10 +300,11 @@ def build_company_analysis(
     if not snapshots:
         raise ValueError("The selected sources contain no usable task records.")
     model = build_company_dashboard(snapshots, coverages=collection.coverages, filters=filters)
+    analysis_snapshots = tuple(snapshot for snapshot in snapshots if snapshot.in_scope)
     return CompanyAnalysisResult(
         collection=collection,
         snapshots=snapshots,
         model=model,
-        bottlenecks=identify_bottleneck_candidates(snapshots),
-        recommendations=generate_recommendations(snapshots),
+        bottlenecks=identify_bottleneck_candidates(analysis_snapshots),
+        recommendations=generate_recommendations(analysis_snapshots),
     )

@@ -42,7 +42,9 @@ class ParentClassification(str, Enum):
 
     @property
     def counted_in_kpis(self) -> bool:
-        return self is not self.CONTAINER
+        # Subtasks remain visible and are included in the overall task count,
+        # but parent-level performance KPIs must not count them a second time.
+        return self not in {self.CONTAINER, self.SUBTASK}
 
 
 class AssigneeGroup(str, Enum):

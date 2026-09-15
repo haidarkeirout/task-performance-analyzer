@@ -48,6 +48,7 @@ class CompanyOutputTests(unittest.TestCase):
             path = write_company_excel(model, Path(directory) / "company.xlsx")
             workbook = load_workbook(path)
             self.assertEqual(tuple(workbook.sheetnames), COMPANY_SHEET_NAMES)
+            self.assertEqual(workbook["Executive Dashboard"]["A1"].value, "Company Performance — Company-Wide Scope")
             self.assertNotIn("Raw Collected Data", workbook.sheetnames)
 
     def test_raw_data_is_a_separate_audit_workbook(self):
@@ -63,6 +64,7 @@ class CompanyOutputTests(unittest.TestCase):
                 model, Path(directory) / "company.docx"),
             document = Document(path[0])
             text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+            self.assertIn("Company-wide analysis across all collected Jira projects and ClickUp spaces", text)
             for number, title in enumerate((
                 "Executive Summary", "Scope and Analysis Period", "Data Sources and Coverage",
                 "Methodology and Assignment Rules", "Headline KPIs", "Delivery Outcome",

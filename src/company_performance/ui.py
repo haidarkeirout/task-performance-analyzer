@@ -281,6 +281,12 @@ def _task_detail_rows(items: Any) -> list[dict[str, Any]]:
             "Workflow Events": item.workflow_events,
             "Exception Events": item.exception_events,
             "Data Quality Flags": item.data_quality_flags,
+            "Parent ID": item.parent_id,
+            "Parent Classification": item.parent_classification,
+            "Is Subtask": item.is_subtask,
+            "In Analysis Period": item.in_analysis_period,
+            "Counted in KPIs": item.counted_in_kpis,
+            "Exclusion Reason": item.exclusion_reason,
         }
         for item in items
     ]
@@ -312,8 +318,13 @@ def _filters(st: Any, result: CompanyAnalysisResult) -> DashboardFilters:
 def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, bytes, bytes]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        bottlenecks = identify_bottleneck_candidates(result.snapshots)
-        recommendations = generate_recommendations(result.snapshots)
+        selected_keys = {(detail.source_tool, detail.task_id) for detail in model.task_details}
+        selected_snapshots = tuple(
+            snapshot for snapshot in result.snapshots
+            if snapshot.in_scope and (snapshot.task.source_tool, snapshot.task.task_id) in selected_keys
+        )
+        bottlenecks = identify_bottleneck_candidates(selected_snapshots)
+        recommendations = generate_recommendations(selected_snapshots)
         excel = write_company_excel(
             model,
             root / "company_performance_analysis.xlsx",
@@ -321,7 +332,7 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
             recommendations=recommendations,
         ).read_bytes()
         raw = write_company_raw_data(
-            result.snapshots,
+            selected_snapshots,
             root / "company_performance_raw_data.xlsx",
         ).read_bytes()
         word = write_company_word_report(
@@ -468,6 +479,10 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
             f"Company-wide analysis period: {model.period_start.isoformat()} "
             f"to {model.period_end.isoformat()}"
         )
+        st.caption(
+            f"Showing {model.in_period_task_count} task(s) within the selected analysis period. "
+            "Tasks outside From/To are excluded from the dashboard and analysis outputs."
+        )
         kpis = model.kpis
         project_count = len({
             item.task.unified_project or "Unmapped Project"
@@ -569,4 +584,3 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         _MIME_DOCX,
         use_container_width=True,
     )
-

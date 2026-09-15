@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from statistics import mean, median
 from typing import Iterable
 
-from .models import TaskPeriodSnapshot, UnifiedStatus
+from .models import ParentClassification, TaskPeriodSnapshot, UnifiedStatus
 from .normalization import normalize_priority
 
 
@@ -83,7 +83,13 @@ class Recommendation:
 
 
 def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
-    tasks = [snapshot for snapshot in snapshots if snapshot.counted_in_kpis]
+    in_scope = [
+        snapshot for snapshot in snapshots
+        if snapshot.in_scope and snapshot.task.parent_classification is not ParentClassification.CONTAINER
+    ]
+    # Parent/standalone tasks drive performance KPIs.  Subtasks stay in the
+    # overall task count but are excluded from status and completion metrics.
+    tasks = [snapshot for snapshot in in_scope if snapshot.counted_in_kpis]
 
     # Unknown status remains visible in Task Details/Data Quality, but it must not
     # silently change status-dependent executive rates or overdue/WIP counts.
@@ -137,7 +143,7 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         if item.final_completion_date is not None and item.task.created_date is not None
     ]
     return CoreKPIs(
-        total_tasks=len(tasks),
+        total_tasks=len(in_scope),
         completed_tasks=len(completed),
         cancelled_tasks=len(cancelled),
         rejected_tasks=len(rejected),

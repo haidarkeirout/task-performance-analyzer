@@ -118,6 +118,12 @@ class TaskDetail:
     workflow_events: tuple[str, ...]
     exception_events: tuple[str, ...]
     data_quality_flags: tuple[str, ...]
+    parent_id: str | None
+    parent_classification: str
+    is_subtask: bool
+    in_analysis_period: bool
+    counted_in_kpis: bool
+    exclusion_reason: str | None
 
 
 @dataclass(frozen=True)
@@ -134,6 +140,7 @@ class CompanyDashboardModel:
     source_coverage: tuple[SourceCoverageView, ...]
     data_quality: tuple[DataQualityItem, ...]
     task_details: tuple[TaskDetail, ...]
+    in_period_task_count: int
 
 
 def available_filters(snapshots: Iterable[TaskPeriodSnapshot]) -> FilterOptions:
@@ -378,6 +385,13 @@ def _workflow_events(snapshot: TaskPeriodSnapshot) -> tuple[str, ...]:
 
 
 def _task_details(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[TaskDetail, ...]:
+    def exclusion_reason(item: TaskPeriodSnapshot) -> str | None:
+        if not item.in_scope:
+            return "Outside selected analysis period"
+        if not item.task.counted_in_kpis:
+            return f"Excluded from KPI calculation: {item.task.parent_classification.value}"
+        return None
+
     return tuple(
         TaskDetail(
             source_tool=item.task.source_tool,
@@ -397,6 +411,12 @@ def _task_details(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[TaskDetail, 
             workflow_events=_workflow_events(item),
             exception_events=item.exception_events,
             data_quality_flags=tuple(sorted(item.data_quality_flags)),
+            parent_id=item.task.parent_id,
+            parent_classification=item.task.parent_classification.value,
+            is_subtask=item.task.parent_classification.value == "Subtask",
+            in_analysis_period=item.in_scope,
+            counted_in_kpis=item.counted_in_kpis,
+            exclusion_reason=exclusion_reason(item),
         )
         for item in snapshots
     )
@@ -407,14 +427,23 @@ def _quality_items(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[DataQuality
     return tuple(DataQualityItem(flag, flags[flag]) for flag in sorted(flags))
 
 
-def _coverage_views(coverages: Iterable[SourceCoverage] | None) -> tuple[SourceCoverageView, ...]:
+def _coverage_views(
+    coverages: Iterable[SourceCoverage] | None,
+    snapshots: Iterable[TaskPeriodSnapshot] = (),
+) -> tuple[SourceCoverageView, ...]:
+    task_counts = Counter(
+        (item.task.source_tool, item.task.source_space, item.task.unified_project)
+        for item in snapshots
+    )
     return tuple(
         SourceCoverageView(
             source_tool=item.source_tool,
             source_space=item.source_space,
             unified_project=item.unified_project,
             source_available=item.source_available,
-            task_count=item.task_count,
+            task_count=task_counts.get(
+                (item.source_tool, item.source_space, item.unified_project), 0
+            ),
             history_mode=item.history_mode,
             reason=item.reason,
             flags=item.flags,
@@ -444,24 +473,31 @@ def build_company_dashboard(
         raise ValueError("All task snapshots must use the same analysis period")
     active_filters = filters or DashboardFilters()
     selected = filter_snapshots(all_items, active_filters)
-    kpis = calculate_core_kpis(selected)
+    # Collection may retrieve a wider snapshot so that the user can change
+    # From/To without recollecting, but the analysis view itself is strictly
+    # limited to tasks active during the selected period.
+    selected_in_period = tuple(item for item in selected if item.in_scope)
+    kpis = calculate_core_kpis(selected_in_period)
     model = CompanyDashboardModel(
         period_start=period_start,
         period_end=period_end,
         filters=active_filters,
+        # Keep the available filter choices stable for the session; applying
+        # a choice still cannot bring an out-of-period task into the view.
         filter_options=available_filters(all_items),
         kpis=kpis,
         cards=_cards(
             kpis,
-            selected,
+            selected_in_period,
             period_start=period_start,
             period_end=period_end,
             scope="Company-wide scope",
         ),
-        executive_charts=_executive_charts(selected),
-        source_coverage=_coverage_views(coverages),
-        data_quality=_quality_items(selected),
-        task_details=_task_details(selected),
+        executive_charts=_executive_charts(selected_in_period),
+        source_coverage=_coverage_views(coverages, selected_in_period),
+        data_quality=_quality_items(selected_in_period),
+        task_details=_task_details(selected_in_period),
+        in_period_task_count=len(selected_in_period),
     )
     if len(model.cards) != 6 or len(model.executive_charts) != 3:
         raise AssertionError("Company dashboard contract requires six cards and three charts")
@@ -470,7 +506,7 @@ def build_company_dashboard(
 
 def render_company_performance_dashboard(st: Any, model: CompanyDashboardModel) -> None:
     """Minimal optional Streamlit renderer for a prepared dashboard model."""
-    st.subheader("Company Performance — Selected Projects")
+    st.subheader("Company Performance — Company-Wide Scope")
     st.caption(f"Analysis period: {model.period_start.isoformat()} to {model.period_end.isoformat()}")
     columns = st.columns(6)
     for column, card in zip(columns, model.cards):

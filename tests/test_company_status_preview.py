@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 import json
 from pathlib import Path
@@ -12,8 +12,9 @@ sys.path.insert(0,str(ROOT/'src'))
 from company_performance.adapters import adapt_clickup_collection
 from company_performance.application import build_company_analysis, build_company_preview, filter_company_preview
 from company_performance.dashboard import DashboardFilters, build_company_dashboard
-from company_performance.models import UnifiedStatus
+from company_performance.models import StatusTransition, TaskRecord, UnifiedStatus
 from company_performance.normalization import deduplicate_tasks, normalize_status
+from company_performance.workflow import reconstruct_task
 from company_performance.outputs import write_company_excel, write_company_word_report
 
 def jira_xlsx(space='Engineering', status='Done'):
@@ -81,8 +82,57 @@ class CompanyClickUpIntegrationTests(unittest.TestCase):
     def test_word_contains_clickup_and_normalized_delivery_status(self):
         with tempfile.TemporaryDirectory() as td:
             path=write_company_word_report(self.result.model,Path(td)/'out.docx');doc=Document(path);text='\n'.join(p.text for p in doc.paragraphs)+'\n'+'\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells);self.assertIn('ClickUp',text);self.assertIn('In Review',text);self.assertIn('In Execution',text)
+
+    def test_dashboard_excel_and_word_share_the_same_kpis(self):
+        with tempfile.TemporaryDirectory() as td:
+            excel_path = write_company_excel(self.result.model, Path(td) / 'out.xlsx')
+            word_path = write_company_word_report(self.result.model, Path(td) / 'out.docx')
+            expected = {
+                'Total Tasks': str(self.result.model.kpis.total_tasks),
+                'Completion Rate': f"{self.result.model.kpis.completion_rate:.1f}%",
+                'Current WIP': str(self.result.model.kpis.current_wip),
+            }
+
+            summary = load_workbook(excel_path, data_only=True)['Executive Dashboard']
+            excel_values = {
+                row[0]: row[1]
+                for row in summary.iter_rows(values_only=True)
+                if row and row[0] in expected
+            }
+            self.assertEqual(excel_values, expected)
+
+            document = Document(word_path)
+            word_values = {}
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if len(cells) >= 2 and cells[0] in expected:
+                        word_values[cells[0]] = cells[1]
+            self.assertEqual(word_values, expected)
     def test_unresolved_id_stays_out_of_delivery_chart_and_is_in_data_quality(self):
         unresolved=build_company_analysis(period_start=date(2026,9,1),period_end=date(2026,9,30),clickup_prepared=(ClickPrepared(status={'id':'p_INTERNAL'}),),unified_project='P')
         self.assertEqual(unresolved.model.task_details[0].original_status,'p_INTERNAL');self.assertEqual(unresolved.model.task_details[0].final_status,'Unknown');delivery=next(c for c in unresolved.model.executive_charts if c.key=='delivery-outcome');self.assertNotIn('Unknown',[p.label for p in delivery.points]);flags={i.flag for i in unresolved.model.data_quality};self.assertIn('ClickUp Status Unresolved',flags);self.assertIn('Unmapped Status',flags)
+
+    def test_collection_reconciliation_explains_out_of_period_task(self):
+        outside = TaskRecord(
+            source_tool='Jira', task_id='OLD-1', task_name='Older task', raw_status='Done',
+            initial_status='To Do', created_date=date(2026, 8, 1), history_complete=True,
+            workflow_history=(StatusTransition(
+                changed_at=datetime(2026, 8, 15, tzinfo=timezone.utc),
+                from_status='To Do', to_status='Done',
+            ),),
+        )
+        current = TaskRecord(
+            source_tool='Jira', task_id='NOW-1', task_name='Current task', raw_status='To Do',
+            initial_status='To Do', created_date=date(2026, 9, 1), history_complete=True,
+        )
+        snapshots = (
+            reconstruct_task(outside, date(2026, 9, 1), date(2026, 9, 15)),
+            reconstruct_task(current, date(2026, 9, 1), date(2026, 9, 15)),
+        )
+        model = build_company_dashboard(snapshots)
+        self.assertEqual(model.in_period_task_count, 1)
+        self.assertEqual(model.kpis.total_tasks, 1)
+        self.assertEqual([item.task_id for item in model.task_details], ['NOW-1'])
 
 if __name__=='__main__':unittest.main()

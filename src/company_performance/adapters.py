@@ -148,6 +148,23 @@ def _parent_classification(parent_id: str | None) -> ParentClassification:
     return ParentClassification.SUBTASK if parent_id else ParentClassification.STANDALONE
 
 
+def _classify_parent_relationships(records: list[TaskRecord]) -> None:
+    """Mark parent tasks from the parent references returned by each source.
+
+    A task with a parent reference is a Subtask.  A task referenced by one or
+    more returned subtasks is an operational Parent Task.  Parent detection is
+    source-local and uses task IDs, so Jira keys and ClickUp IDs remain intact.
+    """
+    referenced_parent_ids = {record.parent_id for record in records if record.parent_id}
+    for record in records:
+        if record.parent_id:
+            record.parent_classification = ParentClassification.SUBTASK
+        elif record.task_id in referenced_parent_ids:
+            record.parent_classification = ParentClassification.INDEPENDENT
+        else:
+            record.parent_classification = ParentClassification.STANDALONE
+
+
 def _history_transitions(history: Mapping[str, Any] | None) -> tuple[StatusTransition, ...]:
     transitions: list[StatusTransition] = []
     for event in (history or {}).get("status_events") or ():
@@ -272,6 +289,8 @@ def adapt_jira_collection(
         raw_tasks.append((record.unique_key, issue))
         raw_workflow.append((record.unique_key, history))
 
+    _classify_parent_relationships(records)
+
     flags: list[str] = []
     if not values:
         flags.append("Empty Source Result")
@@ -365,6 +384,8 @@ def adapt_clickup_collection(
         raw_tasks.append((record.unique_key, task))
         if isinstance(payload, Mapping):
             raw_time.append((record.unique_key, payload))
+
+    _classify_parent_relationships(records)
 
     flags: list[str] = []
     if not values:

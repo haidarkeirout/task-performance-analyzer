@@ -19,6 +19,27 @@ from company_performance.models import ParentClassification
 
 
 class JiraAdapterTests(unittest.TestCase):
+    def test_jira_parent_and_subtask_relationships_are_classified(self):
+        parent = {
+            "key": "TECH-1",
+            "fields": {
+                "summary": "Parent task", "project": {"name": "Platform"},
+                "status": {"name": "In Progress"}, "created": "2026-09-01T08:00:00Z",
+            },
+        }
+        child = {
+            "key": "TECH-2",
+            "fields": {
+                "summary": "Child task", "project": {"name": "Platform"},
+                "status": {"name": "Done"}, "created": "2026-09-01T08:00:00Z",
+                "parent": {"key": "TECH-1"},
+            },
+        }
+        result = adapt_jira_collection([parent, child], {}, unified_project="P")
+        records = {record.task_id: record for record in result.records}
+        self.assertIs(records["TECH-1"].parent_classification, ParentClassification.INDEPENDENT)
+        self.assertIs(records["TECH-2"].parent_classification, ParentClassification.SUBTASK)
+
     def test_jira_adapter_keeps_history_dates_and_raw_payloads(self):
         issue = {
             "key": "TECH-7",
@@ -75,6 +96,16 @@ class JiraAdapterTests(unittest.TestCase):
 
 
 class ClickUpAdapterTests(unittest.TestCase):
+    def test_clickup_parent_and_subtask_relationships_are_classified(self):
+        tasks = [
+            {"id": "parent", "name": "Parent", "status": {"status": "In Progress"}, "list": {"name": "Ops"}},
+            {"id": "child", "name": "Child", "status": {"status": "Complete"}, "parent": "parent", "list": {"name": "Ops"}},
+        ]
+        result = adapt_clickup_collection(tasks, unified_project="P", source_space="S")
+        records = {record.task_id: record for record in result.records}
+        self.assertIs(records["parent"].parent_classification, ParentClassification.INDEPENDENT)
+        self.assertIs(records["child"].parent_classification, ParentClassification.SUBTASK)
+
     def test_clickup_adapter_preserves_snapshot_and_marks_history_unavailable(self):
         task = {
             "id": "cu-1",
