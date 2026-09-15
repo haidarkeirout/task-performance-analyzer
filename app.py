@@ -1253,6 +1253,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "company_prepared_jira", "company_prepared_clickup",
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
+        "company_selected_company",
         "company_unified_project", "company_period_start", "company_period_end",
         "project_catalog_revision", "project_selected_jira_space", "project_selected_clickup_space",
         "project_selection_fingerprint", "project_jira_prepared", "project_clickup_prepared",
@@ -1262,6 +1263,19 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         st.session_state.pop(key, None)
     st.session_state["active_analysis_mode"] = analysis_mode
 st.caption("Choose an analysis, apply its filters, and run the available process analysis.")
+if analysis_mode == "company":
+    # Presentation-only gate: once a company is selected, the existing Company
+    # collection and analysis flow below runs unchanged.
+    selected_company = st.selectbox(
+        "Choose Company",
+        ["Choose a company", "Company"],
+        index=0,
+        key="company_selected_company",
+    )
+    if selected_company == "Choose a company":
+        st.info("Choose a company to load its Jira Projects and ClickUp Spaces.")
+        st.stop()
+
 prepared_data, run_button = render_collection(settings, analysis_mode=analysis_mode)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
 
