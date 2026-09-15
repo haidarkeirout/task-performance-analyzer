@@ -11,6 +11,7 @@ from docx.shared import Inches
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 
 def _metric(result: dict, name: str, default=None):
@@ -435,7 +436,7 @@ def department_excel(result: dict) -> bytes:
         sheet.sheet_view.showGridLines = False
         for column_cells in sheet.columns:
             width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 45)
-            sheet.column_dimensions[column_cells[0].column_letter].width = max(12, width)
+            sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = max(12, width)
     return _save_workbook(workbook)
 
 
