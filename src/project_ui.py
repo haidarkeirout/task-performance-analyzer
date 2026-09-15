@@ -1498,6 +1498,25 @@ def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: 
     for column, card in zip(cards, result.model.cards):
         column.metric(card.title, card.value, help=card.supporting_text)
 
+    st.subheader("Management Averages")
+    st.caption(
+        "Execution, lead-time, and time-to-start averages are measured in elapsed hours. "
+        "Due variance and overdue measures use calendar days."
+    )
+    management_averages = _project_management_averages(result)
+    management_cards = [
+        ("Avg Execution Time (Completed)", management_averages["Avg Execution Time (Completed)"], "h"),
+        ("Avg Lead Time (Completed)", management_averages["Avg Lead Time (Completed)"], "h"),
+        ("Avg Time to Start", management_averages["Avg Time to Start"], "h"),
+        ("Avg Late Completion", management_averages["Avg Late Completion"], "days"),
+        ("Avg Open Overdue", management_averages["Avg Open Overdue"], "days"),
+        ("Avg Due Variance (Completed)", management_averages["Avg Due Variance (Completed)"], "days"),
+    ]
+    for start in range(0, len(management_cards), 3):
+        columns = st.columns(3)
+        for column, (title, value, unit) in zip(columns, management_cards[start:start + 3]):
+            column.metric(title, _format_project_average(value, unit))
+
     dashboard, process, achievements, details, quality = st.tabs([
         "Executive Dashboard",
         "Process Analysis",
