@@ -397,7 +397,7 @@ def _kpi_detail_rows(model) -> list[tuple[str, Any, str]]:
         ("Completed Tasks", kpis.completed_tasks, "Tasks in Completed status at the end of the selected period."),
         ("Open Tasks", kpis.open_tasks, "Tasks in an open workflow status at period end."),
         ("Current WIP", kpis.current_wip, "Tasks currently in In Execution or In Review."),
-        ("Completion Rate", rate(kpis.completion_rate), "Completed tasks divided by eligible tasks."),
+        ("Completion Rate", rate(kpis.completion_rate), "Completed tasks divided by all tasks in the selected Project scope."),
         ("Open Overdue Tasks", kpis.overdue_open_tasks, "Open tasks with a due date before the period end."),
         ("Open Overdue Rate", rate(kpis.overdue_open_rate), "Open overdue tasks divided by open tasks with a due date."),
         ("High-Priority Open Tasks", kpis.high_priority_open_tasks, "Open Critical or High priority tasks."),
