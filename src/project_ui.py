@@ -52,6 +52,17 @@ def _clear_project_run() -> None:
         st.session_state.pop(key, None)
 
 
+def _clear_project_analysis() -> None:
+    """Invalidate only the displayed result when the period changes."""
+    for key in (
+        "project_analysis",
+        "project_report_key",
+        "project_excel_bytes",
+        "project_word_bytes",
+    ):
+        st.session_state.pop(key, None)
+
+
 def _safe_filename(value: str) -> str:
     value = str(value or "").strip()
     value = value.replace("&", "and").replace("+", "and")
@@ -1681,11 +1692,13 @@ def _render_project_period_controls(settings, scope_label: str, scope_slug: str,
         "From Date",
         value=None,
         key="project_period_start",
+        on_change=_clear_project_analysis,
     )
     period_end = period_right.date_input(
         "To Date",
         value=None,
         key="project_period_end",
+        on_change=_clear_project_analysis,
     )
     valid_dates = isinstance(period_start, date) and isinstance(period_end, date)
     if valid_dates and period_end < period_start:
@@ -1718,8 +1731,6 @@ def _render_project_period_controls(settings, scope_label: str, scope_slug: str,
 
 
 def render_project_collection(settings):
-    if st.session_state.get("project_analysis") is not None:
-        return None, False
     jira_spaces, clickup_spaces = _load_catalogs(settings)
     jira_error = st.session_state.get("project_jira_error", "")
     clickup_error = st.session_state.get("project_clickup_error", "")
