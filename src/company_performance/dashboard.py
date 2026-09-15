@@ -352,9 +352,24 @@ def _executive_charts(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[Executiv
         if priority_counts[priority]
     )
     return (
-        _chart(\n            "delivery-outcome",\n            "Delivery Outcome",\n            status_points,\n            "How calculated: distinct selected tasks grouped by status at period end.",\n        ),
-        _chart(\n            "workload-by-project",\n            "Workload by Unified Project",\n            project_points,\n            "How calculated: distinct selected tasks grouped by their unified project label.",\n        ),
-        _chart(\n            "overdue-by-priority",\n            "Open Overdue Work by Priority",\n            priority_points,\n            "How calculated: open tasks with valid due dates before period end, grouped by normalized priority.",\n        ),
+        _chart(
+            "delivery-outcome",
+            "Delivery Outcome",
+            status_points,
+            "How calculated: distinct selected tasks grouped by status at period end.",
+        ),
+        _chart(
+            "workload-by-project",
+            "Workload by Unified Project",
+            project_points,
+            "How calculated: distinct selected tasks grouped by their unified project label.",
+        ),
+        _chart(
+            "overdue-by-priority",
+            "Open Overdue Work by Priority",
+            priority_points,
+            "How calculated: open tasks with valid due dates before period end, grouped by normalized priority.",
+        ),
     )
 
 
@@ -443,7 +458,13 @@ def build_company_dashboard(
         filters=active_filters,
         filter_options=available_filters(all_items),
         kpis=kpis,
-        cards=_cards(\n            kpis,\n            selected,\n            period_start=period_start,\n            period_end=period_end,\n            scope="Selected Project scope",\n        ),
+        cards=_cards(
+            kpis,
+            selected,
+            period_start=period_start,
+            period_end=period_end,
+            scope="Selected Project scope",
+        ),
         executive_charts=_executive_charts(selected),
         source_coverage=_coverage_views(coverages),
         data_quality=_quality_items(selected),
