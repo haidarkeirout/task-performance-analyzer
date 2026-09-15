@@ -464,6 +464,40 @@ def _display(value: Any) -> str:
     return str(value)
 
 
+def _bottleneck_word_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize ClickUp and Jira bottleneck columns for the Word report."""
+    columns = [
+        "Status", "Tasks", "Average Hours", "Total Hours",
+        "Open Tasks", "Interpretation",
+    ]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    aliases = {
+        "Status": ("Status", "status"),
+        "Tasks": ("Tasks", "tasks", "tasks_visited", "task_count"),
+        "Average Hours": (
+            "Average Hours", "average_hours", "elapsed_mean_hours",
+        ),
+        "Total Hours": (
+            "Total Hours", "total_hours", "elapsed_total_hours",
+        ),
+        "Open Tasks": (
+            "Open Tasks", "open_tasks", "open_tasks_currently_here",
+        ),
+        "Interpretation": ("Interpretation", "interpretation"),
+    }
+    output = pd.DataFrame(index=frame.index)
+    for target, candidates in aliases.items():
+        for candidate in candidates:
+            if candidate in frame.columns:
+                output[target] = frame[candidate]
+                break
+        if target not in output:
+            output[target] = None
+    return output[columns]
+
+
 def _word_table(document: Document, frame: pd.DataFrame, columns: list[str]) -> None:
     visible = frame[[column for column in columns if column in frame.columns]].copy()
     if visible.empty or visible.shape[1] == 0:
