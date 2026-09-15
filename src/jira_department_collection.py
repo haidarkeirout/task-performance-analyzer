@@ -69,7 +69,7 @@ def _preview(items: list[dict], jira_url: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _collect(settings, spaces, start_date, end_date, progress) -> PreparedData:
+def _collect(settings, spaces, start_date, end_date, progress, fingerprint: str) -> PreparedData:
     gateway = JiraGateway(settings)
     gateway.progress = progress
     try:
@@ -155,7 +155,7 @@ def _collect(settings, spaces, start_date, end_date, progress) -> PreparedData:
             cutoff,
             collected_at,
             combined_query,
-            "jira-department:" + combined_query,
+            fingerprint,
             len(complete_items),
             filename,
             "All Jira Tech Spaces",
@@ -268,6 +268,7 @@ def render_jira_department_collection(settings):
                     start_date,
                     end_date,
                     lambda message: progress.update(label=message),
+                    fingerprint=fingerprint,
                 )
                 st.session_state["jira_department_prepared_data"] = prepared
                 progress.update(
@@ -313,6 +314,7 @@ def render_jira_department_collection(settings):
                         start_date,
                         end_date,
                         lambda message: st.write(message),
+                        fingerprint=fingerprint,
                     )
                     st.session_state["jira_department_prepared_data"] = prepared
             except Exception as exc:
