@@ -884,7 +884,7 @@ def _project_assignee_rows(result: CompanyAnalysisResult) -> tuple[list[str], li
     for snapshot in result.snapshots:
         groups[snapshot.task.assignee_group].append(snapshot)
     return headers, [
-        [name, _project_metric_row(items, _project_summary_values(items))]
+        [name, *_project_metric_row(items, _project_summary_values(items))]
         for name, items in sorted(groups.items())
     ]
 
