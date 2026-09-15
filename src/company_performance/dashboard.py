@@ -183,7 +183,132 @@ def _format_rate(value: float | None) -> str:
     return "—" if value is None else f"{value:.1f}%"
 
 
-def _cards(kpis: CoreKPIs) -> tuple[KpiCard, ...]:
+def metric_help(
+    *,
+    formula: str,
+    calculation: str,
+    scope: str,
+    period: str,
+    exclusions: str = "None",
+    validation: str = "PASS",
+) -> str:
+    """Render one consistent, human-readable KPI calculation tooltip."""
+    return (
+        f"**Formula:** {formula}\n\n"
+        f"**Calculation:** {calculation}\n\n"
+        f"**Scope:** {scope}\n\n"
+        f"**Period:** {period}\n\n"
+        f"**Exclusions:** {exclusions}\n\n"
+        f"**Validation:** {validation}"
+    )
+
+
+def _quality_summary(items: Sequence[TaskPeriodSnapshot]) -> tuple[str, str]:
+    flags = sorted({flag for item in items for flag in item.data_quality_flags if flag})
+    unknown = sum(item.status_at_period_end is UnifiedStatus.UNKNOWN for item in items)
+    if unknown:
+        flags.append(f"{unknown} task(s) with unknown period-end status")
+    if not flags:
+        return "PASS", "No task-level quality flags in the selected scope."
+    return "WARNING", "; ".join(dict.fromkeys(flags))
+
+
+def build_kpi_help(
+    snapshots: Sequence[TaskPeriodSnapshot],
+    kpis: CoreKPIs,
+    *,
+    period_start: date,
+    period_end: date,
+    scope: str,
+) -> dict[str, str]:
+    """Build calculation explanations from the same snapshots used by KPIs."""
+    items = [item for item in snapshots if item.counted_in_kpis]
+    period = f"{period_start.isoformat()} to {period_end.isoformat()}"
+    validation, quality_note = _quality_summary(items)
+    completed = [item for item in items if item.status_at_period_end is UnifiedStatus.COMPLETED]
+    completed_with_due = [
+        item for item in completed
+        if item.task.due_date is not None and item.final_completion_date is not None
+    ]
+    on_time = [
+        item for item in completed_with_due
+        if item.final_completion_date <= item.task.due_date
+    ]
+    known_status = [item for item in items if item.status_at_period_end is not UnifiedStatus.UNKNOWN]
+    exclusions = quality_note
+    return {
+        "total-tasks": metric_help(
+            formula="Count distinct Source Tool + Task ID",
+            calculation=f"{len(items)} distinct task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Duplicate task keys are removed before KPI calculation.",
+            validation=validation,
+        ),
+        "completion-rate": metric_help(
+            formula="Completed tasks / Total tasks × 100",
+            calculation=f"{len(completed)} / {len(items)} × 100 = {_format_rate(kpis.completion_rate)}",
+            scope=scope,
+            period=period,
+            exclusions=exclusions,
+            validation=validation,
+        ),
+        "current-wip": metric_help(
+            formula="Count of tasks whose period-end status is In Execution or In Review",
+            calculation=f"{kpis.current_wip} task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Unknown statuses are not classified as WIP.",
+            validation=validation,
+        ),
+        "overdue-open": metric_help(
+            formula="Count of open tasks with a valid due date before period end",
+            calculation=f"{kpis.overdue_open_tasks} task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Tasks without a valid due date are excluded from overdue classification.",
+            validation=validation,
+        ),
+        "on-time-rate": metric_help(
+            formula="Completed on or before due date / Completed tasks with valid due date × 100",
+            calculation=f"{len(on_time)} / {len(completed_with_due)} × 100 = {_format_rate(kpis.on_time_completion_rate)}",
+            scope=scope,
+            period=period,
+            exclusions="Completed tasks missing either due date or completion date are excluded from this KPI.",
+            validation="WARNING — " + quality_note if len(on_time) != len(completed_with_due) and quality_note == "No task-level quality flags in the selected scope." else validation,
+        ),
+    }
+
+
+def _cards(
+    kpis: CoreKPIs,
+    snapshots: Sequence[TaskPeriodSnapshot],
+    *,
+    period_start: date,
+    period_end: date,
+    scope: str,
+) -> tuple[KpiCard, ...]:
+    """The approved executive headline: exactly five cards."""
+    help_text = build_kpi_help(
+        snapshots,
+        kpis,
+        period_start=period_start,
+        period_end=period_end,
+        scope=scope,
+    )
+    return (
+        KpiCard("total-tasks", "Total Tasks", str(kpis.total_tasks), help_text["total-tasks"]),
+        KpiCard("completion-rate", "Completion Rate", _format_rate(kpis.completion_rate),
+                f"{kpis.completed_tasks} completed at period end\n\n{help_text['completion-rate']}"),
+        KpiCard("current-wip", "Current WIP", str(kpis.current_wip), help_text["current-wip"]),
+        KpiCard("overdue-open", "Overdue Open Tasks", str(kpis.overdue_open_tasks),
+                f"{kpis.high_priority_overdue_tasks} high-priority\n\n{help_text['overdue-open']}"),
+        KpiCard("on-time-rate", "On-Time Completion Rate", _format_rate(kpis.on_time_completion_rate),
+                help_text["on-time-rate"]),
+    )
+
+
+
     """The approved executive headline: exactly five cards."""
     return (
         KpiCard("total-tasks", "Total Tasks", str(kpis.total_tasks), "Selected projects and sources"),
@@ -227,9 +352,9 @@ def _executive_charts(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[Executiv
         if priority_counts[priority]
     )
     return (
-        _chart("delivery-outcome", "Delivery Outcome", status_points),
-        _chart("workload-by-project", "Workload by Unified Project", project_points),
-        _chart("overdue-by-priority", "Open Overdue Work by Priority", priority_points),
+        _chart(\n            "delivery-outcome",\n            "Delivery Outcome",\n            status_points,\n            "How calculated: distinct selected tasks grouped by status at period end.",\n        ),
+        _chart(\n            "workload-by-project",\n            "Workload by Unified Project",\n            project_points,\n            "How calculated: distinct selected tasks grouped by their unified project label.",\n        ),
+        _chart(\n            "overdue-by-priority",\n            "Open Overdue Work by Priority",\n            priority_points,\n            "How calculated: open tasks with valid due dates before period end, grouped by normalized priority.",\n        ),
     )
 
 
@@ -318,7 +443,7 @@ def build_company_dashboard(
         filters=active_filters,
         filter_options=available_filters(all_items),
         kpis=kpis,
-        cards=_cards(kpis),
+        cards=_cards(\n            kpis,\n            selected,\n            period_start=period_start,\n            period_end=period_end,\n            scope="Selected Project scope",\n        ),
         executive_charts=_executive_charts(selected),
         source_coverage=_coverage_views(coverages),
         data_quality=_quality_items(selected),
