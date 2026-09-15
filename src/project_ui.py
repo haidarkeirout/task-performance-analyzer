@@ -1387,6 +1387,41 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
         "Business-hour measures are kept unavailable rather than inferred."
     )
 
+    document.add_heading("Management Averages", level=1)
+    management_averages = _project_management_averages(result)
+    _add_docx_table(document, ["Metric", "Value", "Definition"], [
+        (
+            "Avg Execution Time (Completed)",
+            _format_project_average(management_averages["Avg Execution Time (Completed)"], "h"),
+            "Average completion date minus actual start date for completed tasks.",
+        ),
+        (
+            "Avg Lead Time (Completed)",
+            _format_project_average(management_averages["Avg Lead Time (Completed)"], "h"),
+            "Average completion date minus creation date for completed tasks.",
+        ),
+        (
+            "Avg Time to Start",
+            _format_project_average(management_averages["Avg Time to Start"], "h"),
+            "Average actual start date minus creation date.",
+        ),
+        (
+            "Avg Late Completion",
+            _format_project_average(management_averages["Avg Late Completion"], "days"),
+            "Average completion date minus due date for completed tasks that finished late.",
+        ),
+        (
+            "Avg Open Overdue",
+            _format_project_average(management_averages["Avg Open Overdue"], "days"),
+            "Average period end date minus due date for open overdue tasks.",
+        ),
+        (
+            "Avg Due Variance (Completed)",
+            _format_project_average(management_averages["Avg Due Variance (Completed)"], "days"),
+            "Average completion date minus due date for completed tasks with a due date; negative means early.",
+        ),
+    ])
+
     document.add_heading("Stage Residence and Open Work", level=1)
     for metric in calculate_status_metrics(result.snapshots):
         document.add_heading(metric.status.value, level=2)
