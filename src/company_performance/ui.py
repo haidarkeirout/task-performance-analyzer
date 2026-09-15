@@ -326,6 +326,7 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
         excel = write_company_excel(
             model,
             root / "company_performance_analysis.xlsx",
+            snapshots=selected_snapshots,
             bottlenecks=bottlenecks,
             recommendations=recommendations,
         ).read_bytes()
@@ -336,6 +337,7 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
         word = write_company_word_report(
             model,
             root / "company_performance_report.docx",
+            snapshots=selected_snapshots,
             bottlenecks=bottlenecks,
             recommendations=recommendations,
         ).read_bytes()
