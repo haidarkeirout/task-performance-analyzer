@@ -1,14 +1,30 @@
-"""Admin-managed employee identities used by the employee analysis flow."""
+"""Employee directory loaded from the admin-maintained OneDrive workbook."""
 from __future__ import annotations
 
 import csv
+import os
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
+from typing import Iterable, Mapping
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+import pandas as pd
+import requests
 
 
 DIRECTORY_PATH = Path(__file__).resolve().parents[1] / "config" / "employee_directory.csv"
+DEFAULT_DIRECTORY_URL = (
+    "https://1drv.ms/x/c/39dd675097cd5e3d/"
+    "IQBA5U9zjQJTTrJ_U0unXsHWAVOMMDwUnBNZa5Xq3KyuAyg?e=K4tgrD"
+)
 REQUIRED_COLUMNS = {
-    "employee_name", "department", "primary_source", "jira_account_id", "clickup_user_id", "active",
+    "employee_name",
+    "department",
+    "primary_source",
+    "jira_account_id",
+    "clickup_user_id",
+    "active",
 }
 
 
@@ -22,44 +38,187 @@ class EmployeeRecord:
     active: bool = True
 
 
-def _active(value: str) -> bool:
-    return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "on"}
+def _active(value: object) -> bool:
+    return str(value or "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
 
 
-def load_employee_directory(path: Path = DIRECTORY_PATH) -> list[EmployeeRecord]:
-    """Load and validate the administrator-maintained directory."""
+def _directory_url() -> str:
+    """Read an optional override while keeping the approved public link as default."""
+    configured = os.getenv("EMPLOYEE_DIRECTORY_URL", "").strip()
+    if configured:
+        return configured
+
+    try:
+        import streamlit as st
+
+        configured = str(st.secrets.get("EMPLOYEE_DIRECTORY_URL", "")).strip()
+    except Exception:
+        configured = ""
+
+    return configured or DEFAULT_DIRECTORY_URL
+
+
+def _with_download_parameter(url: str) -> str:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["download"] = "1"
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _direct_download_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    resid = query.get("resid")
+    if not resid:
+        return None
+    return (
+        "https://onedrive.live.com/download?"
+        + urlencode({"resid": resid})
+    )
+
+
+def _download_workbook(url: str) -> bytes:
+    """Download a publicly shared OneDrive workbook without Graph authentication."""
+    candidates = [_with_download_parameter(url), url]
+    direct = _direct_download_url(url)
+    if direct:
+        candidates.insert(0, direct)
+
+    visited = set()
+    errors = []
+
+    for candidate in candidates:
+        if not candidate or candidate in visited:
+            continue
+        visited.add(candidate)
+
+        try:
+            response = requests.get(
+                candidate,
+                headers={"User-Agent": "Task-Performance-Analyzer/1.0"},
+                timeout=25,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            errors.append(str(exc))
+            continue
+
+        payload = response.content
+        content_type = response.headers.get("content-type", "").casefold()
+        if payload.startswith(b"PK") or "spreadsheet" in content_type:
+            return payload
+
+        # OneDrive may redirect a share URL to a page whose final URL contains
+        # the resource ID. Try its download endpoint before reporting failure.
+        redirected = _direct_download_url(response.url)
+        if redirected and redirected not in visited:
+            candidates.insert(0, redirected)
+
+    detail = errors[-1] if errors else "OneDrive returned a web page instead of an Excel workbook."
+    raise ValueError(
+        "The online employee directory could not be read. "
+        "Set the OneDrive file to 'Anyone with the link can view', "
+        "keep it as an .xlsx workbook, and verify the share link. "
+        f"Technical detail: {detail}"
+    )
+
+
+def _remote_rows(url: str) -> list[dict[str, object]]:
+    payload = _download_workbook(url)
+    try:
+        workbook = pd.read_excel(
+            BytesIO(payload),
+            sheet_name=None,
+            dtype=object,
+        )
+    except Exception as exc:
+        raise ValueError(
+            "The online employee directory was downloaded, but it is not a readable Excel workbook."
+        ) from exc
+
+    for sheet_name, frame in workbook.items():
+        if frame is None:
+            continue
+        normalized = frame.copy()
+        normalized.columns = [
+            str(column or "").strip()
+            for column in normalized.columns
+        ]
+        if REQUIRED_COLUMNS.issubset(set(normalized.columns)):
+            return normalized.fillna("").to_dict("records")
+
+    available = ", ".join(str(name) for name in workbook)
+    raise ValueError(
+        "The online employee directory does not contain the required columns "
+        f"in any sheet. Available sheets: {available or 'none'}."
+    )
+
+
+def _csv_rows(path: Path) -> list[dict[str, object]]:
     if not path.exists():
         raise ValueError(f"Employee directory is missing: {path}")
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        columns = {str(column or "").strip() for column in (reader.fieldnames or [])}
-        missing = REQUIRED_COLUMNS - columns
-        if missing:
-            raise ValueError("Employee directory is missing columns: " + ", ".join(sorted(missing)))
-        records = []
-        seen = set()
-        for line_number, row in enumerate(reader, 2):
-            name = str(row.get("employee_name") or "").strip()
-            source = str(row.get("primary_source") or "").strip().casefold()
-            if not name:
-                raise ValueError(f"Employee directory row {line_number} has no employee_name.")
-            if name.casefold() in seen:
-                raise ValueError(f"Employee directory contains a duplicate employee: {name}.")
-            if source not in {"jira", "clickup"}:
-                raise ValueError(f"Employee directory row {line_number} has an invalid primary_source.")
-            jira_id = str(row.get("jira_account_id") or "").strip()
-            clickup_id = str(row.get("clickup_user_id") or "").strip()
-            if source == "jira" and not jira_id:
-                raise ValueError(f"Employee directory row {line_number} needs jira_account_id.")
-            if source == "clickup" and not clickup_id:
-                raise ValueError(f"Employee directory row {line_number} needs clickup_user_id.")
-            seen.add(name.casefold())
-            records.append(EmployeeRecord(
+        return list(csv.DictReader(handle))
+
+
+def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> list[EmployeeRecord]:
+    records: list[EmployeeRecord] = []
+    seen: set[str] = set()
+
+    for line_number, row in enumerate(rows, 2):
+        name = str(row.get("employee_name") or "").strip()
+        source = str(row.get("primary_source") or "").strip().casefold()
+        if not name:
+            raise ValueError(
+                f"Employee directory row {line_number} in {source_label} has no employee_name."
+            )
+        if name.casefold() in seen:
+            raise ValueError(
+                f"Employee directory contains a duplicate employee: {name}."
+            )
+        if source not in {"jira", "clickup"}:
+            raise ValueError(
+                f"Employee directory row {line_number} has an invalid primary_source."
+            )
+
+        jira_id = str(row.get("jira_account_id") or "").strip()
+        clickup_id = str(row.get("clickup_user_id") or "").strip()
+        if source == "jira" and not jira_id:
+            raise ValueError(
+                f"Employee directory row {line_number} needs jira_account_id."
+            )
+        if source == "clickup" and not clickup_id:
+            raise ValueError(
+                f"Employee directory row {line_number} needs clickup_user_id."
+            )
+
+        seen.add(name.casefold())
+        records.append(
+            EmployeeRecord(
                 name=name,
                 department=str(row.get("department") or "").strip(),
                 primary_source=source,
                 jira_account_id=jira_id,
                 clickup_user_id=clickup_id,
                 active=_active(row.get("active", "")),
-            ))
+            )
+        )
+
     return [record for record in records if record.active]
+
+
+def load_employee_directory(path: Path | None = None) -> list[EmployeeRecord]:
+    """Load the online directory; accept an explicit CSV path for tests/fallbacks."""
+    if path is not None:
+        rows = _csv_rows(path)
+        return _build_records(rows, str(path))
+
+    rows = _remote_rows(_directory_url())
+    return _build_records(rows, "the online Excel directory")
