@@ -84,6 +84,7 @@ def _period_defaults(prepared_items: tuple[Any, ...]) -> tuple[date, date]:
 def _preview_table_rows(rows: Any) -> list[dict[str, Any]]:
     return [
         {
+            "Project": row.project_name,
             "Source Tool": row.source_tool,
             "Space": row.space,
             "Task Name": row.task_name,
