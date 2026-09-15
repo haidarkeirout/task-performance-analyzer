@@ -190,8 +190,8 @@ def render_department_collection(settings):
     """Render the approved Department-first ClickUp collection flow."""
     st.subheader("Department data collection")
     st.caption(
-        "Choose a department, set the analysis period, and the system will scan "
-        "all matching ClickUp Lists across every Space."
+        "Choose a department, set the analysis period, and the system will "
+        "automatically scan its connected source."
     )
 
     clickup_error = None
@@ -220,7 +220,15 @@ def render_department_collection(settings):
 
     selected = catalog[selected_key]
     if selected_key == jira_department_key:
+        for key in (
+            "clickup_prepared_data", "clickup_run_analysis", "clickup_error",
+        ):
+            st.session_state.pop(key, None)
         return render_jira_department_collection(settings)
+    for key in (
+        "jira_department_prepared_data", "jira_department_run_analysis",
+    ):
+        st.session_state.pop(key, None)
     st.session_state["data_source"] = "ClickUp"
     if clickup_error:
         st.error(clickup_error)

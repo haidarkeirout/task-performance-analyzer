@@ -1250,6 +1250,8 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "department_selected_name", "department_period_start", "department_period_end",
         "department_search", "department_status", "department_assignee", "department_priority",
         "department_match", "department_tasks_cache_key", "department_tasks_cache",
+        "jira_department_period_start", "jira_department_period_end",
+        "jira_department_prepared_data", "jira_department_run_analysis",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint",
         "company_prepared_items", "company_collection_attempted",
