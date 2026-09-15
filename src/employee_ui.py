@@ -90,6 +90,24 @@ def _load_clickup(record: EmployeeRecord, settings) -> dict:
         gateway.close()
 
 
+def _update_employee_progress(progress, message: str, total: int) -> None:
+    """Update one compact collection bar instead of rendering one row per task."""
+    text = str(message or "")
+    prefix = "Preparing ClickUp task "
+    if text.startswith(prefix):
+        try:
+            current = int(text[len(prefix):].split(" of ", 1)[0])
+        except (TypeError, ValueError):
+            current = None
+        if current is not None:
+            progress.progress(
+                min(current / total, 1.0) if total else 1.0,
+                text=f"Collecting ClickUp tasks: {current} / {total}",
+            )
+            return
+    progress.progress(0.0, text=f"Collecting ClickUp tasks: 0 / {total}")
+
+
 def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
     issues = [issue for issue in snapshot["issues"] if not selected_spaces or _jira_space_key(issue) in selected_spaces]
     if not issues:
@@ -98,14 +116,16 @@ def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
     try:
         cutoff = datetime.now(timezone.utc).isoformat()
         histories, complete = {}, []
+        total = len(issues)
+        progress = st.progress(0.0, text=f"Collecting Jira tasks: 0 / {total}")
         for index, issue in enumerate(issues, 1):
-            with st.status(f"Reading Jira task {index} of {len(issues)}...", expanded=False) as status:
-                item, history = gateway.complete_issue(issue)
-                if history.get("history_complete") is not True or not history.get("history_through"):
-                    raise CollectionError("A Jira task history is incomplete. No partial export was prepared.")
-                complete.append(item)
-                histories[item["key"]] = history
-                status.update(label=f"Read {item['key']}", state="complete")
+            item, history = gateway.complete_issue(issue)
+            if history.get("history_complete") is not True or not history.get("history_through"):
+                raise CollectionError("A Jira task history is incomplete. No partial export was prepared.")
+            complete.append(item)
+            histories[item["key"]] = history
+            progress.progress(index / total, text=f"Collecting Jira tasks: {index} / {total}")
+        progress.progress(1.0, text=f"Collection complete: {total} Jira tasks")
         query = snapshot["query"]
         space_name = f"Employee: {record.name}"
         xlsx = build_workbook(
@@ -128,15 +148,21 @@ def _prepare_clickup(record, settings, snapshot, selected_spaces, fingerprint):
     if not tasks:
         raise ClickUpCollectionError("No tasks match the selected Spaces.")
     names = sorted({task.get("employee_space_name") for task in tasks if task.get("employee_space_name")})
-    return collect_clickup_data(
+    total = len(tasks)
+    progress = st.progress(0.0, text=f"Collecting ClickUp tasks: 0 / {total}")
+    prepared = collect_clickup_data(
         None, tasks, f"Employee: {record.name}", fingerprint, settings.source_timezone,
+        progress=lambda message: _update_employee_progress(progress, message, total),
         space_id=None,
         filter_summary=f"Assigned tasks for {record.name}" + (f" · Spaces: {', '.join(names)}" if names else ""),
         filter_criteria={"employee": record.name, "spaces": names},
         analysis_mode="employee",
     )
+    progress.progress(1.0, text=f"Collection complete: {total} ClickUp tasks")
+    return prepared
 
 
+@st.fragment
 def render_employee_collection(settings):
     try:
         records = load_employee_directory()
@@ -216,4 +242,10 @@ def render_employee_collection(settings):
     if prepared:
         st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
-    return prepared, run_clicked
+    if run_clicked:
+        # The fragment keeps widget interactions in place, then asks the full
+        # app rerun to consume the Run Analysis event in app.py.
+        st.session_state["employee_run_requested"] = True
+        st.rerun()
+    run_requested = st.session_state.pop("employee_run_requested", False)
+    return prepared, run_requested
