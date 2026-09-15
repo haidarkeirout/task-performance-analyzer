@@ -1649,6 +1649,54 @@ def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: 
     right.download_button("Download Project Word Report", st.session_state["project_word_bytes"], word_name, _DOCX_MIME, use_container_width=True)
 
 
+@st.fragment
+def _render_project_period_controls(settings, scope_label: str, scope_slug: str, preview) -> None:
+    """Render period controls in an isolated fragment.
+
+    Date changes rerun only this control block, so Streamlit does not rebuild
+    the full page and move the user's viewport back to the top.
+    """
+    period_left, period_right = st.columns(2)
+    period_start = period_left.date_input(
+        "From Date",
+        value=None,
+        key="project_period_start",
+    )
+    period_end = period_right.date_input(
+        "To Date",
+        value=None,
+        key="project_period_end",
+    )
+    valid_dates = isinstance(period_start, date) and isinstance(period_end, date)
+    if valid_dates and period_end < period_start:
+        st.error("To Date must be on or after From Date.")
+        valid_dates = False
+
+    run_clicked = st.button(
+        "Run Project Analysis",
+        type="primary",
+        disabled=not valid_dates or not preview,
+        key="run_project_analysis",
+    )
+    if run_clicked:
+        try:
+            with st.spinner("Calculating Project Performance Analysis..."):
+                result = build_company_analysis(
+                    period_start=period_start,
+                    period_end=period_end,
+                    jira_prepared=st.session_state.get("project_jira_prepared"),
+                    clickup_prepared=st.session_state.get("project_clickup_prepared"),
+                    unified_project=scope_label,
+                )
+            st.session_state["project_analysis"] = result
+            st.session_state["project_scope_label"] = scope_label
+            st.session_state["project_scope_slug"] = scope_slug
+            st.session_state.pop("project_report_key", None)
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+
 def render_project_collection(settings):
     if st.session_state.get("project_analysis") is not None:
         return None, False
@@ -1723,51 +1771,12 @@ def render_project_collection(settings):
     st.caption(f"{len(preview)} task(s) collected from the selected Space(s).")
     st.dataframe(_preview_frame(preview), hide_index=True, use_container_width=True)
 
-    period_left, period_right = st.columns(2)
-    period_start = period_left.date_input(
-        "From Date",
-        value=None,
-        key="project_period_start",
-    )
-    period_end = period_right.date_input(
-        "To Date",
-        value=None,
-        key="project_period_end",
-    )
-    valid_dates = isinstance(period_start, date) and isinstance(period_end, date)
-    if valid_dates and period_end < period_start:
-        st.error("To Date must be on or after From Date.")
-        valid_dates = False
-
     scope_label, scope_slug = _scope_label(jira_item, clickup_item)
-    run_clicked = st.button(
-        "Run Project Analysis",
-        type="primary",
-        disabled=not valid_dates or not preview,
-        key="run_project_analysis",
-    )
-    if run_clicked:
-        try:
-            with st.spinner("Calculating Project Performance Analysis..."):
-                result = build_company_analysis(
-                    period_start=period_start,
-                    period_end=period_end,
-                    jira_prepared=st.session_state.get("project_jira_prepared"),
-                    clickup_prepared=st.session_state.get("project_clickup_prepared"),
-                    unified_project=scope_label,
-                )
-            st.session_state["project_analysis"] = result
-            st.session_state["project_scope_label"] = scope_label
-            st.session_state["project_scope_slug"] = scope_slug
-            st.session_state.pop("project_report_key", None)
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+    _render_project_period_controls(settings, scope_label, scope_slug, preview)
 
     if st.session_state.get("project_analysis") is not None:
         return None, False
     return None, False
-
 
 def render_project_result(st_instance: Any, result: CompanyAnalysisResult) -> None:
     scope_label = st_instance.session_state.get("project_scope_label", "Selected Project Scope")
