@@ -248,10 +248,16 @@ def _clickup_recommendations(result: dict) -> list[str]:
 def create_clickup_word_report(result: dict) -> bytes:
     document = Document()
     _configure_document(document)
+    scope_name = str(result.get("space_name") or "Selected Scope")
+    report_title = (
+        "Employee Task Execution Performance Evaluation"
+        if scope_name.casefold().startswith("employee:")
+        else "ClickUp Task Performance Evaluation"
+    )
     _add_title(
         document,
-        "ClickUp Task Performance Evaluation Report",
-        f"Space: {result['space_name']} | Evaluation cutoff: {_format_cutoff(result['cutoff'])}",
+        report_title,
+        f"Selected Scope: {scope_name} | Evaluation cutoff: {_format_cutoff(result['cutoff'])}",
     )
 
     _add_heading(document, "Executive Summary")
