@@ -1335,9 +1335,13 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                 st.info("No selected work items existed at the evaluation cutoff. Click Done to collect a newer snapshot.")
             else:
                 if analysis_mode == "department":
-                    st.session_state["department_analysis"] = build_jira_department_result(
+                    jira_department_result = build_jira_department_result(
                         task_metrics, process_data, prepared_data.space_name, prepared_data.cutoff,
                     )
+                    jira_department_result["space_names"] = getattr(
+                        prepared_data, "space_names", [prepared_data.space_name]
+                    )
+                    st.session_state["department_analysis"] = jira_department_result
                     for key in ("task_metrics", "process_data", "validation_log", "clickup_analysis"):
                         st.session_state.pop(key, None)
                 else:

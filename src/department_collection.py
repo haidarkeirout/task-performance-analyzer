@@ -16,6 +16,7 @@ import streamlit as st
 from clickup_export import collect_data
 from clickup_filters import assignees, filter_options, filter_tasks, status_name, timestamp
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
+from jira_department_collection import render_jira_department_collection
 
 
 def _gateway(settings, workspace_id: str = "") -> ClickUpGateway:
@@ -187,23 +188,26 @@ def _preview(tasks: list[dict]) -> pd.DataFrame:
 
 def render_department_collection(settings):
     """Render the approved Department-first ClickUp collection flow."""
-    st.session_state["data_source"] = "ClickUp"
     st.subheader("Department data collection")
     st.caption(
         "Choose a department, set the analysis period, and the system will scan "
         "all matching ClickUp Lists across every Space."
     )
 
+    clickup_error = None
     try:
         workspace_id, catalog = _catalog_spaces(settings)
     except ClickUpCollectionError as exc:
-        st.error(str(exc))
-        return None, False
+        # Jira Tech remains usable if the ClickUp connector is unavailable.
+        workspace_id, catalog = "", {}
+        clickup_error = str(exc)
 
-    if not catalog:
-        st.warning("No ClickUp department Lists were found in the connected Workspace.")
-        return None, False
-
+    jira_department_key = "jira-tech-development"
+    catalog[jira_department_key] = {
+        "name": "Tech (Jira)",
+        "source": "Jira",
+        "lists": [],
+    }
     department_keys = sorted(catalog, key=lambda key: catalog[key]["name"].casefold())
     selected_key = st.selectbox(
         "Choose Department",
@@ -215,6 +219,12 @@ def render_department_collection(settings):
         return None, False
 
     selected = catalog[selected_key]
+    if selected_key == jira_department_key:
+        return render_jira_department_collection(settings)
+    st.session_state["data_source"] = "ClickUp"
+    if clickup_error:
+        st.error(clickup_error)
+        return None, False
     sources = selected["lists"]
     source_spaces = sorted({item["space_name"] for item in sources}, key=str.casefold)
     source_caption = ", ".join(source_spaces)
