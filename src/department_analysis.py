@@ -164,6 +164,16 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
     delivery = pd.DataFrame({"Due Variance Category": ["Completed on time", "Completed late", "Open overdue"],
                              "Tasks": [on_time, int((due_known & tasks["On Time?"].eq(False)).sum()), overdue]})
     quality = process_data.get("data_quality", pd.DataFrame()).copy()
+    if not quality.empty:
+        quality = quality.rename(
+            columns={"issue_key": "Issue Type", "finding": "Analysis Impact"}
+        )
+        quality["Count"] = 1
+        quality = quality[["Issue Type", "Count", "Analysis Impact"]]
+    else:
+        quality = pd.DataFrame(
+            columns=["Issue Type", "Count", "Analysis Impact"]
+        )
     return {
         "tasks": tasks, "kpis": kpis, "employee_breakdown": employees, "attention": attention,
         "bottlenecks": bottlenecks, "department_quality": quality, "status_counts": status_counts,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -21,6 +22,16 @@ def _date_value(value):
     if isinstance(value, tuple):
         return value[0] if value else None
     return value
+
+
+def _analysis_cutoff(end_date, source_timezone: str) -> str:
+    """Return a cutoff that never extends beyond the collection start time."""
+    period_timezone = ZoneInfo(source_timezone)
+    period_end = datetime.combine(
+        end_date, time.max, tzinfo=period_timezone
+    ).astimezone(timezone.utc)
+    collection_start = datetime.now(timezone.utc)
+    return min(period_end, collection_start).isoformat()
 
 
 def _jql_text(value: str) -> str:
@@ -62,6 +73,8 @@ def _collect(settings, spaces, start_date, end_date, progress) -> PreparedData:
     gateway = JiraGateway(settings)
     gateway.progress = progress
     try:
+        source_timezone = gateway.settings.source_timezone
+        cutoff = _analysis_cutoff(end_date, source_timezone)
         definitions = gateway.fields()
         collected = []
         histories = {}
@@ -114,11 +127,7 @@ def _collect(settings, spaces, start_date, end_date, progress) -> PreparedData:
             complete_items.append(snapshot)
             histories[key] = history
 
-        cutoff = pd.Timestamp(
-            datetime.combine(end_date, time.max), tz="UTC"
-        ).isoformat()
         collected_at = datetime.now(timezone.utc).isoformat()
-        source_timezone = gateway.settings.source_timezone
         space_names = [
             str(space.get("name") or space.get("key"))
             for space in spaces
