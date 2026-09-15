@@ -1247,6 +1247,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "clickup_analysis", "department_analysis", "company_analysis",
         "task_metrics", "process_data", "validation_log",
         "clickup_prepared_data", "clickup_run_analysis",
+        "department_run_requested", "jira_department_run_requested",
         "department_selected_name", "department_period_start", "department_period_end",
         "department_search", "department_status", "department_assignee", "department_priority",
         "department_match", "department_tasks_cache_key", "department_tasks_cache",

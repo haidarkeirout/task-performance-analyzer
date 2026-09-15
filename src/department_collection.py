@@ -318,7 +318,9 @@ def render_department_collection(settings):
 
     previous = st.session_state.get("clickup_prepared_data")
     if previous is not None and previous.fingerprint != fingerprint:
-        st.session_state.pop("clickup_prepared_data", None)
+        # Keep the cached task preview/source available while invalidating only
+        # the result. A later Run Analysis rebuilds the prepared source locally
+        # for the newly selected period or filters.
         st.session_state.pop("department_analysis", None)
 
     if st.button("Done", type="primary", key="department_done", disabled=not filtered_tasks):
@@ -348,17 +350,20 @@ def render_department_collection(settings):
                 prepared.period_end = str(end_date)
                 prepared.duplicate_count = st.session_state.get("department_duplicate_count", 0)
                 st.session_state["clickup_prepared_data"] = prepared
-                st.session_state["clickup_run_analysis"] = True
                 progress.update(label="Department task collection completed.", state="complete", expanded=False)
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
             st.error(f"Department collection could not be completed: {exc}")
 
     prepared = st.session_state.get("clickup_prepared_data")
-    if prepared is not None:
+    prepared_is_current = (
+        prepared is not None
+        and prepared.fingerprint == fingerprint
+    )
+    if prepared_is_current:
         st.success(
             f"Department collection completed: {prepared.count} tasks from "
-            f"{len(source_spaces)} Space(s)."
+            f"{len(source_spaces)} Space(s). The source is ready for analysis."
         )
         st.download_button(
             "Download Department source Excel",
@@ -367,4 +372,48 @@ def render_department_collection(settings):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             on_click="ignore",
         )
-    return prepared, bool(st.session_state.pop("clickup_run_analysis", False))
+
+    run_clicked = st.button(
+        "Run Analysis",
+        type="primary",
+        disabled=prepared is None or not filtered_tasks,
+        key="department_run",
+    )
+    if run_clicked:
+        if not prepared_is_current:
+            try:
+                with st.spinner("Updating the Department analysis source..."):
+                    end_cutoff = pd.Timestamp(
+                        datetime.combine(end_date, time.max), tz="UTC"
+                    ).isoformat()
+                    prepared = collect_data(
+                        None,
+                        filtered_tasks,
+                        selected["name"],
+                        fingerprint,
+                        settings.source_timezone,
+                        space_id="multiple",
+                        time_status_data={},
+                        time_status_error="",
+                        filter_summary=filter_summary,
+                        filter_criteria=criteria,
+                        analysis_mode="department",
+                        department_name=selected["name"],
+                        department_id=selected_key,
+                        cutoff=end_cutoff,
+                    )
+                    prepared.space_names = source_spaces
+                    prepared.period_start = str(start_date)
+                    prepared.period_end = str(end_date)
+                    prepared.duplicate_count = st.session_state.get(
+                        "department_duplicate_count", 0
+                    )
+                    st.session_state["clickup_prepared_data"] = prepared
+            except Exception as exc:
+                st.error(f"Department source could not be updated: {exc}")
+                return None, False
+        st.session_state["department_run_requested"] = True
+        st.rerun()
+
+    run_requested = st.session_state.pop("department_run_requested", False)
+    return prepared, run_requested

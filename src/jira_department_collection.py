@@ -218,7 +218,8 @@ def render_jira_department_collection(settings):
     }, sort_keys=True)
     previous = st.session_state.get("jira_department_prepared_data")
     if previous is not None and previous.fingerprint != fingerprint:
-        st.session_state.pop("jira_department_prepared_data", None)
+        # Keep the preview and date controls visible. A changed period is
+        # collected again only when the user runs the analysis.
         st.session_state.pop("department_analysis", None)
 
     with st.spinner("Scanning every Jira space for Tech work items..."):
@@ -269,7 +270,6 @@ def render_jira_department_collection(settings):
                     lambda message: progress.update(label=message),
                 )
                 st.session_state["jira_department_prepared_data"] = prepared
-                st.session_state["jira_department_run_analysis"] = True
                 progress.update(
                     label="Tech Jira collection completed.",
                     state="complete",
@@ -279,10 +279,15 @@ def render_jira_department_collection(settings):
             st.error(f"Tech Jira collection could not be completed: {exc}")
 
     prepared = st.session_state.get("jira_department_prepared_data")
-    if prepared is not None:
+    prepared_is_current = (
+        prepared is not None
+        and prepared.fingerprint == fingerprint
+    )
+    if prepared_is_current:
         st.success(
             f"Tech collection completed: {prepared.count} work items from "
-            f"{len(getattr(prepared, 'space_names', []))} Jira space(s)."
+            f"{len(getattr(prepared, 'space_names', []))} Jira space(s). "
+            "The source is ready for analysis."
         )
         st.download_button(
             "Download Tech source Excel",
@@ -291,6 +296,32 @@ def render_jira_department_collection(settings):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             on_click="ignore",
         )
-    return prepared, bool(
-        st.session_state.pop("jira_department_run_analysis", False)
+
+    run_clicked = st.button(
+        "Run Analysis",
+        type="primary",
+        disabled=prepared is None or not preview_items,
+        key="jira_department_run",
     )
+    if run_clicked:
+        if not prepared_is_current:
+            try:
+                with st.spinner("Updating the Tech Jira analysis source..."):
+                    prepared = _collect(
+                        settings,
+                        spaces,
+                        start_date,
+                        end_date,
+                        lambda message: st.write(message),
+                    )
+                    st.session_state["jira_department_prepared_data"] = prepared
+            except Exception as exc:
+                st.error(f"Tech Jira source could not be updated: {exc}")
+                return None, False
+        st.session_state["jira_department_run_requested"] = True
+        st.rerun()
+
+    run_requested = st.session_state.pop(
+        "jira_department_run_requested", False
+    )
+    return prepared, run_requested
