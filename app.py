@@ -31,6 +31,7 @@ from report_builder import build_report
 from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
 from clickup_analysis import analyze_clickup, analysis_excel
 from clickup_report import create_clickup_word_report
+from company_performance.dashboard import metric_help
 from company_performance.ui import (
     remember_prepared_source,
     render_company_launcher,
@@ -175,7 +176,76 @@ def calculate_dashboard_values(task_metrics):
             "rejected": row["rejected_tasks"], "open": row["open_tasks"], "wip": row["wip_tasks"],
             "completion_rate": format_percentage(int(row["completed_tasks"]), int(row["total_tasks"])),
             "on_time_rate": format_percentage(int(row["on_time_tasks"]), int(row["on_time_valid_tasks"])),
+            "on_time_tasks": row["on_time_tasks"],
+            "on_time_valid_tasks": row["on_time_valid_tasks"],
             "overdue": row["overdue_open_tasks"], "rework": row["tasks_with_rework"]}
+
+
+def _employee_kpi_help(task_metrics: pd.DataFrame, values: dict) -> dict[str, str]:
+    """Build the same calculation tooltip format used by Project Analysis."""
+    total = int(values["total"])
+    completed = int(values["completed"])
+    on_time = int(values["on_time_tasks"])
+    on_time_valid = int(values["on_time_valid_tasks"])
+    unknown = int(
+        task_metrics["status_known"].eq(False).sum()
+    ) if "status_known" in task_metrics.columns else 0
+    validation = (
+        f"WARNING — {unknown} task(s) have unavailable period-end status"
+        if unknown else "PASS"
+    )
+    scope = "Selected Employee scope"
+    period = str(task_metrics.attrs.get("cutoff", "Selected analysis period"))
+    return {
+        "total": metric_help(
+            formula="Count distinct Source Tool + Task ID",
+            calculation=f"{total} distinct task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Duplicate task keys are removed before KPI calculation.",
+            validation=validation,
+        ),
+        "completed": metric_help(
+            formula="Count of tasks completed by the evaluation cutoff",
+            calculation=f"{completed} task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Tasks without a verified completed status remain open or unavailable.",
+            validation=validation,
+        ),
+        "completion_rate": metric_help(
+            formula="Completed tasks / Total tasks × 100",
+            calculation=f"{completed} / {total} × 100 = {values['completion_rate']}",
+            scope=scope,
+            period=period,
+            exclusions="None for the completion-rate denominator.",
+            validation=validation,
+        ),
+        "on_time_rate": metric_help(
+            formula="Completed on or before due date / Completed tasks with valid due date × 100",
+            calculation=f"{on_time} / {on_time_valid} × 100 = {values['on_time_rate']}",
+            scope=scope,
+            period=period,
+            exclusions="Completed tasks missing a valid due date are excluded.",
+            validation=validation,
+        ),
+        "overdue": metric_help(
+            formula="Count of open tasks with a valid due date before the evaluation cutoff",
+            calculation=f"{int(values['overdue'])} task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Tasks without a valid due date are excluded from overdue classification.",
+            validation=validation,
+        ),
+        "wip": metric_help(
+            formula="Count of tasks currently in a work-in-progress status",
+            calculation=f"{int(values['wip'])} task(s)",
+            scope=scope,
+            period=period,
+            exclusions="Tasks with unavailable status are not classified as WIP.",
+            validation=validation,
+        ),
+    }
 
 
 def _mean_for_mask(frame: pd.DataFrame, column: str, mask: pd.Series):
@@ -394,36 +464,43 @@ def show_executive_dashboard(
         task_metrics,
     )
 
+    help_text = _employee_kpi_help(task_metrics, values)
     columns = st.columns(6)
 
     columns[0].metric(
         "Total Tasks",
         values["total"],
+        help=help_text["total"],
     )
 
     columns[1].metric(
         "Completed",
         values["completed"],
+        help=help_text["completed"],
     )
 
     columns[2].metric(
         "Completion Rate",
         values["completion_rate"],
+        help=help_text["completion_rate"],
     )
 
     columns[3].metric(
         "On-Time Rate",
         values["on_time_rate"],
+        help=help_text["on_time_rate"],
     )
 
     columns[4].metric(
         "Open Overdue",
         values["overdue"],
+        help=help_text["overdue"],
     )
 
     columns[5].metric(
         "WIP Tasks",
         values["wip"],
+        help=help_text["wip"],
     )
 
     st.divider()
@@ -786,6 +863,59 @@ def show_clickup_analysis(result) -> None:
         return "Unavailable" if value is None or pd.isna(value) else f"{float(value):.1f} {suffix}"
 
     tasks = result["tasks"].copy()
+    clickup_total = len(tasks)
+    clickup_completed = int(tasks["Completed?"].sum()) if clickup_total else 0
+    clickup_on_time = int(tasks.loc[tasks["Completed?"] & tasks["Due Variance (days)"].notna(), "On Time?"].sum()) if clickup_total else 0
+    clickup_on_time_valid = int((tasks["Completed?"] & tasks["Due Variance (days)"].notna()).sum()) if clickup_total else 0
+    clickup_validation = "PASS"
+    if "Timing Data Status" in tasks.columns and tasks["Timing Data Status"].ne("Available").any():
+        clickup_validation = "WARNING — some timing fields are unavailable"
+    clickup_scope = f"ClickUp Space: {result['space_name']}"
+    clickup_period = str(result["cutoff"])
+    clickup_help = {
+        "total": metric_help(
+            formula="Count distinct ClickUp Task ID",
+            calculation=f"{clickup_total} distinct task(s)",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="Duplicate task IDs are removed before KPI calculation.",
+            validation=clickup_validation,
+        ),
+        "completed": metric_help(
+            formula="Count of tasks with Completed? = True",
+            calculation=f"{clickup_completed} task(s)",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="Tasks without a completed status are not counted as completed.",
+            validation=clickup_validation,
+        ),
+        "completion": metric_help(
+            formula="Completed tasks / Total tasks × 100",
+            calculation=f"{clickup_completed} / {clickup_total} × 100 = {percent('Completion rate (%)')}",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="None for the completion-rate denominator.",
+            validation=clickup_validation,
+        ),
+        "on_time": metric_help(
+            formula="On-time completed tasks / Completed tasks with valid due variance × 100",
+            calculation=f"{clickup_on_time} / {clickup_on_time_valid} × 100 = {percent('On-time completion rate (%)')}",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="Completed tasks without valid due/completion dates are excluded.",
+            validation=clickup_validation,
+        ),
+        "overdue": metric_help(
+            formula="Count of open tasks with positive Due Variance",
+            calculation=f"{len(result['overdue_tasks'])} task(s)",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="Tasks without a valid due date are excluded.",
+            validation=clickup_validation,
+        ),
+        "wip": metric_help(
+            formula="Count of tasks with WIP? = True",
+            calculation=f"{count('WIP tasks')} task(s)",
+            scope=clickup_scope, period=clickup_period,
+            exclusions="Tasks with unavailable current status are not classified as WIP.",
+            validation=clickup_validation,
+        ),
+    }
     st.success("ClickUp analysis completed.")
     st.caption(
         f"Space: {result['space_name']} · Cutoff: {result['cutoff']} · "
@@ -803,12 +933,12 @@ def show_clickup_analysis(result) -> None:
     with tab_dashboard:
         st.subheader("Executive Overview")
         cards = st.columns(6)
-        cards[0].metric("Total Tasks", count("Total tasks"))
-        cards[1].metric("Completed", count("Completed tasks"))
-        cards[2].metric("Completion Rate", percent("Completion rate (%)"))
-        cards[3].metric("On-Time Rate", percent("On-time completion rate (%)"))
-        cards[4].metric("Open Overdue", count("Open overdue tasks"))
-        cards[5].metric("WIP Tasks", count("WIP tasks"))
+        cards[0].metric("Total Tasks", count("Total tasks"), help=clickup_help["total"])
+        cards[1].metric("Completed", count("Completed tasks"), help=clickup_help["completed"])
+        cards[2].metric("Completion Rate", percent("Completion rate (%)"), help=clickup_help["completion"])
+        cards[3].metric("On-Time Rate", percent("On-time completion rate (%)"), help=clickup_help["on_time"])
+        cards[4].metric("Open Overdue", count("Open overdue tasks"), help=clickup_help["overdue"])
+        cards[5].metric("WIP Tasks", count("WIP tasks"), help=clickup_help["wip"])
 
         st.divider()
         st.subheader("Management Averages")
