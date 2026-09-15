@@ -1131,15 +1131,15 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     ] or [["No data", 0, 0, 0]]
 
     weekly_start = 60
-    _write_excel_table(dashboard, [["Week Starting", "Tasks Created", "Tasks Completed"]] + [
+    _write_excel_table(dashboard, ["Week Starting", "Tasks Created", "Tasks Completed"], [
         [row[0], row[1], row[2]] for row in weekly_rows
-    ] or [["Week Starting", "Tasks Created", "Tasks Completed"]], start_row=weekly_start)
+    ] or [[model.period_start, 0, 0]], start_row=weekly_start)
     status_start = weekly_start + max(3, len(weekly_rows) + 3)
-    _write_excel_table(dashboard, [["Status", "Tasks"]] + status_rows, start_row=status_start)
+    _write_excel_table(dashboard, ["Status", "Tasks"], status_rows, start_row=status_start)
     due_start = status_start + len(status_rows) + 3
-    _write_excel_table(dashboard, [["Due Status", "Tasks"]] + due_rows, start_row=due_start)
+    _write_excel_table(dashboard, ["Due Status", "Tasks"], due_rows, start_row=due_start)
     assignee_start = due_start + len(due_rows) + 3
-    _write_excel_table(dashboard, [["Assignee", "Total Tasks", "Completed", "Open"]] + assignee_rows, start_row=assignee_start)
+    _write_excel_table(dashboard, ["Assignee", "Total Tasks", "Completed", "Open"], assignee_rows, start_row=assignee_start)
 
     weekly_last = weekly_start + max(1, len(weekly_rows))
     line = LineChart()
@@ -1283,7 +1283,7 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     ]
     for name, headers, rows in sheet_specs:
         sheet = workbook.create_sheet(name)
-        _write_excel_table(sheet, [headers, *rows])
+        _write_excel_table(sheet, headers, rows)
         _fit_sheet(sheet)
 
     for sheet in workbook.worksheets:
@@ -1483,7 +1483,7 @@ def _project_word_bytes(result: CompanyAnalysisResult, scope_label: str) -> byte
     document.add_heading("Workload by Assignee", level=1)
     assignee_headers, assignee_rows = _project_assignee_rows(result)
     simple_assignees = [
-        (row[0], row[1], row[2], row[4], row[7])
+        (row[0], row[1], row[2], row[4], row[6])
         for row in assignee_rows
     ]
     _add_docx_table(document, ["Assignee", "Total Tasks", "Completed", "Open", "Completion Rate"], simple_assignees or [
