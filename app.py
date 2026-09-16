@@ -619,8 +619,25 @@ def show_process_analysis(frame, tables):
         rate = row[rate_name]
         col.metric(label, "Unavailable" if pd.isna(rate) else f"{rate:.2f}%")
         col.caption(f"{int(row[count_name])} affected / {int(row['reviewed_valid_tasks'])} reviewed tasks")
-    event_counts = {kind: row["total_" + kind + "_count"] for kind in ["rework", "replanning", "re_evaluation"]}
-    st.write("Event totals (a task may have multiple events):", event_counts)
+    event_counts = {
+        kind: row["total_" + kind + "_count"]
+        for kind in ["rework", "replanning", "re_evaluation"]
+    }
+    event_labels = {
+        "rework": "Rework",
+        "replanning": "Replanning",
+        "re_evaluation": "Re-evaluation",
+    }
+    event_totals = pd.DataFrame([
+        {
+            "Event Type": event_labels[kind],
+            "Count": int(count),
+        }
+        for kind, count in event_counts.items()
+    ])
+    st.subheader("Event totals")
+    st.caption("A task may have multiple events.")
+    st.dataframe(event_totals, hide_index=True, use_container_width=True)
     durations = []
     for field in ["execution", "lead_time", "time_to_start"]:
         durations.append({"Measure": field.replace("_", " ").title(),
