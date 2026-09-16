@@ -37,6 +37,19 @@ def _department_key(name: str) -> str:
     return " ".join(str(name or "").split()).casefold()
 
 
+def _priority_name(task: dict) -> str:
+    value = task.get("priority")
+    if isinstance(value, dict):
+        value = (
+            value.get("priority")
+            or value.get("name")
+            or value.get("label")
+            or value.get("id")
+        )
+    text = str(value or "").strip()
+    return text or "Unavailable"
+
+
 def _catalog_spaces(settings):
     gateway = _gateway(settings)
     try:
@@ -177,6 +190,7 @@ def _preview(tasks: list[dict]) -> pd.DataFrame:
             "Space": task.get("_department_space_name", ""),
             "List": task.get("_department_list_name", ""),
             "Assignee": ", ".join(assignees(task)),
+            "Priority": _priority_name(task),
             "Status": status_name(task),
             "Created": timestamp(task.get("date_created")),
             "Due Date": timestamp(task.get("due_date")),
