@@ -79,12 +79,33 @@ def collect_company_spaces(settings) -> tuple[CompanyPreparedItem, ...]:
             (index - 1) / len(sources),
             text=f"Collecting {source} Space {index} / {len(sources)} — {source_space}",
         )
+
+        def update_source_progress(fraction: float, message: str) -> None:
+            try:
+                normalized_fraction = max(0.0, min(1.0, float(fraction)))
+            except (TypeError, ValueError):
+                normalized_fraction = 0.0
+            overall.progress(
+                ((index - 1) + normalized_fraction) / len(sources),
+                text=f"{source_space}: {message}",
+            )
+
         try:
             fingerprint = f"company:{source.casefold()}:{item.get('id') or item.get('key') or source_space}"
             if source == "Jira":
-                source_data = _collect_jira_space(settings, item, fingerprint)
+                source_data = _collect_jira_space(
+                    settings,
+                    item,
+                    fingerprint,
+                    progress=update_source_progress,
+                )
             else:
-                source_data = _collect_clickup_space(settings, item, fingerprint)
+                source_data = _collect_clickup_space(
+                    settings,
+                    item,
+                    fingerprint,
+                    progress=update_source_progress,
+                )
             prepared.append(
                 CompanyPreparedItem(
                     prepared=source_data,

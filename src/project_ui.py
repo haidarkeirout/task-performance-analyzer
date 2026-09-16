@@ -140,7 +140,7 @@ def _load_catalogs(settings) -> tuple[dict[str, dict[str, Any]], dict[str, dict[
     return jira_spaces, clickup_spaces
 
 
-def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str) -> PreparedData:
+def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str, progress=None) -> PreparedData:
     project_key = str(item.get("key") or "")
     project_name = str(item.get("name") or project_key or item.get("id") or "Jira Project")
     if not project_key:
@@ -148,11 +148,31 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str) -> Pre
 
     query = f'project = "{project_key}" ORDER BY created DESC'
     gateway = JiraGateway(settings)
+    collection_progress = None if progress is not None else st.progress(
+        0, text="Finding tasks in Jira..."
+    )
+
+    def report_progress(fraction: float, message: str) -> None:
+        if progress is not None:
+            progress(fraction, message)
+        elif collection_progress is not None:
+            collection_progress.progress(fraction, text=message)
+
     try:
-        collection_progress = st.progress(0, text="Finding tasks in Jira...")
+        report_progress(
+            0,
+            f"Finding tasks in Jira — {project_name}..."
+            if progress is not None
+            else "Finding tasks in Jira...",
+        )
         issues = gateway.all_issues(query)
         total = len(issues)
-        collection_progress.progress(0, text=f"Collecting tasks: 0 / {total}")
+        report_progress(
+            0,
+            f"Collecting {project_name} tasks: 0 / {total}"
+            if progress is not None
+            else f"Collecting tasks: 0 / {total}",
+        )
         definitions = gateway.fields()
         histories: dict[str, dict[str, Any]] = {}
         complete: list[dict[str, Any]] = []
@@ -164,13 +184,15 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str) -> Pre
                 )
             complete.append(current)
             histories[current["key"]] = history
-            collection_progress.progress(
+            report_progress(
                 index / total if total else 1.0,
-                text=f"Collecting tasks: {index} / {total}",
+                f"Collecting {project_name} tasks: {index} / {total}"
+                if progress is not None
+                else f"Collecting tasks: {index} / {total}",
             )
-        collection_progress.progress(
+        report_progress(
             1.0,
-            text=f"Collection complete: {len(complete)} / {total} tasks",
+            f"Collection complete: {len(complete)} / {total} tasks",
         )
 
         cutoff = datetime.now(timezone.utc).isoformat()
@@ -202,7 +224,7 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str) -> Pre
         gateway.close()
 
 
-def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
+def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, progress=None):
     space_id = str(item.get("id") or "")
     space_name = str(item.get("name") or space_id or "ClickUp Space")
     if not space_id:
@@ -212,11 +234,19 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
         settings.clickup_token,
         workspace_id=str(settings.clickup_workspace_id or ""),
     )
-    collection_progress = st.progress(
+    collection_progress = None if progress is not None else st.progress(
         0,
         text=f"Loading task list from ClickUp — {space_name}...",
     )
+
+    def report_progress(fraction: float, message: str) -> None:
+        if progress is not None:
+            progress(fraction, message)
+        elif collection_progress is not None:
+            collection_progress.progress(fraction, text=message)
+
     try:
+        report_progress(0, f"Loading task list from ClickUp — {space_name}...")
         tasks = gateway.all_tasks_for_space(space_id)
     finally:
         gateway.close()
@@ -229,15 +259,15 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
         prepared_tasks.append(copy_task)
 
     total = len(prepared_tasks)
-    collection_progress.progress(0, text=f"Collecting tasks: 0 / {total}")
+    report_progress(0, f"Collecting tasks: 0 / {total}")
     collected = 0
 
     def update_progress(_message):
         nonlocal collected
         collected += 1
-        collection_progress.progress(
+        report_progress(
             collected / total if total else 1.0,
-            text=f"Collecting tasks: {collected} / {total}",
+            f"Collecting tasks: {collected} / {total}",
         )
 
     prepared = collect_clickup_data(
@@ -252,9 +282,9 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str):
         filter_criteria={"space": space_name, "space_id": space_id},
         analysis_mode="project",
     )
-    collection_progress.progress(
+    report_progress(
         1.0,
-        text=f"Collection complete: {total} / {total} tasks",
+        f"Collection complete: {total} / {total} tasks",
     )
     return prepared
 
