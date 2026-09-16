@@ -188,7 +188,7 @@ def _preview(tasks: list[dict]) -> pd.DataFrame:
             "Task ID": str(task.get("id", "")),
             "Task Name": task.get("name"),
             "Space": task.get("_department_space_name", ""),
-            "List": task.get("_department_list_name", ""),
+            "Department": task.get("_department_list_name", ""),
             "Assignee": ", ".join(assignees(task)),
             "Priority": _priority_name(task),
             "Status": status_name(task),
