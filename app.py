@@ -165,7 +165,7 @@ def format_percentage(
     denominator: int,
 ) -> str:
     if denominator == 0:
-        return "Unavailable"
+        return "N/A"
 
     return f"{numerator / denominator * 100:.1f}%"
 
@@ -183,10 +183,12 @@ def calculate_dashboard_values(task_metrics):
     row = aggregate(task_metrics, []).iloc[0]
     return {"total": row["total_tasks"], "completed": row["completed_tasks"],
             "rejected": row["rejected_tasks"], "open": row["open_tasks"], "wip": row["wip_tasks"],
-            "completion_rate": format_percentage(int(row["completed_tasks"]), int(row["total_tasks"])),
+            "completion_rate": format_percentage(int(row["completed_tasks"]), int(row["known_status_tasks"])),
             "on_time_rate": format_percentage(int(row["on_time_tasks"]), int(row["on_time_valid_tasks"])),
             "on_time_tasks": row["on_time_tasks"],
             "on_time_valid_tasks": row["on_time_valid_tasks"],
+            "known_status_tasks": row["known_status_tasks"],
+            "unknown_status_tasks": row["unknown_status_tasks"],
             "overdue": row["overdue_open_tasks"], "rework": row["tasks_with_rework"]}
 
 
@@ -194,6 +196,7 @@ def _employee_kpi_help(task_metrics: pd.DataFrame, values: dict) -> dict[str, st
     """Build the same calculation tooltip format used by Project Analysis."""
     total = int(values["total"])
     completed = int(values["completed"])
+    known = int(values.get("known_status_tasks", total))
     on_time = int(values["on_time_tasks"])
     on_time_valid = int(values["on_time_valid_tasks"])
     unknown = int(
@@ -223,11 +226,11 @@ def _employee_kpi_help(task_metrics: pd.DataFrame, values: dict) -> dict[str, st
             validation=validation,
         ),
         "completion_rate": metric_help(
-            formula="Completed tasks / Total tasks × 100",
-            calculation=f"{completed} / {total} × 100 = {values['completion_rate']}",
+            formula="Completed tasks / Known-status KPI tasks × 100",
+            calculation=f"{completed} / {known} × 100 = {values['completion_rate']}",
             scope=scope,
             period=period,
-            exclusions="None for the completion-rate denominator.",
+            exclusions=f"Unknown-status tasks are excluded from the denominator ({values.get('unknown_status_tasks', 0)} task(s)).",
             validation=validation,
         ),
         "on_time_rate": metric_help(
@@ -892,7 +895,7 @@ def show_clickup_analysis(result) -> None:
 
     def percent(name):
         value = metric_value(name)
-        return "Unavailable" if value is None or pd.isna(value) else f"{float(value):.1f}%"
+        return "N/A" if value is None or pd.isna(value) else f"{float(value):.1f}%"
 
     def average(name, suffix):
         value = metric_value(name)
@@ -900,6 +903,7 @@ def show_clickup_analysis(result) -> None:
 
     tasks = result["tasks"].copy()
     clickup_total = len(tasks)
+    clickup_known = int(tasks["Status Known?"].eq(True).sum()) if clickup_total else 0
     clickup_completed = int(tasks["Completed?"].sum()) if clickup_total else 0
     clickup_on_time = int(tasks.loc[tasks["Completed?"] & tasks["Due Variance (days)"].notna(), "On Time?"].sum()) if clickup_total else 0
     clickup_on_time_valid = int((tasks["Completed?"] & tasks["Due Variance (days)"].notna()).sum()) if clickup_total else 0
@@ -924,10 +928,10 @@ def show_clickup_analysis(result) -> None:
             validation=clickup_validation,
         ),
         "completion": metric_help(
-            formula="Completed tasks / Total tasks × 100",
-            calculation=f"{clickup_completed} / {clickup_total} × 100 = {percent('Completion rate (%)')}",
+            formula="Completed tasks / Known-status tasks × 100",
+            calculation=f"{clickup_completed} / {clickup_known} × 100 = {percent('Completion rate (%)')}",
             scope=clickup_scope, period=clickup_period,
-            exclusions="None for the completion-rate denominator.",
+            exclusions=f"Unknown-status tasks are excluded from the denominator ({clickup_total - clickup_known} task(s)).",
             validation=clickup_validation,
         ),
         "on_time": metric_help(
@@ -1181,7 +1185,7 @@ def show_department_analysis(result: dict) -> None:
 
     def percent(name):
         current = value(name)
-        return "Unavailable" if current is None or pd.isna(current) else f"{float(current):.1f}%"
+        return "N/A" if current is None or pd.isna(current) else f"{float(current):.1f}%"
 
     st.success("Department performance analysis completed.")
     st.caption(

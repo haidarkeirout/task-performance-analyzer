@@ -85,13 +85,15 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     total = len(tasks)
     is_subtask = tasks.get("Is Subtask", pd.Series(False, index=tasks.index)).fillna(False).astype(bool)
     parent_tasks = tasks.loc[~is_subtask].copy()
-    known_parent_tasks = parent_tasks.loc[
-        parent_tasks.get("Status Known?", pd.Series(True, index=parent_tasks.index)).fillna(False).eq(True)
-    ].copy()
+    status_known = parent_tasks.get("Status Known?")
+    if status_known is None:
+        status_known = ~parent_tasks.get("Status at Cutoff", pd.Series("Unknown", index=parent_tasks.index)).isin(
+            ["Unknown", "Unavailable", None]
+        )
+    known_parent_tasks = parent_tasks.loc[status_known.fillna(False).eq(True)].copy()
     cancelled = int(parent_tasks["Cancelled?"].sum()) if not parent_tasks.empty else 0
-    completed = int(parent_tasks["Completed?"].sum()) if not parent_tasks.empty else 0
-    all_parent_statuses_known = len(known_parent_tasks) == len(parent_tasks)
-    completion_denominator = len(parent_tasks) if all_parent_statuses_known else 0
+    completed = int(known_parent_tasks["Completed?"].sum()) if not known_parent_tasks.empty else 0
+    completion_denominator = len(known_parent_tasks)
     open_tasks = int(tasks["Open?"].sum()) if total else 0
     open_due_tasks = int((tasks["Open?"] & tasks["Due Date"].notna()).sum()) if total else 0
     overdue = int((
@@ -174,6 +176,15 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
     source = task_metrics.copy()
     issue_types = source.get("issue_type", pd.Series("", index=source.index)).fillna("").astype(str)
     is_subtask = issue_types.str.casefold().str.replace("-", "", regex=False).str.replace(" ", "", regex=False).eq("subtask")
+    fallback_status_known = source.get("history_complete", pd.Series(False, index=source.index)).fillna(False).eq(True)
+    fallback_status_known &= ~source.get("status_at_cutoff", pd.Series("Unavailable", index=source.index)).isin(
+        ["Unknown", "Unavailable", None]
+    )
+    status_known = source.get("status_known")
+    if status_known is None:
+        status_known = fallback_status_known
+    else:
+        status_known = status_known.where(status_known.notna(), fallback_status_known)
     tasks = pd.DataFrame({
         "Task ID": source.get("issue_key"), "Task Name": source.get("task_name"),
         "Assignee": source.get("assignee_name", pd.Series("Unassigned", index=source.index)).fillna("Unassigned"),
@@ -185,12 +196,14 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
         "WIP?": source.get("is_wip", False), "Lead Time Hours": source.get("lead_time_business_hours"),
         "Execution Hours": source.get("execution_business_hours"),
         "On Time?": source.get("on_time_completion"), "Overdue Days": source.get("overdue_days"),
+        "Status Known?": status_known.astype("boolean").fillna(False).eq(True),
         "Is Subtask": is_subtask,
     })
     parent_tasks = tasks.loc[~tasks["Is Subtask"]].copy()
+    known_parent_tasks = parent_tasks.loc[parent_tasks["Status Known?"].eq(True)].copy()
     total = len(tasks); cancelled = int(parent_tasks["Cancelled?"].eq(True).sum())
-    completed = int(parent_tasks["Completed?"].eq(True).sum()); open_count = int(tasks["Open?"].eq(True).sum())
-    completion_denominator = len(parent_tasks)
+    completed = int(known_parent_tasks["Completed?"].eq(True).sum()); open_count = int(tasks["Open?"].eq(True).sum())
+    completion_denominator = len(known_parent_tasks)
     open_due_tasks = int((tasks["Open?"].eq(True) & tasks["Due Date"].notna()).sum())
     overdue = int((tasks["Open?"].eq(True) & pd.to_numeric(tasks["Overdue Days"], errors="coerce").gt(0)).sum())
     due_known = parent_tasks["Completed?"].eq(True) & parent_tasks["Due Date"].notna() & parent_tasks["Completed"].notna()
@@ -489,10 +502,10 @@ def department_excel(result: dict) -> bytes:
     ], columns=["Field", "Value"]))
     _write_frame(workbook.create_sheet("Metric Definitions"), pd.DataFrame([
         ("Total Tasks", "All tasks collected from the department Spaces."),
-        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks."),
+        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks with a verified status at cutoff; Unknown statuses are excluded and shown in Data Quality."),
         ("On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."),
         ("Open Overdue", "Open tasks with a due date before the analysis cutoff."),
-        ("WIP", "Open tasks currently in the department's in-progress workflow statuses."),
+        ("WIP", "Open tasks currently in In Progress or Review; On Hold and At Risk are not WIP."),
         ("Average Lead Time", "Average completion date minus creation date for completed tasks."),
         ("Workflow Exception Rate", "Tasks with recorded workflow exceptions divided by tasks with valid workflow coverage."),
     ], columns=["Metric", "Definition"]))
@@ -655,10 +668,10 @@ def department_word(result: dict) -> bytes:
     document.add_heading("Metric Definitions", level=1)
     definitions = pd.DataFrame([
         ("Total Tasks", "All tasks collected from the department Spaces."),
-        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks."),
+        ("Completion Rate", "Completed parent/standalone tasks divided by parent/standalone tasks with a verified status at cutoff; Unknown statuses are excluded and shown in Data Quality."),
         ("On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."),
         ("Open Overdue", "Open tasks with a due date before the analysis cutoff."),
-        ("WIP", "Open tasks currently in the department's in-progress workflow statuses."),
+        ("WIP", "Open tasks currently in In Progress or Review; On Hold and At Risk are not WIP."),
         ("Average Lead Time", "Average completion date minus creation date for completed tasks."),
         ("Workflow Exception Rate", "Tasks with recorded workflow exceptions divided by tasks with valid workflow coverage."),
     ], columns=["Metric", "Definition"])

@@ -78,6 +78,17 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(summary['overdue_valid_tasks'],2)
         self.assertEqual(summary['open_overdue_rate'],50)
 
+    def test_completion_rate_excludes_unknown_status_from_denominator(self):
+        done = history([('Idea', 'In Progress', '2026-09-01T07:00Z'),
+                        ('In Progress', 'Done', '2026-09-02T08:00Z')])
+        tasks = pd.DataFrame([task('T-1', 'Done'), task('T-2', 'Done')])
+        frame = analyze_tasks(tasks, {'T-1': done}, CUTOFF, CAL)
+        summary = aggregate(frame, []).iloc[0]
+        self.assertEqual(summary['total_tasks'], 2)
+        self.assertEqual(summary['known_status_tasks'], 1)
+        self.assertEqual(summary['unknown_status_tasks'], 1)
+        self.assertEqual(summary['completion_rate'], 100.0)
+
     def test_repeated_visits_and_union_and_zero_denominator(self):
         events=[('Idea','In Progress','2026-09-01T07:00Z'),('In Progress','In Review','2026-09-01T08:00Z'),
                 ('In Review','In Progress','2026-09-01T09:00Z'),('In Progress','In Review','2026-09-01T10:00Z'),

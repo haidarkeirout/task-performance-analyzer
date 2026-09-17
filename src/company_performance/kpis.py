@@ -44,6 +44,8 @@ class CoreKPIs:
     average_time_to_start_days: float | None
     average_execution_duration_days: float | None
     average_lead_time_days: float | None
+    known_status_tasks: int = 0
+    unknown_status_tasks: int = 0
 
 
 @dataclass(frozen=True)
@@ -116,11 +118,10 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         if normalize_priority(item.task.source_tool, item.task.priority) in {"Critical", "High"}
     ]
     unassigned = [item for item in open_items if not item.task.assignees]
-    # Completion is defined against every selected parent/standalone task,
-    # including cancelled/rejected work.  When any selected task has an unknown
-    # period-end status, the rate is unavailable instead of silently treating
-    # missing historical evidence as non-completion.
-    all_statuses_known = len(known) == len(tasks)
+    # Completion is defined against every selected parent/standalone task with
+    # a verified period-end status, including known cancelled/rejected work.
+    # Unknown status evidence is excluded from both numerator and denominator;
+    # it remains visible through the task-level Data Quality output.
 
     completed_with_due = [
         item for item in completed if item.task.due_date is not None and item.final_completion_date is not None
@@ -154,15 +155,15 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         high_priority_open_tasks=len(high_open),
         high_priority_overdue_tasks=len(high_overdue),
         unassigned_open_tasks=len(unassigned),
-        completion_rate=(
-            safe_rate(len(completed), len(tasks)) if all_statuses_known else None
-        ),
+        completion_rate=safe_rate(len(completed), len(known)),
         overdue_open_rate=safe_rate(len(overdue), len(open_with_due)),
         on_time_completion_rate=safe_rate(len(on_time), len(completed_with_due)),
         late_completion_rate=safe_rate(len(late), len(completed_with_due)),
         average_time_to_start_days=_average(time_to_start),
         average_execution_duration_days=_average(execution),
         average_lead_time_days=_average(lead),
+        known_status_tasks=len(known),
+        unknown_status_tasks=len(tasks) - len(known),
     )
 
 

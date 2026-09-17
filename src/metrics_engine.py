@@ -855,20 +855,27 @@ def aggregate(
             group["issue_key"].nunique()
         )
 
+        known_mask = (
+            group["status_known"].fillna(False).eq(True)
+            if "status_known" in group.columns
+            else pd.Series(True, index=group.index)
+        )
+        known_group = group.loc[known_mask]
+        known_status_tasks = int(known_group["issue_key"].nunique())
         completed = int(
-            group["is_completed"].sum()
+            known_group.loc[known_group["is_completed"].eq(True), "issue_key"].nunique()
         )
 
         rejected = int(
-            group["is_rejected"].sum()
+            known_group.loc[known_group["is_rejected"].eq(True), "issue_key"].nunique()
         )
 
         open_tasks = int(
-            group["is_open"].sum()
+            known_group.loc[known_group["is_open"].eq(True), "issue_key"].nunique()
         )
 
         wip = int(
-            group["is_wip"].sum()
+            known_group.loc[known_group["is_wip"].eq(True), "issue_key"].nunique()
         )
 
         valid_on_time = group[
@@ -902,9 +909,11 @@ def aggregate(
                 "rejected_tasks": rejected,
                 "open_tasks": open_tasks,
                 "wip_tasks": wip,
+                "known_status_tasks": known_status_tasks,
+                "unknown_status_tasks": total - known_status_tasks,
                 "completion_rate": (
-                    completed / total * 100
-                    if total
+                    completed / known_status_tasks * 100
+                    if known_status_tasks
                     else None
                 ),
                 "rejection_rate": (

@@ -95,12 +95,18 @@ class DepartmentSubtaskTests(unittest.TestCase):
                 "is_completed": False, "is_rejected": False, "is_open": True,
                 "is_wip": False, "history_complete": True,
             },
+            {
+                "issue_key": "ENG-3", "task_name": "Unknown parent", "issue_type": "Task",
+                "assignee_name": "Maya", "status_at_cutoff": "Unavailable",
+                "is_completed": False, "is_rejected": False, "is_open": False,
+                "is_wip": False, "history_complete": False, "status_known": False,
+            },
         ])
         result = build_jira_department_result(
             frame, {}, "Tech", "2026-09-30T20:59:59Z"
         )
         kpis = result["kpis"].set_index("KPI")
-        self.assertEqual(kpis.loc["Total Tasks", "Value"], 2)
+        self.assertEqual(kpis.loc["Total Tasks", "Value"], 3)
         self.assertEqual(kpis.loc["Task Completion Rate (%)", "Value"], 100.0)
 
 

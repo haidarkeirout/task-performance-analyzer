@@ -399,7 +399,7 @@ def _kpi_detail_rows(model) -> list[tuple[str, Any, str]]:
         ("Completed Tasks", kpis.completed_tasks, "Tasks in Completed status at the end of the selected period."),
         ("Open Tasks", kpis.open_tasks, "Tasks in an open workflow status at period end."),
         ("Current WIP", kpis.current_wip, "Tasks currently in In Execution or In Review."),
-        ("Completion Rate", rate(kpis.completion_rate), "Completed tasks divided by all tasks in the selected Project scope."),
+        ("Completion Rate", rate(kpis.completion_rate), "Completed tasks divided by tasks with a verified status at period end; Unknown statuses are excluded and shown in Data Quality."),
         ("Open Overdue Tasks", kpis.overdue_open_tasks, "Open tasks with a due date before the period end."),
         ("Open Overdue Rate", rate(kpis.overdue_open_rate), "Open overdue tasks divided by open tasks with a due date."),
         ("High-Priority Open Tasks", kpis.high_priority_open_tasks, "Open Critical or High priority tasks."),
@@ -538,9 +538,10 @@ def _project_last_status_date(snapshot) -> date | None:
 def _project_summary_values(snapshots) -> dict[str, Any]:
     items = [item for item in snapshots if item.counted_in_kpis]
     total = len(items)
-    completed = [item for item in items if item.status_at_period_end.value == "Completed"]
-    rejected = [item for item in items if item.status_at_period_end.value == "Rejected"]
-    open_items = [item for item in items if item.status_at_period_end.is_open]
+    known = [item for item in items if item.status_at_period_end.value != "Unknown"]
+    completed = [item for item in known if item.status_at_period_end.value == "Completed"]
+    rejected = [item for item in known if item.status_at_period_end.value == "Rejected"]
+    open_items = [item for item in known if item.status_at_period_end.is_open]
     wip = [item for item in items if item.status_at_period_end.value in {"In Execution", "In Review"}]
     completed_due = [
         item for item in completed
@@ -592,7 +593,7 @@ def _project_summary_values(snapshots) -> dict[str, Any]:
         "rejected_tasks": len(rejected),
         "open_tasks": len(open_items),
         "wip_tasks": len(wip),
-        "completion_rate": rate(len(completed), total),
+        "completion_rate": rate(len(completed), len(known)),
         "rejection_rate": rate(len(rejected), total),
         "on_time_tasks": len(on_time),
         "on_time_valid_tasks": len(completed_due),
@@ -611,6 +612,7 @@ def _project_summary_values(snapshots) -> dict[str, Any]:
         "total_rework_count": rework_events,
         "history_complete_tasks": sum(item.task.history_complete for item in items),
         "unknown_status_tasks": sum(item.status_at_period_end.value == "Unknown" for item in items),
+        "known_status_tasks": len(known),
         "history_excluded_tasks": sum(not item.history_available for item in items),
         "reviewed_valid_tasks": len(reviewed),
         "pending_before_execution": sum(item.status_at_period_end.value == "Not Started" for item in items),
@@ -1213,10 +1215,10 @@ def _project_excel_bytes(result: CompanyAnalysisResult, scope_label: str) -> byt
     definitions = [
         ["Total Tasks", "Count of all tasks in the selected Project scope; subtasks remain visible."],
         ["Completed", "Tasks with normalized Completed status at period end."],
-        ["Completion Rate", "Completed tasks divided by KPI-counted tasks."],
+        ["Completion Rate", "Completed tasks divided by KPI-counted tasks with a verified status at period end; Unknown statuses are excluded and shown in Data Quality."],
         ["On-Time Rate", "Completed tasks on or before due date divided by completed tasks with a known due date."],
         ["Open Overdue", "Open tasks with a due date earlier than the analysis period end."],
-        ["WIP", "Open tasks currently in In Execution or In Review."],
+        ["WIP", "Open tasks currently in In Execution or In Review at period end; On Hold and At Risk are not WIP."],
         ["Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."],
         ["Due Variance", "Completion date minus due date; positive values indicate late completion."],
         ["Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."],

@@ -32,7 +32,7 @@ class DepartmentAnalysisTests(unittest.TestCase):
     def test_kpis_use_department_scope_and_cancelled_safe_denominator(self):
         kpis = self.result["kpis"].set_index("KPI")
         self.assertEqual(kpis.loc["Total Tasks", "Value"], 2)
-        self.assertTrue(pd.isna(kpis.loc["Task Completion Rate (%)", "Value"]))
+        self.assertEqual(kpis.loc["Task Completion Rate (%)", "Value"], 100.0)
         self.assertEqual(kpis.loc["Open Overdue Tasks", "Value"], 0)
         self.assertEqual(self.result["department_name"], "Marketing")
         self.assertEqual(len(self.result["attention"]), 1)

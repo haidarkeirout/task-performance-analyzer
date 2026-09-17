@@ -43,6 +43,10 @@ NOT_STARTED_STATUSES = {
     "ready",
 }
 
+# The shared KPI contract treats only active execution and review as WIP.
+# On Hold and At Risk remain visible as separate workflow states.
+WIP_STATUSES = {"in progress", "review"}
+
 
 def _status_minutes(payload: Any) -> dict[str, float]:
     """Flatten native ClickUp Total time in Status data by status."""
@@ -212,7 +216,8 @@ def _assignee_summary(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     rows = []
     for assignee, group in frame.groupby("Assignee", dropna=False):
-        completed = group[group["Completed?"]]
+        known = group[group["Status Known?"].eq(True)]
+        completed = known[known["Completed?"]]
         rows.append({
             "Assignee": assignee or "Unassigned",
             "Total Tasks": int(len(group)),
@@ -220,7 +225,7 @@ def _assignee_summary(frame: pd.DataFrame) -> pd.DataFrame:
             "Open": int(group["Open?"].sum()),
             "WIP": int(group["WIP?"].sum()),
             "Cancelled": int(group["Cancelled?"].sum()),
-            "Completion Rate (%)": float(group["Completed?"].mean() * 100.0) if len(group) else None,
+            "Completion Rate (%)": float(completed.shape[0] / len(known) * 100.0) if len(known) else None,
             "On-Time Completion Rate (%)": _safe_rate(completed["On Time?"]) if not completed.empty else None,
             "Completed Late": int((completed["Due Variance (days)"] > 0).sum()) if not completed.empty else 0,
             "Open Overdue": int(((group["Open?"]) & (group["Due Variance (days)"] > 0)).sum()),
@@ -293,7 +298,7 @@ def analyze_clickup(prepared_data):
             # ClickUp omitted its close timestamp; historical snapshots cannot.
             completed_flag = not historical_snapshot
         open_flag = bool(status_known and not completed_flag and not cancelled)
-        wip_flag = open_flag and status_key not in NOT_STARTED_STATUSES
+        wip_flag = open_flag and status_key in WIP_STATUSES
         end = completed if pd.notna(completed) else cutoff
         lead_time_hours = _duration_hours(created, end)
         timing_end = completed if completed_flag else cutoff
@@ -388,6 +393,7 @@ def analyze_clickup(prepared_data):
         task_frame[date_column] = _utc_datetime_series(task_frame[date_column])
     status_frame = pd.DataFrame(status_rows, columns=["Status", "Task ID", "Minutes", "Hours"])
     total = len(task_frame)
+    known_status_tasks = task_frame[task_frame["Status Known?"].eq(True)] if total else task_frame
     completed = task_frame[task_frame["Completed?"]] if total else task_frame
     open_tasks = task_frame[task_frame["Open?"]] if total else task_frame
     due_known_completed = completed[completed["Due Variance (days)"].notna()] if total else task_frame
@@ -426,9 +432,11 @@ def analyze_clickup(prepared_data):
         ("Open tasks", int(task_frame["Open?"].sum()) if total else 0),
         ("WIP tasks", int(task_frame["WIP?"].sum()) if total else 0),
         ("Cancelled tasks", int(task_frame["Cancelled?"].sum()) if total else 0),
+        ("Known status tasks", int(len(known_status_tasks))),
+        ("Unknown status tasks", int(total - len(known_status_tasks))),
         ("Completion rate (%)", (
-            float(task_frame["Completed?"].mean() * 100.0)
-            if total and task_frame["Status Known?"].all() else None
+            float(known_status_tasks["Completed?"].mean() * 100.0)
+            if len(known_status_tasks) else None
         )),
         ("On-time completion rate (%)", _safe_rate(completed["On Time?"]) if total else None),
         ("Open overdue tasks", int(len(overdue_open))),
@@ -483,7 +491,7 @@ def analyze_clickup(prepared_data):
         ("Due Variance (days)", "Completed task: Completed date minus Due date. Open task: Evaluation cutoff minus Due date. Positive is late/overdue; negative is early/time remaining."),
         ("On-time completion rate", "Share of completed tasks with both a due date and a completion date where completion was on or before the due date."),
         ("Execution and time to start", "Calculated only when the recorded start date is on or before the completion date or evaluation cutoff. Date-only starts on the creation day use creation time as the effective start. Chronology conflicts remain unavailable."),
-        ("WIP tasks", "Open tasks whose current status is not a common not-started status (Backlog, To Do, Planning, Ready, or Open)."),
+        ("WIP tasks", "Open tasks whose status is In Progress or Review. On Hold and At Risk are reported separately."),
         ("Status-duration data", "Read only from ClickUp Total time in Status when the ClickApp/API exposes it. Missing values stay unavailable."),
         ("Historical ClickUp status", "A current ClickUp snapshot is never presented as a past status. If no chronological evidence establishes the cutoff state, status-dependent metrics remain unavailable."),
         ("Individual assignment", "Uses the assignee snapshot returned by ClickUp. It does not establish individual contribution or ownership at completion."),

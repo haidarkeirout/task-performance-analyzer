@@ -253,11 +253,11 @@ def build_kpi_help(
             validation=validation,
         ),
         "completion-rate": metric_help(
-            formula="Completed tasks / Total tasks × 100",
-            calculation=f"{len(completed)} / {len(items)} × 100 = {_format_rate(kpis.completion_rate)}",
+            formula="Completed tasks / Known-status KPI tasks × 100",
+            calculation=f"{len(completed)} / {len(known_status)} × 100 = {_format_rate(kpis.completion_rate)}",
             scope=scope,
             period=period,
-            exclusions=exclusions,
+            exclusions=f"Unknown-status tasks are excluded from the denominator ({len(items) - len(known_status)} task(s)). {exclusions}",
             validation=validation,
         ),
         "current-wip": metric_help(
