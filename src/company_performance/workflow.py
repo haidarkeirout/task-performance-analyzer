@@ -26,6 +26,14 @@ def _same_day(left: date, right: date) -> bool:
 
 
 def _history_available(task: TaskRecord, period_end: date, collection_date: date | None) -> bool:
+    """Return whether the source can prove the period-end status.
+
+    ``collection_date`` is retained for backwards-compatible callers, but a
+    same-day snapshot is never a substitute for a verified status history.
+    A current/raw status can be used for a live dashboard, not for a
+    historical KPI cutoff.
+    """
+    del collection_date
     if task.history_complete:
         coverage_date = calendar_date(task.history_through)
         return bool(
@@ -39,6 +47,13 @@ def _history_available(task: TaskRecord, period_end: date, collection_date: date
 
 
 def _status_as_of(task: TaskRecord, period_end: date, collection_date: date | None, flags: set[str]) -> UnifiedStatus:
+    """Reconstruct status at ``period_end`` from verified history only.
+
+    The raw/current status is intentionally never used as a historical
+    fallback.  This keeps a task with missing coverage explicitly Unknown
+    instead of silently turning a present-day snapshot into a past result.
+    """
+    del collection_date
     coverage_date = calendar_date(task.history_through)
     if (
         task.history_complete
@@ -58,13 +73,6 @@ def _status_as_of(task: TaskRecord, period_end: date, collection_date: date | No
                 continue
             if event_date <= period_end:
                 status = normalize_status(task.source_tool, event.to_status)
-        if status is UnifiedStatus.UNKNOWN:
-            flags.add("Unmapped Status")
-        return status
-
-    if collection_date == period_end and task.raw_status:
-        flags.add("Snapshot Status Fallback")
-        status = normalize_status(task.source_tool, task.raw_status)
         if status is UnifiedStatus.UNKNOWN:
             flags.add("Unmapped Status")
         return status

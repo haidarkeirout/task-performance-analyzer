@@ -112,6 +112,26 @@ class MappingAndAttributionTests(unittest.TestCase):
         self.assertEqual(metrics.completed_tasks, 1)
         self.assertEqual(metrics.completion_rate, 100.0)
 
+    def test_unknown_status_is_excluded_from_completion_denominator(self):
+        completed = reconstruct_task(
+            task(
+                task_id="known",
+                raw_status="Done",
+                workflow_history=(event("To Do", "Done", "2026-09-05T09:00:00"),),
+            ),
+            START,
+            END,
+        )
+        unknown = reconstruct_task(
+            task(task_id="unknown", history_complete=False, raw_status="Done"),
+            START,
+            END,
+        )
+        metrics = calculate_core_kpis([completed, unknown])
+        self.assertEqual(metrics.total_tasks, 2)
+        self.assertEqual(metrics.known_status_tasks, 1)
+        self.assertEqual(metrics.unknown_status_tasks, 1)
+        self.assertEqual(metrics.completion_rate, 100.0)
 
 class WorkflowTests(unittest.TestCase):
     def test_reopened_task_is_visible_in_period_but_not_completed_at_period_end(self):
@@ -180,6 +200,19 @@ class WorkflowTests(unittest.TestCase):
         result = reconstruct_task(record, START, END, collection_date=date(2026, 10, 1))
         self.assertFalse(result.history_available)
         self.assertEqual(result.status_at_period_end, UnifiedStatus.UNKNOWN)
+        self.assertIn("Missing Workflow History", result.data_quality_flags)
+
+    def test_same_day_snapshot_does_not_replace_missing_historical_history(self):
+        record = task(
+            history_complete=False,
+            raw_status="Done",
+            workflow_history=(),
+            collection_timestamp=datetime(2026, 9, 30, tzinfo=UTC),
+        )
+        result = reconstruct_task(record, START, END, collection_date=END)
+        self.assertFalse(result.history_available)
+        self.assertEqual(result.status_at_period_end, UnifiedStatus.UNKNOWN)
+        self.assertNotIn("Snapshot Status Fallback", result.data_quality_flags)
         self.assertIn("Missing Workflow History", result.data_quality_flags)
 
     def test_status_intervals_are_clipped_to_the_selected_period(self):
