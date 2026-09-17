@@ -181,13 +181,6 @@ def render_company_launcher(st: Any) -> None:
                 st.info("Collecting all Jira projects and ClickUp Spaces...")
             return
 
-        failures = tuple(st.session_state.get("company_collection_errors") or ())
-        if failures:
-            st.warning(
-                f"{len(failures)} Space(s) could not be collected. "
-                "The dashboard will use the successfully collected sources."
-            )
-
         st.caption(
             "The system collected every accessible Jira project and ClickUp Space. "
             "Source Spaces are grouped under inferred project names; the original "

@@ -1287,6 +1287,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "employee_prepared", "employee_fingerprint", "employee_clickup_checkpoints",
         "company_prepared_items", "company_collection_attempted",
         "company_collection_error", "company_collection_errors",
+        "company_partial_prepared_items",
         "company_prepared_jira", "company_prepared_clickup",
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
