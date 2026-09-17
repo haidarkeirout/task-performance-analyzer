@@ -25,7 +25,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from excel_safety import write_excel_cell
 
-from .dashboard import CompanyDashboardModel
+from .dashboard import CompanyDashboardModel, data_quality_task_rows
 from .kpis import BottleneckCandidate, Recommendation
 from .models import TaskPeriodSnapshot
 
@@ -443,6 +443,17 @@ def write_company_excel(
     _write_excel_table(quality, [["Data Quality Flag", "Task Count"]] + [
         [item.flag, item.task_count] for item in model.data_quality
     ] or [["Data Quality Flag", "Task Count"], ["No findings", 0]])
+    quality_rows = data_quality_task_rows(model.task_details)
+    detail_start = quality.max_row + 2
+    _write_excel_table(
+        quality,
+        [["Source Tool", "Source Space", "Project", "Task ID", "Task Name", "Status at Period End", "Reason(s)", "KPI Impact"]]
+        + [[row[key] for key in ("Source Tool", "Source Space", "Project", "Task ID", "Task Name", "Status at Period End", "Reason(s)", "KPI Impact")]
+           for row in quality_rows]
+        or [["Source Tool", "Source Space", "Project", "Task ID", "Task Name", "Status at Period End", "Reason(s)", "KPI Impact"],
+            ["N/A", "N/A", "N/A", "N/A", "No task-level quality findings", "N/A", "", ""]],
+        start_row=detail_start,
+    )
     coverage_start = quality.max_row + 2
     _write_excel_table(quality, [["Source", "Space", "Project", "Tasks", "History Coverage", "Notes"]] + [
         [item.source_tool, item.source_space, item.unified_project, item.task_count, item.history_mode, item.reason or "N/A"]
@@ -731,6 +742,13 @@ def write_company_word_report(
     _add_table(document, ("Data Quality Flag", "Task Count"), [
         (item.flag, item.task_count) for item in model.data_quality
     ] or [("No findings", 0)])
+    quality_rows = data_quality_task_rows(model.task_details)
+    document.add_heading("Task-level Unknown Status Details", level=2)
+    _add_table(document, ("Source", "Space", "Project", "Task ID", "Task", "Status at Period End", "Reason(s)", "KPI Impact"), [
+        (row["Source Tool"], row["Source Space"], row["Project"], row["Task ID"], row["Task Name"],
+         row["Status at Period End"], row["Reason(s)"], row["KPI Impact"])
+        for row in quality_rows
+    ] or [("N/A", "N/A", "N/A", "N/A", "No task-level quality findings", "N/A", "", "")])
     document.add_paragraph(
         "History-dependent workflow metrics remain unavailable where the source does not provide complete history. "
         "Department labels are shown from the source record when available; records without a reliable department "

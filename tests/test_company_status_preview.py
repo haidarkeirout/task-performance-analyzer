@@ -121,6 +121,21 @@ class CompanyClickUpIntegrationTests(unittest.TestCase):
         unresolved=build_company_analysis(period_start=date(2026,9,1),period_end=date(2026,9,30),clickup_prepared=(ClickPrepared(status={'id':'p_INTERNAL'}),),unified_project='P')
         self.assertEqual(unresolved.model.task_details[0].original_status,'p_INTERNAL');self.assertEqual(unresolved.model.task_details[0].final_status,'Unknown');delivery=next(c for c in unresolved.model.executive_charts if c.key=='delivery-outcome');self.assertNotIn('Unknown',[p.label for p in delivery.points]);flags={i.flag for i in unresolved.model.data_quality};self.assertIn('ClickUp Status Unresolved',flags);self.assertIn('Unmapped Status',flags)
 
+    def test_unknown_reason_details_are_exported_to_excel_and_word(self):
+        unresolved=build_company_analysis(period_start=date(2026,9,1),period_end=date(2026,9,30),clickup_prepared=(ClickPrepared(status={'id':'p_INTERNAL'}),),unified_project='P')
+        with tempfile.TemporaryDirectory() as td:
+            excel_path=write_company_excel(unresolved.model,Path(td)/'quality.xlsx')
+            quality=load_workbook(excel_path,data_only=True)['Data Quality']
+            values=[[cell.value for cell in row] for row in quality.iter_rows(values_only=False)]
+            flattened='\n'.join(str(value) for row in values for value in row if value is not None)
+            self.assertIn('Task ID', flattened)
+            self.assertIn('Unmapped Status', flattened)
+            word_path=write_company_word_report(unresolved.model,Path(td)/'quality.docx')
+            document=Document(word_path)
+            text='\n'.join(p.text for p in document.paragraphs)+'\n'+'\n'.join(c.text for t in document.tables for r in t.rows for c in r.cells)
+            self.assertIn('Task-level Unknown Status Details', text)
+            self.assertIn('Unmapped Status:', text)
+
     def test_collection_reconciliation_explains_out_of_period_task(self):
         outside = TaskRecord(
             source_tool='Jira', task_id='OLD-1', task_name='Older task', raw_status='Done',

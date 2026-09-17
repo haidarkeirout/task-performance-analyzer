@@ -97,6 +97,47 @@ class DataQualityItem:
     task_count: int
 
 
+_QUALITY_REASON_EXPLANATIONS = {
+    "Missing Workflow History": "The source did not provide a complete status history through the period end.",
+    "Analysis Period Exceeds History Coverage": "The available history ends before the selected period end.",
+    "Unmapped Status": "The source status could not be mapped to the approved unified workflow statuses.",
+    "Invalid Workflow Timestamp": "At least one workflow event has a missing or invalid timestamp.",
+    "Missing Initial Status": "The history has events but no reliable initial status from which to reconstruct the timeline.",
+    "ClickUp Chronological History Unavailable": "ClickUp did not provide chronological status history for this task.",
+    "Jira History Unavailable": "Jira did not provide verified status history for this task.",
+}
+
+
+def explain_quality_flag(flag: str) -> str:
+    """Return a user-facing explanation while preserving the original flag."""
+    return _QUALITY_REASON_EXPLANATIONS.get(flag, flag)
+
+
+def data_quality_task_rows(task_details: Iterable["TaskDetail"]) -> tuple[dict[str, Any], ...]:
+    """Build one row per task with every recorded quality reason."""
+    rows: list[dict[str, Any]] = []
+    for detail in task_details:
+        flags = tuple(dict.fromkeys(detail.data_quality_flags))
+        if detail.final_status != UnifiedStatus.UNKNOWN.value and not flags:
+            continue
+        reasons = flags or ("Unknown status without a recorded reason",)
+        if detail.final_status == UnifiedStatus.UNKNOWN.value:
+            impact = "Excluded from Completion Rate, On-Time, WIP and open/overdue status KPIs"
+        else:
+            impact = "See recorded reason(s); status-dependent KPIs remain unchanged"
+        rows.append({
+            "Source Tool": detail.source_tool,
+            "Source Space": detail.source_space or "N/A",
+            "Project": detail.unified_project or "Unmapped Project",
+            "Task ID": detail.task_id,
+            "Task Name": detail.task_name or "Untitled task",
+            "Status at Period End": detail.final_status,
+            "Reason(s)": "; ".join(f"{flag}: {explain_quality_flag(flag)}" for flag in reasons),
+            "KPI Impact": impact,
+        })
+    return tuple(rows)
+
+
 @dataclass(frozen=True)
 class TaskDetail:
     """One row for the details tab, including source and normalised statuses."""

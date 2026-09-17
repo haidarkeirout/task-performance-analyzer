@@ -22,7 +22,7 @@ from .application import (
     build_company_preview,
     filter_company_preview,
 )
-from .dashboard import DashboardFilters, build_company_dashboard
+from .dashboard import DashboardFilters, build_company_dashboard, data_quality_task_rows
 from .kpis import generate_recommendations, identify_bottleneck_candidates
 from .models import UnifiedStatus
 from .outputs import write_company_excel, write_company_raw_data, write_company_word_report
@@ -569,6 +569,12 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         st.dataframe(_table_rows(model.source_coverage), hide_index=True, use_container_width=True)
         st.subheader("Data Quality")
         st.dataframe(_table_rows(model.data_quality), hide_index=True, use_container_width=True)
+        st.subheader("Task-level Data Quality Details")
+        quality_rows = data_quality_task_rows(model.task_details)
+        if quality_rows:
+            st.dataframe(quality_rows, hide_index=True, use_container_width=True)
+        else:
+            st.success("No task-level Unknown status or quality reasons were recorded.")
 
     excel, raw, word = _cached_output_bytes(st, result, model)
     st.subheader("Downloads")
