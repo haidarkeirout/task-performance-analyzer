@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Iterable, Mapping
@@ -23,6 +25,10 @@ REQUIRED_COLUMNS = {
     "clickup_user_id",
     "active",
 }
+DIRECTORY_CACHE_TTL_SECONDS = 300
+_CACHE_LOCK = threading.Lock()
+_DIRECTORY_CACHE: dict[str, tuple[float, tuple["EmployeeRecord", ...]]] = {}
+_LAST_GOOD_DIRECTORY: dict[str, tuple["EmployeeRecord", ...]] = {}
 
 
 @dataclass(frozen=True)
@@ -96,7 +102,7 @@ def _download_workbook(url: str) -> bytes:
             response = requests.get(
                 candidate,
                 headers={"User-Agent": "Task-Performance-Analyzer/1.0"},
-                timeout=25,
+                timeout=(5, 15),
                 allow_redirects=True,
             )
             response.raise_for_status()
@@ -199,7 +205,35 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
     return [record for record in records if record.active]
 
 
+def load_employee_directory_with_status() -> tuple[list[EmployeeRecord], str | None]:
+    """Load the directory with a short cache and a validated last-good fallback."""
+    url = _directory_url()
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _DIRECTORY_CACHE.get(url)
+        if cached and now - cached[0] < DIRECTORY_CACHE_TTL_SECONDS:
+            return list(cached[1]), None
+
+    try:
+        records = tuple(_build_records(_remote_rows(url), "the online Excel directory"))
+    except ValueError as exc:
+        with _CACHE_LOCK:
+            fallback = _LAST_GOOD_DIRECTORY.get(url)
+        if fallback is None:
+            raise
+        return list(fallback), (
+            "The employee directory is temporarily unavailable. "
+            "The last successfully validated version is being used. "
+            f"Technical detail: {exc}"
+        )
+
+    with _CACHE_LOCK:
+        _DIRECTORY_CACHE[url] = (now, records)
+        _LAST_GOOD_DIRECTORY[url] = records
+    return list(records), None
+
+
 def load_employee_directory() -> list[EmployeeRecord]:
     """Load and validate the online employee directory."""
-    rows = _remote_rows(_directory_url())
-    return _build_records(rows, "the online Excel directory")
+    records, _warning = load_employee_directory_with_status()
+    return records

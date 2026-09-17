@@ -9,7 +9,7 @@ import streamlit as st
 
 from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
-from employee_directory import EmployeeRecord, load_employee_directory
+from employee_directory import EmployeeRecord, load_employee_directory_with_status
 from jira_gateway import CollectionError, JiraGateway
 from resumable_jira import collect_jira_query
 
@@ -168,10 +168,12 @@ def _prepare_clickup(record, settings, snapshot, selected_spaces, fingerprint):
 @st.fragment
 def render_employee_collection(settings):
     try:
-        records = load_employee_directory()
+        records, directory_warning = load_employee_directory_with_status()
     except ValueError as exc:
         st.error(str(exc))
         return None, False
+    if directory_warning:
+        st.warning(directory_warning)
     if not records:
         st.info("No active employees are configured yet.")
         return None, False
