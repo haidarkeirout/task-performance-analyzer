@@ -504,7 +504,7 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
             ("Total Tasks", str(kpis.total_tasks), "Count of distinct counted tasks in the selected period."),
             ("Completed Tasks", str(kpis.completed_tasks), "Tasks whose status is Completed at period end."),
             ("Completion Rate", "N/A" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / tasks with a verified status at period end × 100. Unknown statuses are excluded and shown in Data Quality."),
-            ("On-Time Rate", "Unavailable" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
+            ("On-Time Rate", "N/A" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
             ("Open Overdue", str(kpis.overdue_open_tasks), "Open tasks with a valid due date before period end."),
         ]
         cards = st.columns(6)

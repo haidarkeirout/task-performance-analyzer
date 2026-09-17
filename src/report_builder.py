@@ -200,6 +200,7 @@ def add_key_value_table(document: Document, values: dict[str, Any]) -> None:
 def _jira_recommendations(row, task_metrics: pd.DataFrame) -> list[str]:
     recommendations: list[str] = []
     total = int(row.get("total_tasks", 0) or 0)
+    known_status = int(row.get("known_status_tasks", total) or 0)
     completed = int(row.get("completed_tasks", 0) or 0)
     overdue = int(row.get("overdue_open_tasks", 0) or 0)
     wip = int(row.get("wip_tasks", 0) or 0)
@@ -208,7 +209,7 @@ def _jira_recommendations(row, task_metrics: pd.DataFrame) -> list[str]:
     review_exceptions = int(row.get("review_exception_tasks", 0) or 0)
     excluded_histories = int(row.get("history_excluded_tasks", 0) or 0)
 
-    completion_rate = completed / total if total else None
+    completion_rate = completed / known_status if known_status else None
     on_time_rate = on_time / on_time_valid if on_time_valid else None
     wip_share = wip / total if total else 0
 
@@ -222,7 +223,7 @@ def _jira_recommendations(row, task_metrics: pd.DataFrame) -> list[str]:
         )
     if completion_rate is not None and completion_rate < 0.70:
         recommendations.append(
-            f"Review backlog conversion: {completed} of {total} tasks are completed. Prioritize the highest-value open work and remove or re-scope stale items."
+            f"Review backlog conversion: {completed} of {known_status} tasks with a verified status are completed. Prioritize the highest-value open work and remove or re-scope stale items."
         )
     if wip_share >= 0.30 and wip > 0:
         recommendations.append(

@@ -216,13 +216,14 @@ def _project_rows(rows: Sequence[dict[str, Any]], period_end: date, *, key: str 
     output: list[tuple[Any, ...]] = []
     for label, items in sorted(grouped.items()):
         counted = [item for item in items if item["Counted in KPIs"]]
-        completed = [item for item in counted if item["Final Status"] == "Completed"]
+        known = [item for item in counted if item["Final Status"] != "Unknown"]
+        completed = [item for item in known if item["Final Status"] == "Completed"]
         due_completed = [item for item in completed if item["Due Variance (days)"] is not None]
         on_time = [item for item in due_completed if item["Due Variance (days)"] <= 0]
-        overdue = [item for item in counted if item["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
+        overdue = [item for item in known if item["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
                    and item["Due Date"] is not None and item["Due Date"] < period_end]
         output.append((label, len(items), len(completed),
-                       round(len(completed) / len(counted) * 100, 1) if counted else None,
+                       round(len(completed) / len(known) * 100, 1) if known else None,
                        round(len(on_time) / len(due_completed) * 100, 1) if due_completed else None,
                        len(overdue)))
     return output
@@ -302,17 +303,18 @@ def write_company_excel(
     project_counts = sorted((name, len(items)) for name, items in project_groups.items())
     project_comparison = []
     for name, items in sorted(project_groups.items()):
-        completed = [item for item in items if item["Final Status"] == "Completed"]
+        known = [item for item in items if item["Final Status"] != "Unknown"]
+        completed = [item for item in known if item["Final Status"] == "Completed"]
         with_due = [item for item in completed if item["Due Variance (days)"] is not None]
         on_time = [item for item in with_due if item["Due Variance (days)"] <= 0]
         overdue = [
-            item for item in items
+            item for item in known
             if item["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
             and item["Due Date"] is not None and item["Due Date"] < model.period_end
         ]
         project_comparison.append([
             name, len(items), len(completed),
-            None if not items else round(len(completed) / len(items) * 100.0, 1),
+            None if not known else round(len(completed) / len(known) * 100.0, 1),
             None if not with_due else round(len(on_time) / len(with_due) * 100.0, 1),
             len(overdue),
         ])
@@ -678,16 +680,17 @@ def write_company_word_report(
     document.add_heading("Department Performance Comparison", level=1)
     department_rows = []
     for name, items in sorted(departments.items()):
-        completed = [item for item in items if item.status_at_period_end.value == "Completed"]
+        known = [item for item in items if item.status_at_period_end.value != "Unknown"]
+        completed = [item for item in known if item.status_at_period_end.value == "Completed"]
         with_due = [item for item in completed if item.task.due_date and item.final_completion_date]
         on_time = [item for item in with_due if item.final_completion_date <= item.task.due_date]
         overdue = [
-            item for item in items
+            item for item in known
             if item.status_at_period_end.is_open and item.task.due_date and item.task.due_date < item.period_end
         ]
         department_rows.append((
             name, len(items), len(completed),
-            f"{len(completed) / len(items) * 100.0:.1f}%" if items else "N/A",
+            f"{len(completed) / len(known) * 100.0:.1f}%" if known else "N/A",
             f"{len(on_time) / len(with_due) * 100.0:.1f}%" if with_due else "N/A",
             len(overdue),
         ))

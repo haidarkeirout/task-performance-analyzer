@@ -878,8 +878,8 @@ def aggregate(
             known_group.loc[known_group["is_wip"].eq(True), "issue_key"].nunique()
         )
 
-        valid_on_time = group[
-            group["on_time_completion"].notna()
+        valid_on_time = known_group[
+            known_group["on_time_completion"].notna()
         ]
 
         valid_overdue = group[
