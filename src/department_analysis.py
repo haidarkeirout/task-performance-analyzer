@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from docx import Document
@@ -21,6 +22,60 @@ def _metric(result: dict, name: str, default=None):
 
 def _rate(numerator: int, denominator: int):
     return None if not denominator else numerator / denominator * 100.0
+
+
+def filter_jira_department_period(
+    task_metrics: pd.DataFrame,
+    histories: dict,
+    period_start,
+    cutoff,
+    source_timezone: str,
+) -> pd.DataFrame:
+    """Keep Jira work that was active or changed during the period.
+
+    The Jira search intentionally collects a conservative candidate set.  Full
+    histories then decide exact inclusion so an older task that stayed open or
+    reopened during the selected period is not lost, while work closed before
+    the period with no in-period activity is removed.
+    """
+    if task_metrics is None or task_metrics.empty or period_start in (None, ""):
+        return task_metrics
+
+    zone = ZoneInfo(source_timezone)
+    if isinstance(period_start, str):
+        start_day = date.fromisoformat(period_start[:10])
+    elif isinstance(period_start, datetime):
+        start_day = period_start.date()
+    else:
+        start_day = period_start
+    start = pd.Timestamp(datetime.combine(start_day, time.min, tzinfo=zone)).tz_convert("UTC")
+    end = pd.to_datetime(cutoff, utc=True, errors="coerce")
+    if pd.isna(end):
+        raise ValueError("The Department analysis cutoff is invalid.")
+
+    created = pd.to_datetime(task_metrics.get("created_at"), utc=True, errors="coerce")
+    completed = pd.to_datetime(task_metrics.get("completed_at"), utc=True, errors="coerce")
+    open_at_end = task_metrics.get(
+        "is_open", pd.Series(False, index=task_metrics.index)
+    ).fillna(False).eq(True)
+    include = created.ge(start) | open_at_end | completed.ge(start)
+
+    changed_in_period: set[str] = set()
+    for key, history in (histories or {}).items():
+        for event in (history or {}).get("status_events") or ():
+            changed = pd.to_datetime(event.get("changed_at"), utc=True, errors="coerce")
+            if pd.notna(changed) and start <= changed <= end:
+                changed_in_period.add(str(key))
+                break
+    issue_keys = task_metrics.get(
+        "issue_key", pd.Series("", index=task_metrics.index)
+    ).fillna("").astype(str)
+    include |= issue_keys.isin(changed_in_period)
+
+    result = task_metrics.loc[include].copy()
+    result.attrs.update(task_metrics.attrs)
+    result.attrs["department_period_start"] = start.isoformat()
+    return result
 
 
 def build_department_result(clickup_result: dict, prepared_data) -> dict:
@@ -603,4 +658,3 @@ def department_word(result: dict) -> bytes:
     stream = BytesIO()
     document.save(stream)
     return stream.getvalue()
-

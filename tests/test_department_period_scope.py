@@ -5,7 +5,9 @@ import unittest
 
 import pandas as pd
 
+from department_analysis import filter_jira_department_period
 from department_collection import _period_bounds, _period_filter
+from jira_department_collection import _period_query
 
 
 def _milliseconds(value: str) -> str:
@@ -67,6 +69,51 @@ class DepartmentPeriodScopeTests(unittest.TestCase):
             [task], date(2026, 9, 1), date(2026, 9, 30), "Asia/Damascus"
         )
         self.assertEqual([item["id"] for item in kept], ["closed-later"])
+
+    def test_jira_query_does_not_discard_tasks_created_before_period(self):
+        query = _period_query("ENG", date(2026, 9, 1), date(2026, 9, 30))
+        self.assertIn('created <= "2026-09-30"', query)
+        self.assertNotIn('created >= "2026-09-01"', query)
+        self.assertIn('updated >= "2026-09-01"', query)
+
+    def test_jira_scope_keeps_old_open_and_reopened_work(self):
+        frame = pd.DataFrame([
+            {
+                "issue_key": "OLD-CLOSED",
+                "created_at": "2026-08-01T09:00:00Z",
+                "completed_at": "2026-08-20T09:00:00Z",
+                "is_open": False,
+            },
+            {
+                "issue_key": "OLD-OPEN",
+                "created_at": "2026-08-01T09:00:00Z",
+                "completed_at": None,
+                "is_open": True,
+            },
+            {
+                "issue_key": "REOPENED",
+                "created_at": "2026-08-01T09:00:00Z",
+                "completed_at": "2026-09-15T09:00:00Z",
+                "is_open": False,
+            },
+        ])
+        histories = {
+            "REOPENED": {
+                "status_events": [{
+                    "changed_at": "2026-09-03T09:00:00Z",
+                    "from_status": "Done",
+                    "to_status": "In Progress",
+                }]
+            }
+        }
+        scoped = filter_jira_department_period(
+            frame,
+            histories,
+            date(2026, 9, 1),
+            "2026-09-30T20:59:59Z",
+            "Asia/Damascus",
+        )
+        self.assertEqual(set(scoped["issue_key"]), {"OLD-OPEN", "REOPENED"})
 
 
 if __name__ == "__main__":

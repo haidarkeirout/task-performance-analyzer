@@ -39,9 +39,14 @@ def _jql_text(value: str) -> str:
 
 
 def _period_query(project_key: str, start_date, end_date) -> str:
+    # Candidate scope includes old work that is still open plus terminal work
+    # changed during/after the period.  Exact active-life filtering is applied
+    # after complete histories are collected; creation date alone is not a
+    # valid department-performance scope.
     return (
         f'project = "{_jql_text(project_key)}" '
-        f'AND created >= "{start_date}" AND created <= "{end_date}" '
+        f'AND created <= "{end_date}" '
+        f'AND (statusCategory != Done OR updated >= "{start_date}") '
         "ORDER BY created ASC"
     )
 

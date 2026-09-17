@@ -43,6 +43,7 @@ from department_analysis import (
     build_jira_department_result,
     department_excel,
     department_word,
+    filter_jira_department_period,
 )
 
 
@@ -363,6 +364,7 @@ def run_analysis(
     coverage_through=None,
     coverage_confirmed=False,
     context_overrides=None,
+    period_start=None,
 ):
     input_config, metrics_config = load_configurations()
 
@@ -442,8 +444,17 @@ def run_analysis(
         calendar=calendar,
     )
 
+    if period_start is not None:
+        task_metrics = filter_jira_department_period(
+            task_metrics,
+            histories,
+            period_start,
+            cutoff,
+            source_timezone,
+        )
+
     if task_metrics.empty:
-        raise ValueError("No tasks have a valid creation date on or before this cutoff.")
+        raise ValueError("No tasks were active during the selected analysis period.")
     context = workbook_context(workbook)
     context.update(context_overrides or {})
     context["History source"] = history_source
@@ -1348,6 +1359,10 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                         "Evaluation Scope": "Selected Jira work items",
                         "Dataset Type": "Jira API collection",
                     },
+                    period_start=(
+                        getattr(prepared_data, "period_start", None)
+                        if analysis_mode == "department" else None
+                    ),
                 )
             if task_metrics.empty:
                 st.session_state.pop("task_metrics", None)
