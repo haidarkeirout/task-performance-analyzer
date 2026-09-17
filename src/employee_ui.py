@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
@@ -11,8 +10,8 @@ import streamlit as st
 from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 from employee_directory import EmployeeRecord, load_employee_directory
-from jira_export import PreparedData, _json, build_workbook
 from jira_gateway import CollectionError, JiraGateway
+from resumable_jira import collect_jira_query
 
 
 def _clear_employee_state() -> None:
@@ -70,11 +69,26 @@ def _load_clickup(record: EmployeeRecord, settings) -> dict:
             raise ClickUpCollectionError("No ClickUp Workspace was found for this account.")
         spaces = gateway.spaces(workspace_id)
         tasks, space_names = [], {}
+        registry = dict(st.session_state.get("employee_clickup_checkpoints") or {})
+        employee_key = f"{record.name}:{record.clickup_user_id}:{workspace_id}"
+        employee_checkpoints = registry.setdefault(employee_key, {})
         for space in spaces:
             space_id = str(space.get("id") or "")
             if not space_id:
                 continue
-            current = gateway.all_tasks_for_space(space_id, progress=lambda message: st.caption(message))
+            checkpoint = employee_checkpoints.setdefault(space_id, {})
+
+            def save_checkpoint(state, current_space_id=space_id):
+                employee_checkpoints[current_space_id] = state
+                registry[employee_key] = employee_checkpoints
+                st.session_state["employee_clickup_checkpoints"] = registry
+
+            current = gateway.all_tasks_for_space(
+                space_id,
+                progress=lambda message: st.caption(message),
+                checkpoint=checkpoint,
+                checkpoint_callback=save_checkpoint,
+            )
             matching = []
             for task in current:
                 if _clickup_assigned(task, record.clickup_user_id):
@@ -113,35 +127,23 @@ def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
     issues = [issue for issue in snapshot["issues"] if not selected_spaces or _jira_space_key(issue) in selected_spaces]
     if not issues:
         raise CollectionError("No tasks match the selected Spaces.")
-    gateway = JiraGateway(settings)
-    try:
-        cutoff = datetime.now(timezone.utc).isoformat()
-        histories, complete = {}, []
-        total = len(issues)
-        progress = st.progress(0.0, text=f"Collecting Jira tasks: 0 / {total}")
-        for index, issue in enumerate(issues, 1):
-            item, history = gateway.complete_issue(issue)
-            if history.get("history_complete") is not True or not history.get("history_through"):
-                raise CollectionError("A Jira task history is incomplete. No partial export was prepared.")
-            complete.append(item)
-            histories[item["key"]] = history
-            progress.progress(index / total, text=f"Collecting Jira tasks: {index} / {total}")
-        progress.progress(1.0, text=f"Collection complete: {total} Jira tasks")
-        query = snapshot["query"]
-        space_name = f"Employee: {record.name}"
-        xlsx = build_workbook(
-            complete, histories, snapshot["definitions"], cutoff=cutoff,
-            collected_at=datetime.now(timezone.utc).isoformat(), query=query,
-            space_name=space_name, source_timezone=settings.source_timezone,
-            preferred_start=settings.start_date_field,
-        )
-        return PreparedData(
-            xlsx, _json(histories).encode(), cutoff, datetime.now(timezone.utc).isoformat(),
-            query, fingerprint, len(complete), f"Jira_Employee_{record.name.replace(' ', '_')}.xlsx",
-            space_name, settings.source_timezone,
-        )
-    finally:
-        gateway.close()
+    total = len(issues)
+    progress = st.progress(0.0, text=f"Collecting Jira tasks: 0 / {total}")
+    query = snapshot["query"]
+    space_name = f"Employee: {record.name}"
+    result = collect_jira_query(
+        settings,
+        space={"id": "*", "key": f"employee-{record.name}", "name": space_name},
+        query=query,
+        fingerprint=fingerprint,
+        seed_issues=issues,
+        progress=lambda fraction, message: progress.progress(
+            fraction, text=message
+        ),
+    )
+    progress.progress(1.0, text=f"Collection complete: {total} Jira tasks")
+    result.filename = f"Jira_Employee_{record.name.replace(' ', '_')}.xlsx"
+    return result
 
 
 def _prepare_clickup(record, settings, snapshot, selected_spaces, fingerprint):

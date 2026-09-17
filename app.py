@@ -1279,10 +1279,12 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "department_selected_name", "department_period_start", "department_period_end",
         "department_search", "department_status", "department_assignee", "department_priority",
         "department_match", "department_tasks_cache_key", "department_tasks_cache",
+        "department_list_checkpoints",
         "jira_department_period_start", "jira_department_period_end",
         "jira_department_prepared_data", "jira_department_run_analysis",
+        "jira_department_preview_cache",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
-        "employee_prepared", "employee_fingerprint",
+        "employee_prepared", "employee_fingerprint", "employee_clickup_checkpoints",
         "company_prepared_items", "company_collection_attempted",
         "company_collection_error", "company_collection_errors",
         "company_prepared_jira", "company_prepared_clickup",
@@ -1294,6 +1296,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "project_selection_fingerprint", "project_jira_prepared", "project_clickup_prepared",
         "project_preview", "project_analysis", "project_scope_label", "project_scope_slug",
         "project_period_start", "project_period_end", "project_report_key",
+        "project_clickup_checkpoints",
     ):
         st.session_state.pop(key, None)
     st.session_state["active_analysis_mode"] = analysis_mode

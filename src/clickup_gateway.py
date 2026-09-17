@@ -164,8 +164,15 @@ class ClickUpGateway:
             "page": page, "include_closed": "true", "subtasks": "true", "include_timl": "true",
         })
 
-    def all_tasks_for_list(self, list_id: str, progress=None):
-        result, seen, page = [], set(), 0
+    def all_tasks_for_list(
+        self, list_id: str, progress=None, checkpoint=None, checkpoint_callback=None
+    ):
+        state = checkpoint if checkpoint is not None else {}
+        stored = state.setdefault("tasks", {})
+        page = int(state.get("next_page", 0))
+        result, seen = list(stored.values()), set(stored)
+        if state.get("complete"):
+            return result
         while True:
             data = self.tasks(list_id, page)
             tasks = data.get("tasks", [])
@@ -174,31 +181,61 @@ class ClickUpGateway:
                 if task_id and task_id not in seen:
                     seen.add(task_id)
                     result.append(task)
+                    stored[task_id] = task
             if progress:
                 progress(f"ClickUp: collected {len(result)} department tasks...")
             if len(tasks) < 100:
+                state["complete"] = True
+                state["next_page"] = page
+                if checkpoint_callback:
+                    checkpoint_callback(state)
                 break
             page += 1
+            state["next_page"] = page
+            if checkpoint_callback:
+                checkpoint_callback(state)
         return result
 
-    def all_tasks_for_space(self, space_id: str, progress=None):
-        lists = list(self.folderless_lists(space_id))
-        for folder in self.folders(space_id):
-            lists.extend(self.lists(str(folder["id"])))
-        result, seen = [], set()
+    def all_tasks_for_space(
+        self, space_id: str, progress=None, checkpoint=None, checkpoint_callback=None
+    ):
+        state = checkpoint if checkpoint is not None else {}
+        if "lists" not in state:
+            lists = list(self.folderless_lists(space_id))
+            for folder in self.folders(space_id):
+                lists.extend(self.lists(str(folder["id"])))
+            state["lists"] = lists
+            if checkpoint_callback:
+                checkpoint_callback(state)
+        lists = state["lists"]
+        stored = state.setdefault("tasks", {})
+        list_states = state.setdefault("list_states", {})
+        result, seen = list(stored.values()), set(stored)
         for current_list in lists:
-            page = 0
+            list_id = str(current_list["id"])
+            list_state = list_states.setdefault(list_id, {})
+            if list_state.get("complete"):
+                continue
+            page = int(list_state.get("next_page", 0))
             while True:
-                data = self.tasks(str(current_list["id"]), page)
+                data = self.tasks(list_id, page)
                 tasks = data.get("tasks", [])
                 for task in tasks:
                     task_id = str(task.get("id", ""))
                     if task_id and task_id not in seen:
                         seen.add(task_id)
                         result.append(task)
+                        stored[task_id] = task
                 if progress:
                     progress(f"ClickUp: collected {len(result)} tasks...")
                 if len(tasks) < 100:
+                    list_state["complete"] = True
+                    list_state["next_page"] = page
+                    if checkpoint_callback:
+                        checkpoint_callback(state)
                     break
                 page += 1
+                list_state["next_page"] = page
+                if checkpoint_callback:
+                    checkpoint_callback(state)
         return result

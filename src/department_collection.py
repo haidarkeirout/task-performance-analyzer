@@ -127,11 +127,27 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
         return list(st.session_state.get("department_tasks_cache", []))
 
     gateway = _gateway(settings)
+    checkpoint_registry = dict(
+        st.session_state.get("department_list_checkpoints") or {}
+    )
+    source_checkpoints = checkpoint_registry.setdefault(cache_key, {})
     try:
         collected = {}
         raw_count = 0
         for source in sources:
-            tasks = gateway.all_tasks_for_list(source["list_id"])
+            list_id = source["list_id"]
+            list_checkpoint = source_checkpoints.setdefault(list_id, {})
+
+            def save_checkpoint(state, current_list_id=list_id):
+                source_checkpoints[current_list_id] = state
+                checkpoint_registry[cache_key] = source_checkpoints
+                st.session_state["department_list_checkpoints"] = checkpoint_registry
+
+            tasks = gateway.all_tasks_for_list(
+                list_id,
+                checkpoint=list_checkpoint,
+                checkpoint_callback=save_checkpoint,
+            )
             for raw_task in tasks:
                 task_id = str(raw_task.get("id") or "")
                 if task_id:

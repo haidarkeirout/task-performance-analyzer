@@ -24,6 +24,7 @@ from company_performance.application import CompanyAnalysisResult, build_company
 from company_performance.kpis import calculate_status_metrics
 from jira_export import PreparedData, _json, build_workbook
 from jira_gateway import CollectionError, JiraGateway
+from resumable_jira import collect_jira_query
 from standard_report_style import (
     add_report_table,
     add_report_title,
@@ -147,7 +148,6 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str, progre
         raise CollectionError("The selected Jira Space has no usable project key.")
 
     query = f'project = "{project_key}" ORDER BY created DESC'
-    gateway = JiraGateway(settings)
     collection_progress = None if progress is not None else st.progress(
         0, text="Finding tasks in Jira..."
     )
@@ -158,70 +158,18 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str, progre
         elif collection_progress is not None:
             collection_progress.progress(fraction, text=message)
 
-    try:
-        report_progress(
-            0,
-            f"Finding tasks in Jira — {project_name}..."
-            if progress is not None
-            else "Finding tasks in Jira...",
-        )
-        issues = gateway.all_issues(query)
-        total = len(issues)
-        report_progress(
-            0,
-            f"Collecting {project_name} tasks: 0 / {total}"
-            if progress is not None
-            else f"Collecting tasks: 0 / {total}",
-        )
-        definitions = gateway.fields()
-        histories: dict[str, dict[str, Any]] = {}
-        complete: list[dict[str, Any]] = []
-        for index, issue in enumerate(issues, 1):
-            current, history = gateway.complete_issue(issue)
-            if history.get("history_complete") is not True or not history.get("history_through"):
-                raise CollectionError(
-                    "A Jira task history is incomplete. No partial project export was prepared."
-                )
-            complete.append(current)
-            histories[current["key"]] = history
-            report_progress(
-                index / total if total else 1.0,
-                f"Collecting {project_name} tasks: {index} / {total}"
-                if progress is not None
-                else f"Collecting tasks: {index} / {total}",
-            )
-        report_progress(
-            1.0,
-            f"Collection complete: {len(complete)} / {total} tasks",
-        )
-
-        cutoff = datetime.now(timezone.utc).isoformat()
-        collected_at = datetime.now(timezone.utc).isoformat()
-        workbook = build_workbook(
-            complete,
-            histories,
-            definitions,
-            cutoff=cutoff,
-            collected_at=collected_at,
-            query=query,
-            space_name=project_name,
-            source_timezone=settings.source_timezone,
-            preferred_start=settings.start_date_field,
-        )
-        return PreparedData(
-            workbook,
-            _json(histories).encode(),
-            cutoff,
-            collected_at,
-            query,
-            fingerprint,
-            len(complete),
-            f"Jira_{_safe_filename(project_name)}.xlsx",
-            project_name,
-            settings.source_timezone,
-        )
-    finally:
-        gateway.close()
+    report_progress(
+        0,
+        f"Finding tasks in Jira — {project_name}..."
+        if progress is not None else "Finding tasks in Jira...",
+    )
+    return collect_jira_query(
+        settings,
+        space=item,
+        query=query,
+        fingerprint=fingerprint,
+        progress=report_progress,
+    )
 
 
 def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, progress=None):
@@ -247,7 +195,19 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, pro
 
     try:
         report_progress(0, f"Loading task list from ClickUp — {space_name}...")
-        tasks = gateway.all_tasks_for_space(space_id)
+        checkpoints = dict(st.session_state.get("project_clickup_checkpoints") or {})
+        checkpoint = checkpoints.setdefault(fingerprint, {})
+
+        def save_checkpoint(state):
+            checkpoints[fingerprint] = state
+            st.session_state["project_clickup_checkpoints"] = checkpoints
+
+        tasks = gateway.all_tasks_for_space(
+            space_id,
+            progress=lambda message: report_progress(0.0, message),
+            checkpoint=checkpoint,
+            checkpoint_callback=save_checkpoint,
+        )
     finally:
         gateway.close()
 

@@ -16,6 +16,7 @@ import streamlit as st
 
 from jira_export import PreparedData, build_workbook
 from jira_gateway import CollectionError, JiraGateway
+from resumable_jira import collect_jira_query
 
 
 def _date_value(value):
@@ -74,106 +75,102 @@ def _preview(items: list[dict], jira_url: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _collect(settings, spaces, start_date, end_date, progress, fingerprint: str) -> PreparedData:
-    gateway = JiraGateway(settings)
-    gateway.progress = progress
-    try:
-        source_timezone = gateway.settings.source_timezone
-        cutoff = _analysis_cutoff(end_date, source_timezone)
-        definitions = gateway.fields()
-        collected = []
-        histories = {}
-        seen_keys = set()
-        queries = []
+def _collect(
+    settings,
+    spaces,
+    start_date,
+    end_date,
+    progress,
+    fingerprint: str,
+    seed_items_by_project: dict[str, list[dict]] | None = None,
+) -> PreparedData:
+    source_timezone = settings.source_timezone
+    cutoff = _analysis_cutoff(end_date, source_timezone)
+    complete_items = []
+    histories = {}
+    definitions = []
+    seen_keys = set()
+    queries = []
+    collected_spaces = []
 
-        for space in spaces:
-            project_key = str(space.get("key") or "").strip()
-            project_id = str(space.get("id") or "").strip()
-            if not project_key or not project_id:
-                continue
-            query = _period_query(project_key, start_date, end_date)
-            queries.append(query)
-            items = gateway.all_issues(
-                query,
-                progress=lambda message, name=space.get("name", project_key):
-                    progress(f"{name}: {message}"),
-            )
-            for item in items:
-                key = item.get("key")
-                if not key or key in seen_keys:
-                    raise CollectionError(
-                        "Jira returned a missing or duplicate work item across spaces. "
-                        "Please collect again."
-                    )
-                seen_keys.add(key)
-                collected.append((space, item))
-
-        if not collected:
-            raise CollectionError(
-                "No Jira work items match the Tech department and selected period."
-            )
-
-        complete_items = []
-        for index, (space, item) in enumerate(collected, 1):
-            key = item["key"]
-            progress(
-                f"Collecting Jira work items: {index} of {len(collected)} "
-                f"({key})..."
-            )
-            snapshot, history = gateway.complete_issue(item)
-            actual_project = str(
-                (snapshot.get("fields") or {}).get("project", {}).get("id", "")
-            )
-            if actual_project != str(space["id"]):
-                raise CollectionError(
-                    "A Jira work item changed projects during collection. "
-                    "Please start a new collection."
-                )
-            complete_items.append(snapshot)
-            histories[key] = history
-
-        collected_at = datetime.now(timezone.utc).isoformat()
-        space_names = [
-            str(space.get("name") or space.get("key"))
-            for space in spaces
-            if space.get("name") or space.get("key")
-        ]
-        combined_query = " OR ".join(f"({query})" for query in queries)
-        workbook = build_workbook(
-            complete_items,
-            histories,
-            definitions,
+    for space in spaces:
+        project_key = str(space.get("key") or "").strip()
+        project_id = str(space.get("id") or "").strip()
+        if not project_key or not project_id:
+            continue
+        seeds = (
+            (seed_items_by_project or {}).get(project_key)
+            if seed_items_by_project is not None else None
+        )
+        if seeds == []:
+            continue
+        query = _period_query(project_key, start_date, end_date)
+        queries.append(query)
+        name = str(space.get("name") or project_key)
+        prepared_space = collect_jira_query(
+            settings,
+            space=space,
+            query=query,
+            fingerprint=f"{fingerprint}:{project_key}",
             cutoff=cutoff,
-            collected_at=collected_at,
-            query=combined_query,
-            space_name="All Jira Tech Spaces",
-            source_timezone=source_timezone,
-            preferred_start=gateway.settings.start_date_field,
+            seed_issues=seeds,
+            progress=lambda fraction, message, label=name: progress(
+                f"{label}: {message}"
+            ),
         )
-        filename = (
-            f"Jira_Tech_All_Spaces_"
-            f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+        collected_spaces.append(name)
+        definitions = definitions or list(getattr(prepared_space, "definitions", []))
+        for item in getattr(prepared_space, "issues", []):
+            key = str(item.get("key") or "")
+            if not key or key in seen_keys:
+                raise CollectionError(
+                    "Jira returned a missing or duplicate work item across spaces. "
+                    "Please collect again."
+                )
+            seen_keys.add(key)
+            complete_items.append(item)
+        histories.update(getattr(prepared_space, "histories", {}))
+
+    if not complete_items:
+        raise CollectionError(
+            "No Jira work items match the Tech department and selected period."
         )
-        prepared = PreparedData(
-            workbook,
-            json.dumps(histories, ensure_ascii=False).encode("utf-8"),
-            cutoff,
-            collected_at,
-            combined_query,
-            fingerprint,
-            len(complete_items),
-            filename,
-            "All Jira Tech Spaces",
-            source_timezone,
-        )
-        prepared.space_names = space_names
-        prepared.period_start = str(start_date)
-        prepared.period_end = str(end_date)
-        prepared.department_name = "Tech Development"
-        prepared.department_id = "jira-tech-development"
-        return prepared
-    finally:
-        gateway.close()
+
+    collected_at = datetime.now(timezone.utc).isoformat()
+    combined_query = " OR ".join(f"({query})" for query in queries)
+    workbook = build_workbook(
+        complete_items,
+        histories,
+        definitions,
+        cutoff=cutoff,
+        collected_at=collected_at,
+        query=combined_query,
+        space_name="All Jira Tech Spaces",
+        source_timezone=source_timezone,
+        preferred_start=settings.start_date_field,
+    )
+    filename = (
+        f"Jira_Tech_All_Spaces_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
+    prepared = PreparedData(
+        workbook,
+        json.dumps(histories, ensure_ascii=False).encode("utf-8"),
+        cutoff,
+        collected_at,
+        combined_query,
+        fingerprint,
+        len(complete_items),
+        filename,
+        "All Jira Tech Spaces",
+        source_timezone,
+    )
+    prepared.space_names = collected_spaces
+    prepared.period_start = str(start_date)
+    prepared.period_end = str(end_date)
+    prepared.department_name = "Tech Development"
+    prepared.department_id = "jira-tech-development"
+    return prepared
 
 
 def render_jira_department_collection(settings):
@@ -227,24 +224,37 @@ def render_jira_department_collection(settings):
         # collected again only when the user runs the analysis.
         st.session_state.pop("department_analysis", None)
 
-    with st.spinner("Scanning every Jira space for Tech work items..."):
-        preview_gateway = JiraGateway(settings)
-        try:
-            preview_items = []
-            preview_spaces = []
-            for space in spaces:
-                key = str(space.get("key") or "").strip()
-                if not key:
-                    continue
-                query = _period_query(key, start_date, end_date)
-                items = preview_gateway.all_issues(query)
-                preview_items.extend(items)
-                preview_spaces.append(space)
-        except CollectionError as exc:
-            st.error(str(exc))
-            return None, False
-        finally:
-            preview_gateway.close()
+    preview_cache = st.session_state.get("jira_department_preview_cache") or {}
+    cached_preview = preview_cache.get(fingerprint)
+    if cached_preview is not None:
+        preview_items_by_project = cached_preview
+    else:
+        with st.spinner("Scanning every Jira space for Tech work items..."):
+            preview_gateway = JiraGateway(settings)
+            try:
+                preview_items_by_project = {}
+                for space in spaces:
+                    key = str(space.get("key") or "").strip()
+                    if not key:
+                        continue
+                    query = _period_query(key, start_date, end_date)
+                    preview_items_by_project[key] = preview_gateway.all_issues(query)
+                preview_cache = {fingerprint: preview_items_by_project}
+                st.session_state["jira_department_preview_cache"] = preview_cache
+            except CollectionError as exc:
+                st.error(str(exc))
+                return None, False
+            finally:
+                preview_gateway.close()
+
+    preview_items = []
+    preview_spaces = []
+    for space in spaces:
+        key = str(space.get("key") or "").strip()
+        items = preview_items_by_project.get(key, [])
+        preview_items.extend(items)
+        if items:
+            preview_spaces.append(space)
 
     st.caption(
         f"{len(preview_items)} Jira work items found across "
@@ -274,6 +284,7 @@ def render_jira_department_collection(settings):
                     end_date,
                     lambda message: progress.update(label=message),
                     fingerprint=fingerprint,
+                    seed_items_by_project=preview_items_by_project,
                 )
                 st.session_state["jira_department_prepared_data"] = prepared
                 progress.update(
@@ -320,6 +331,7 @@ def render_jira_department_collection(settings):
                         end_date,
                         lambda message: st.write(message),
                         fingerprint=fingerprint,
+                        seed_items_by_project=preview_items_by_project,
                     )
                     st.session_state["jira_department_prepared_data"] = prepared
             except Exception as exc:

@@ -320,6 +320,11 @@ class CollectionJob:
             self.fingerprint, len(full), filename, self.space["name"],
             self.settings.source_timezone,
         )
+        # Synchronous Project/Department/Company callers can reuse the verified
+        # payload without parsing the generated workbook or calling Jira again.
+        self.result.issues = full
+        self.result.histories = histories
+        self.result.definitions = list(self.definitions)
         self.running = False
         self.current_issue = None
         self.stage = "Complete"
@@ -364,7 +369,8 @@ class CollectionJob:
             issues = self.checkpoint["issues"]
             completed = self.checkpoint["completed"]
 
-            if "project" not in self.checkpoint:
+            multi_project = str(self.space.get("id") or "") == "*"
+            if "project" not in self.checkpoint and not multi_project:
                 self._set_stage("Reading project details", "Reading project details...")
                 self.checkpoint["project"] = (
                     gateway.project_details(self.space["id"])
@@ -383,7 +389,10 @@ class CollectionJob:
                 self._persist_update("running")
                 item, history = gateway.complete_issue(pending)
                 actual_project = str((item.get("fields", {}).get("project") or {}).get("id", ""))
-                if actual_project != str(self.space["id"]) or item.get("key") != issue_key:
+                if (
+                    (not multi_project and actual_project != str(self.space["id"]))
+                    or item.get("key") != issue_key
+                ):
                     raise CollectionError("A work item changed spaces or keys during collection. Start a new collection.")
                 if history.get("history_complete") is not True or not history.get("history_through"):
                     raise CollectionError("A task history is incomplete. Jira did not provide a complete history snapshot.")
@@ -391,9 +400,10 @@ class CollectionJob:
                 cutoff_dt = datetime.fromisoformat(str(cutoff).replace("Z", "+00:00"))
                 if history_through < cutoff_dt:
                     raise CollectionError("A task history does not cover the evaluation cutoff. Please retry the collection.")
-                item["fields"]["project"] = {
-                    **self.checkpoint["project"], **(item["fields"].get("project") or {}),
-                }
+                if not multi_project:
+                    item["fields"]["project"] = {
+                        **self.checkpoint["project"], **(item["fields"].get("project") or {}),
+                    }
 
                 # Durable write happens before this item is acknowledged in RAM.
                 self.store.save_item(self.owner_key, self.id, issue_key, item, history)
