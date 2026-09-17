@@ -217,7 +217,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
 
     summary = tables.get("overall_summary") if tables else None
     summary_row = summary.iloc[0] if summary is not None and not summary.empty else {}
-    total = summary_row.get("total_tasks", len(frame)) if hasattr(summary_row, "get") else len(frame)
+    total = summary_row.get("known_status_tasks", summary_row.get("total_tasks", len(frame))) if hasattr(summary_row, "get") else len(frame)
     completed = summary_row.get("completed_tasks", 0) if hasattr(summary_row, "get") else 0
     on_time = summary_row.get("on_time_tasks", 0) if hasattr(summary_row, "get") else 0
     on_time_valid = summary_row.get("on_time_valid_tasks", 0) if hasattr(summary_row, "get") else 0

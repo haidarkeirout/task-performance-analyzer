@@ -409,7 +409,8 @@ def _project_summary_frame(snapshots: Any) -> pd.DataFrame:
 
     rows = []
     for project, items in sorted(grouped.items(), key=lambda pair: pair[0].casefold()):
-        completed = [item for item in items if item.status_at_period_end is UnifiedStatus.COMPLETED]
+        known = [item for item in items if item.status_at_period_end is not UnifiedStatus.UNKNOWN]
+        completed = [item for item in known if item.status_at_period_end is UnifiedStatus.COMPLETED]
         completed_with_due = [
             item for item in completed
             if item.task.due_date is not None and item.final_completion_date is not None
@@ -419,17 +420,17 @@ def _project_summary_frame(snapshots: Any) -> pd.DataFrame:
             if item.final_completion_date <= item.task.due_date
         ]
         overdue = [
-            item for item in items
+            item for item in known
             if item.status_at_period_end.is_open
             and item.task.due_date is not None
             and item.task.due_date < item.period_end
         ]
-        total = len(items)
+        total = len(known)
         rows.append({
             "Project": project,
             "Total Tasks": total,
             "Completed": len(completed),
-            "Completion Rate": round(len(completed) / total * 100, 1) if total else 0.0,
+            "Completion Rate": round(len(completed) / total * 100, 1) if total else None,
             "On-Time Rate": round(len(on_time) / len(completed_with_due) * 100, 1) if completed_with_due else None,
             "Open Overdue": len(overdue),
         })
@@ -502,7 +503,7 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
             ("Total Projects", str(project_count), "Distinct inferred project names in the selected scope."),
             ("Total Tasks", str(kpis.total_tasks), "Count of distinct counted tasks in the selected period."),
             ("Completed Tasks", str(kpis.completed_tasks), "Tasks whose status is Completed at period end."),
-            ("Completion Rate", "Unavailable" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / total tasks × 100."),
+            ("Completion Rate", "N/A" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / tasks with a verified status at period end × 100. Unknown statuses are excluded and shown in Data Quality."),
             ("On-Time Rate", "Unavailable" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
             ("Open Overdue", str(kpis.overdue_open_tasks), "Open tasks with a valid due date before period end."),
         ]

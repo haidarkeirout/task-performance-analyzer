@@ -52,6 +52,26 @@ class ClickUpGatewayTests(unittest.TestCase):
 
 
 class ClickUpCollectionAndAnalysisTests(unittest.TestCase):
+    def test_wip_includes_only_in_progress_and_review(self):
+        tasks = [
+            {"id": "progress", "name": "Active", "status": {"status": "IN PROGRESS"},
+             "date_created": "2026-09-01T09:00:00Z"},
+            {"id": "review", "name": "Review", "status": {"status": "REVIEW"},
+             "date_created": "2026-09-01T09:00:00Z"},
+            {"id": "hold", "name": "On hold", "status": {"status": "ON HOLD"},
+             "date_created": "2026-09-01T09:00:00Z"},
+            {"id": "risk", "name": "At risk", "status": {"status": "AT RISK"},
+             "date_created": "2026-09-01T09:00:00Z"},
+        ]
+        prepared = collect_data(Mock(), tasks, "Performance Analysis", "wip", time_status_data={})
+        prepared.cutoff = prepared.collected_at
+        result = analyze_clickup(prepared)
+        rows = result["tasks"].set_index("Task ID")
+        self.assertTrue(rows.loc["progress", "WIP?"])
+        self.assertTrue(rows.loc["review", "WIP?"])
+        self.assertFalse(rows.loc["hold", "WIP?"])
+        self.assertFalse(rows.loc["risk", "WIP?"])
+
     def test_collection_uses_time_status_and_not_activity(self):
         tasks = [{
             "id": "a", "name": "Ship release", "status": {"status": "COMPLETE"},

@@ -15,7 +15,7 @@ from jira_excel_dashboard import add_jira_executive_dashboard
 EVENT_COLUMNS = ["issue_key", "task_name", "from_status", "to_status", "event_type", "changed_at", "author_name", "source", "included_in_metrics"]
 STAGE_COLUMNS = ["status", "tasks_visited", "elapsed_total_hours", "elapsed_mean_hours", "elapsed_median_hours", "business_total_hours", "business_mean_hours", "business_median_hours", "open_tasks_currently_here"]
 RATE_DEFINITIONS = {
-    "Completion rate": "Completed tasks / all tasks created by cutoff. Unknown status tasks remain in total and are disclosed.",
+    "Completion rate": "Completed tasks / tasks with a verified status at cutoff. Unknown status tasks are excluded from the denominator and disclosed in Data Quality.",
     "On-time completion rate": "On-time completed tasks / completed tasks with known completion and due date. Due dates are the uploaded schedule snapshot, not a reconstructed historical baseline.",
     "Open overdue rate": "Overdue open tasks / open tasks with a known due date. Completed and rejected tasks are excluded.",
     "Rework rate": "Distinct reviewed tasks with In Review -> In Progress / distinct reviewed tasks with complete history.",
