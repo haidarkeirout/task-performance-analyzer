@@ -1280,7 +1280,7 @@ settings = require_sign_in()
 st.title(APP_TITLE)
 analysis_mode_label = st.radio(
     "Analysis type",
-    ["Employee Performance", "Project Performance", "Department Performance", "Company Performance"],
+    ["Company Performance", "Department Performance", "Employee Performance", "Project Performance"],
     horizontal=True,
     key="analysis_type_selector",
     help="The existing employee/project analysis and department analysis use separate results and exports.",

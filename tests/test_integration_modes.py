@@ -9,7 +9,7 @@ class IntegratedAnalysisModeTests(unittest.TestCase):
 
     def test_launcher_exposes_separate_employee_and_project_paths(self):
         self.assertIn(
-            '["Employee Performance", "Project Performance", "Department Performance", "Company Performance"]',
+            '["Company Performance", "Department Performance", "Employee Performance", "Project Performance"]',
             self.source,
         )
 
