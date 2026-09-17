@@ -7,8 +7,9 @@ same List name may be present in more than one Space.
 from __future__ import annotations
 
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -166,9 +167,37 @@ def _date_value(value):
     return value
 
 
-def _period_filter(tasks: list[dict], start_date, end_date):
-    start = pd.Timestamp(datetime.combine(_date_value(start_date), time.min), tz="UTC")
-    end = pd.Timestamp(datetime.combine(_date_value(end_date), time.max), tz="UTC")
+def _period_bounds(start_date, end_date, source_timezone: str = "Asia/Damascus"):
+    """Return local calendar-day boundaries converted to UTC.
+
+    Department dates are business dates, not UTC dates.  Converting after the
+    local boundary is built prevents tasks around midnight in Damascus from
+    moving into the previous or following day.
+    """
+    zone = ZoneInfo(source_timezone)
+    start = pd.Timestamp(
+        datetime.combine(_date_value(start_date), time.min, tzinfo=zone)
+    ).tz_convert("UTC")
+    end = pd.Timestamp(
+        datetime.combine(_date_value(end_date), time.max, tzinfo=zone)
+    ).tz_convert("UTC")
+    return start, end
+
+
+def _period_filter(
+    tasks: list[dict],
+    start_date,
+    end_date,
+    source_timezone: str = "Asia/Damascus",
+):
+    """Keep tasks whose active life can overlap the selected period.
+
+    A department period is not a creation-date report.  Work created before the
+    period remains in scope when it is still open, was completed during/after the
+    period, or has insufficient close-date evidence to prove it was already
+    closed.  Definitively closed tasks from before the period are excluded.
+    """
+    start, end = _period_bounds(start_date, end_date, source_timezone)
     filtered = []
     missing_created = 0
     for task in tasks:
@@ -176,8 +205,19 @@ def _period_filter(tasks: list[dict], start_date, end_date):
         if pd.isna(created):
             missing_created += 1
             continue
-        if start <= created <= end:
-            filtered.append(task)
+        if created > end:
+            continue
+
+        closed = timestamp(task.get("date_closed") or task.get("date_done"))
+        status = task.get("status") or {}
+        status_type = str(status.get("type") or "").strip().casefold() if isinstance(status, dict) else ""
+        status_label = status_name(task).strip().casefold()
+        terminal = status_type in {"done", "closed"} or status_label in {
+            "complete", "completed", "done", "closed", "cancelled", "canceled",
+        }
+        if terminal and pd.notna(closed) and closed < start:
+            continue
+        filtered.append(task)
     return filtered, missing_created
 
 
@@ -283,7 +323,9 @@ def render_department_collection(settings):
         st.error(str(exc))
         return None, False
 
-    period_tasks, missing_created = _period_filter(all_tasks, start_date, end_date)
+    period_tasks, missing_created = _period_filter(
+        all_tasks, start_date, end_date, settings.source_timezone
+    )
     options = filter_options(period_tasks)
     st.subheader("Department filters")
 
@@ -340,7 +382,10 @@ def render_department_collection(settings):
     if st.button("Done", type="primary", key="department_done", disabled=not filtered_tasks):
         st.session_state.pop("clickup_error", None)
         try:
-            end_cutoff = pd.Timestamp(datetime.combine(end_date, time.max), tz="UTC").isoformat()
+            _, end_cutoff_value = _period_bounds(
+                start_date, end_date, settings.source_timezone
+            )
+            end_cutoff = end_cutoff_value.isoformat()
             with st.status("Preparing department tasks for analysis...", expanded=True) as progress:
                 prepared = collect_data(
                     None,
@@ -397,9 +442,10 @@ def render_department_collection(settings):
         if not prepared_is_current:
             try:
                 with st.spinner("Updating the Department analysis source..."):
-                    end_cutoff = pd.Timestamp(
-                        datetime.combine(end_date, time.max), tz="UTC"
-                    ).isoformat()
+                    _, end_cutoff_value = _period_bounds(
+                        start_date, end_date, settings.source_timezone
+                    )
+                    end_cutoff = end_cutoff_value.isoformat()
                     prepared = collect_data(
                         None,
                         filtered_tasks,
