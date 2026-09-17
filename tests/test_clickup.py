@@ -159,7 +159,7 @@ class ClickUpCollectionAndAnalysisTests(unittest.TestCase):
         report = create_clickup_word_report(analyze_clickup(prepared))
         document = Document(io.BytesIO(report))
         content = "\n".join(paragraph.text for paragraph in document.paragraphs)
-        self.assertIn("ClickUp Task Performance Evaluation Report", content)
+        self.assertIn("ClickUp Task Performance Evaluation", content)
         self.assertIn("Due Variance and Timeliness", content)
 
 

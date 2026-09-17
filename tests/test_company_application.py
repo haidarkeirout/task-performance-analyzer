@@ -93,7 +93,7 @@ class CompanyApplicationTests(unittest.TestCase):
         )
         self.assertEqual(result.model.kpis.total_tasks, 2)
         self.assertEqual({item.source_tool for item in result.model.source_coverage}, {"Jira", "ClickUp"})
-        self.assertEqual(len(result.model.cards), 5)
+        self.assertEqual(len(result.model.cards), 6)
         self.assertEqual(len(result.model.executive_charts), 3)
         self.assertIn("ClickUp Chronological History Unavailable", [
             flag.flag for flag in result.model.data_quality

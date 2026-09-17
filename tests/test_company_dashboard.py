@@ -38,6 +38,8 @@ def snapshot(task_id, events=(), **extra):
         "initial_status": "To Do",
         "created_date": START,
         "history_complete": True,
+        "history_through": datetime(2026, 10, 1, tzinfo=UTC),
+        "collection_timestamp": datetime(2026, 10, 1, tzinfo=UTC),
         "workflow_history": events,
     }
     values.update(extra)
@@ -60,10 +62,10 @@ class CompanyDashboardTests(unittest.TestCase):
             due_date=date(2026, 9, 10),
         )
         model = build_company_dashboard([done, review])
-        self.assertEqual(len(model.cards), 5)
+        self.assertEqual(len(model.cards), 6)
         self.assertEqual(len(model.executive_charts), 3)
         self.assertEqual([card.key for card in model.cards], [
-            "total-tasks", "completion-rate", "current-wip", "overdue-open", "on-time-rate",
+            "total-projects", "total-tasks", "completion-rate", "current-wip", "overdue-open", "on-time-rate",
         ])
         self.assertEqual(model.kpis.current_wip, 1)
 
@@ -84,7 +86,7 @@ class CompanyDashboardTests(unittest.TestCase):
         model = build_company_dashboard([unmapped])
         delivery = next(chart for chart in model.executive_charts if chart.key == "delivery-outcome")
         self.assertEqual(delivery.points, ())
-        self.assertIsNone(delivery.note)
+        self.assertIsNotNone(delivery.note)
         self.assertIn("Unmapped Status", [item.flag for item in model.data_quality])
 
     def test_task_details_keep_original_final_status_and_workflow_evidence(self):

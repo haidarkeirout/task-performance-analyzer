@@ -40,6 +40,8 @@ def snapshot(task_id, events=(), **values):
         "initial_status": "To Do",
         "created_date": START,
         "history_complete": True,
+        "history_through": datetime(2026, 10, 1, tzinfo=UTC),
+        "collection_timestamp": datetime(2026, 10, 1, tzinfo=UTC),
         "workflow_history": events,
     }
     fields.update(values)

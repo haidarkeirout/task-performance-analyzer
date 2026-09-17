@@ -8,7 +8,86 @@ from test_automation import SETTINGS, FIELDS, example_issue, no_events
 from collection_job import CollectionJob
 from jira_export import issue_rows
 from jira_gateway import CollectionError
-from test_automation_ui import FakeJira, FakeStore
+
+
+class FakeStore:
+    jobs = {}
+
+    @classmethod
+    def reset(cls):
+        cls.jobs = {}
+
+    def close(self):
+        pass
+
+    def begin(self, owner_key, job_id, fingerprint, space, query, definitions, cutoff):
+        self.jobs.setdefault(job_id, {"job_id": job_id, "owner_key": owner_key,
+            "fingerprint": fingerprint, "space": copy.deepcopy(space), "query": query,
+            "definitions": copy.deepcopy(definitions), "cutoff": cutoff, "status": "running",
+            "stage": "Ready", "current_issue": None, "last_successful_issue": None,
+            "message": "Persistent checkpoint created.", "error_detail": None,
+            "result_meta": None, "items": [], "total_count": 0, "completed_count": 0})
+        return copy.deepcopy(self.jobs[job_id])
+
+    def seed_items(self, owner_key, job_id, items):
+        job = self.jobs[job_id]
+        rows = []
+        existing = {row["issue_key"]: row for row in job["items"]}
+        for position, item in enumerate(items):
+            row = existing.get(item["key"], {"position": position, "issue_key": item["key"],
+                "seed_item": copy.deepcopy(item), "item_data": None, "history_data": None,
+                "completed": False})
+            row.update(position=position, seed_item=copy.deepcopy(item))
+            rows.append(row)
+        job.update(items=rows, total_count=len(rows))
+        return {"total_count": len(rows)}
+
+    def save_item(self, owner_key, job_id, issue_key, item, history):
+        job = self.jobs[job_id]
+        row = next(row for row in job["items"] if row["issue_key"] == issue_key)
+        row.update(item_data=copy.deepcopy(item), history_data=copy.deepcopy(history), completed=True)
+        job["completed_count"] = sum(row["completed"] for row in job["items"])
+        return {"completed_count": job["completed_count"], "total_count": job["total_count"]}
+
+    def update_job(self, owner_key, job_id, status, stage, current_issue, message,
+                   error_detail=None, result_meta=None):
+        self.jobs[job_id].update(status=status, stage=stage, current_issue=current_issue,
+            message=message, error_detail=copy.deepcopy(error_detail))
+        if result_meta is not None:
+            self.jobs[job_id]["result_meta"] = copy.deepcopy(result_meta)
+        return {"status": status}
+
+    def load_job(self, owner_key, job_id):
+        job = self.jobs.get(job_id)
+        if not job:
+            return None
+        return copy.deepcopy({key: value for key, value in job.items() if key != "owner_key"})
+
+
+class FakeJira:
+    visited = []
+    fail_once = False
+
+    def __init__(self, settings):
+        self.progress = None
+
+    def close(self):
+        pass
+
+    def all_issues(self, query, progress=None):
+        return [example_issue("TEST-" + str(n)) for n in range(1, 25)]
+
+    def project_details(self, project_id):
+        return copy.deepcopy(SPACE)
+
+    def complete_issue(self, item):
+        self.visited.append(item["key"])
+        if item["key"] == "TEST-17" and type(self).fail_once:
+            type(self).fail_once = False
+            raise CollectionError("Simulated temporary interruption")
+        history = no_events(item["key"])
+        history["history_through"] = datetime.now(timezone.utc).isoformat()
+        return copy.deepcopy(item), history
 
 SPACE = {"id": "100", "key": "TEST", "name": "Test"}
 OWNER_KEY = "f" * 64

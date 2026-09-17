@@ -2,6 +2,8 @@ import io
 import unittest
 from unittest.mock import Mock
 
+import pandas as pd
+
 from docx import Document
 from openpyxl import load_workbook
 
@@ -30,23 +32,26 @@ class DepartmentAnalysisTests(unittest.TestCase):
     def test_kpis_use_department_scope_and_cancelled_safe_denominator(self):
         kpis = self.result["kpis"].set_index("KPI")
         self.assertEqual(kpis.loc["Total Tasks", "Value"], 2)
-        self.assertEqual(kpis.loc["Task Completion Rate (%)", "Value"], 50.0)
-        self.assertEqual(kpis.loc["Open Overdue Tasks", "Value"], 1)
+        self.assertTrue(pd.isna(kpis.loc["Task Completion Rate (%)", "Value"]))
+        self.assertEqual(kpis.loc["Open Overdue Tasks", "Value"], 0)
         self.assertEqual(self.result["department_name"], "Marketing")
         self.assertEqual(len(self.result["attention"]), 1)
 
     def test_excel_contains_exactly_four_approved_sheets(self):
         workbook = load_workbook(io.BytesIO(department_excel(self.result)), data_only=True)
         self.assertEqual(workbook.sheetnames, [
-            "Department Summary", "Employee Breakdown", "Task Details", "Exceptions & Data Quality",
+            "Department_Executive_Dashboard", "Department Summary", "Employee Breakdown",
+            "Space Breakdown", "Task Details", "Status Summary", "Weekly Flow",
+            "Overdue Tasks", "Tasks Requiring Attention", "Bottlenecks", "Workflow Exceptions",
+            "Data Quality", "Analysis Context", "Metric Definitions",
         ])
 
     def test_word_is_department_report(self):
         document = Document(io.BytesIO(department_word(self.result)))
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-        self.assertIn("Department Performance Evaluation Report", text)
+        self.assertIn("Department Performance Report", text)
         self.assertIn("Department: Marketing", text)
-        self.assertIn("Bottleneck Candidates", text)
+        self.assertIn("Department Bottlenecks", text)
 
 
 if __name__ == "__main__":

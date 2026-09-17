@@ -34,6 +34,8 @@ def sample_snapshot():
         source_tool="Jira", task_id="CPA-1", task_name="Sample task", source_space="Engineering",
         unified_project="Platform", raw_status="In Review", initial_status="To Do", created_date=START,
         due_date=date(2026, 9, 10), history_complete=True,
+        history_through=datetime(2026, 10, 1, tzinfo=UTC),
+        collection_timestamp=datetime(2026, 10, 1, tzinfo=UTC),
         workflow_history=(transition("To Do", "In Progress", "2026-09-02T09:00:00"),
                           transition("In Progress", "In Review", "2026-09-04T09:00:00")),
     )
@@ -48,7 +50,7 @@ class CompanyOutputTests(unittest.TestCase):
             path = write_company_excel(model, Path(directory) / "company.xlsx")
             workbook = load_workbook(path)
             self.assertEqual(tuple(workbook.sheetnames), COMPANY_SHEET_NAMES)
-            self.assertEqual(workbook["Executive Dashboard"]["A1"].value, "Company Performance — Company-Wide Scope")
+            self.assertEqual(workbook["Company_Executive_Dashboard"]["A1"].value, "Company Performance")
             self.assertNotIn("Raw Collected Data", workbook.sheetnames)
 
     def test_raw_data_is_a_separate_audit_workbook(self):
@@ -64,14 +66,16 @@ class CompanyOutputTests(unittest.TestCase):
                 model, Path(directory) / "company.docx"),
             document = Document(path[0])
             text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-            self.assertIn("Company-wide analysis across all collected Jira projects and ClickUp spaces", text)
-            for number, title in enumerate((
-                "Executive Summary", "Scope and Analysis Period", "Data Sources and Coverage",
-                "Methodology and Assignment Rules", "Headline KPIs", "Delivery Outcome",
-                "Workload and Overdue Work", "Workflow Efficiency", "Bottleneck Candidates",
-                "Data Quality and Limitations", "Recommendations and Next Steps",
-            ), 1):
-                self.assertIn(f"{number}. {title}", text)
+            self.assertIn("Company-wide Jira and ClickUp analysis", text)
+            for title in (
+                "Company Executive Summary", "Data Sources and Analysis Scope",
+                "Company KPI Summary", "Department Performance Comparison",
+                "Company-wide Bottlenecks", "Key Risks and Overdue Tasks",
+                "Workflow Exceptions", "Top Departments Requiring Attention",
+                "Executive Recommendations", "Data Quality and Coverage Limitations",
+                "Metric Definitions",
+            ):
+                self.assertIn(title, text)
             self.assertIn("N/A", "\n".join(cell.text for table in document.tables for row in table.rows for cell in row.cells))
 
 

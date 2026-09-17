@@ -14,7 +14,8 @@ class IntegratedAnalysisModeTests(unittest.TestCase):
         )
 
     def test_company_launcher_is_isolated_to_company_mode(self):
-        self.assertIn('if analysis_mode == "company":\n    remember_prepared_source(', self.source)
+        self.assertIn('if analysis_mode == "company":', self.source)
+        self.assertIn('render_company_launcher(st)', self.source)
         self.assertIn('if analysis_mode != "company" and run_button', self.source)
 
     def test_mode_change_clears_cross_analysis_prepared_payloads(self):

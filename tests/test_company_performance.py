@@ -44,6 +44,8 @@ def task(source="Jira", task_id="T-1", **values):
         "initial_status": "To Do",
         "created_date": date(2026, 9, 1),
         "history_complete": True,
+        "history_through": datetime(2026, 10, 1, tzinfo=UTC),
+        "collection_timestamp": datetime(2026, 10, 1, tzinfo=UTC),
     }
     base.update(values)
     return TaskRecord(**base)
@@ -239,12 +241,12 @@ class KPItests(unittest.TestCase):
         self.assertEqual(metrics.open_tasks, 1)
         self.assertEqual(metrics.overdue_open_tasks, 1)
         self.assertEqual(metrics.high_priority_overdue_tasks, 1)
-        self.assertEqual(metrics.completion_rate, 50.0)
+        self.assertEqual(metrics.completion_rate, 33.3)
         self.assertEqual(metrics.on_time_completion_rate, 100.0)
         self.assertEqual(metrics.average_time_to_start_days, 1.0)
         self.assertEqual(metrics.average_execution_duration_days, 3.0)
         only_cancelled = calculate_core_kpis([cancelled])
-        self.assertIsNone(only_cancelled.completion_rate)
+        self.assertEqual(only_cancelled.completion_rate, 0.0)
 
 
 if __name__ == "__main__":

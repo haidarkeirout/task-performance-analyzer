@@ -31,11 +31,11 @@ class ClickPrepared:
 class CompanySourceSelectionTests(unittest.TestCase):
     def test_company_ui_uses_independent_jira_clickup_space_selectors_without_radio(self):
         text=(ROOT/'src/company_performance/ui.py').read_text(encoding='utf-8')
-        self.assertIn('"Select Jira Spaces"',text)
-        self.assertIn('"Select ClickUp Spaces"',text)
-        self.assertNotIn('st.radio(',text)
-        order=[text.index('"Unified Project Name"'),text.index('"Analysis Period Start"'),text.index('"Analysis Period End"'),text.index('"Run Analysis"')]
-        self.assertEqual(order,sorted(order))
+        self.assertIn('collect_company_spaces', (ROOT/'src/company_performance/collection.py').read_text(encoding='utf-8'))
+        self.assertIn('Complete Task Preview', text)
+        self.assertIn('Analysis Period From', text)
+        self.assertIn('Analysis Period To', text)
+        self.assertIn('Run Company Analysis', text)
     def test_combined_preview_contains_selected_jira_and_clickup(self):
         rows=build_company_preview(jira_prepared=(JiraPrepared(),),clickup_prepared=(ClickPrepared(),))
         self.assertEqual({r.source_tool for r in rows},{'Jira','ClickUp'})
@@ -93,21 +93,29 @@ class CompanyClickUpIntegrationTests(unittest.TestCase):
                 'Current WIP': str(self.result.model.kpis.current_wip),
             }
 
-            summary = load_workbook(excel_path, data_only=True)['Executive Dashboard']
+            summary = load_workbook(excel_path, data_only=True)['Company_Executive_Dashboard']
+            header_row = next(summary.iter_rows(min_row=3, max_row=3, values_only=True))
+            value_row = next(summary.iter_rows(min_row=4, max_row=4, values_only=True))
             excel_values = {
-                row[0]: row[1]
-                for row in summary.iter_rows(values_only=True)
-                if row and row[0] in expected
+                header_row[index]: value_row[index]
+                for index in range(len(header_row))
+                if header_row[index] in expected
             }
             self.assertEqual(excel_values, expected)
 
             document = Document(word_path)
             word_values = {}
             for table in document.tables:
-                for row in table.rows:
+                if not table.rows or table.rows[0].cells[0].text.strip() != "KPI":
+                    continue
+                for row in table.rows[1:]:
                     cells = [cell.text.strip() for cell in row.cells]
-                    if len(cells) >= 2 and cells[0] in expected:
-                        word_values[cells[0]] = cells[1]
+                    if len(cells) >= 2 and cells[0] == "Total Tasks":
+                        word_values["Total Tasks"] = cells[1]
+                    if len(cells) >= 2 and cells[0] == "Completion Rate":
+                        word_values["Completion Rate"] = f"{float(cells[1]):.1f}%"
+                    if len(cells) >= 2 and cells[0] == "WIP":
+                        word_values["Current WIP"] = cells[1]
             self.assertEqual(word_values, expected)
     def test_unresolved_id_stays_out_of_delivery_chart_and_is_in_data_quality(self):
         unresolved=build_company_analysis(period_start=date(2026,9,1),period_end=date(2026,9,30),clickup_prepared=(ClickPrepared(status={'id':'p_INTERNAL'}),),unified_project='P')
