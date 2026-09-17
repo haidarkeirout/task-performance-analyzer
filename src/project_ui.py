@@ -17,6 +17,7 @@ from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from excel_safety import write_excel_cell
 
 from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
@@ -362,7 +363,7 @@ def _assignee_frame(result: CompanyAnalysisResult) -> pd.DataFrame:
 def _write_excel_table(sheet, headers, rows, start_row=1):
     for row_index, row in enumerate([headers, *rows], start=start_row):
         for column_index, value in enumerate(row, 1):
-            cell = sheet.cell(row=row_index, column=column_index, value=_excel_value(value))
+            cell = write_excel_cell(sheet, row_index, column_index, _excel_value(value))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             if row_index == start_row:
                 cell.fill = _HEADER_FILL

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import tempfile
@@ -45,6 +46,13 @@ from department_analysis import (
     department_word,
     filter_jira_department_period,
 )
+
+
+def _frame_signature(frame: pd.DataFrame) -> str:
+    if frame is None or frame.empty:
+        return "empty"
+    hashed = pd.util.hash_pandas_object(frame.astype(str), index=True).values.tobytes()
+    return hashlib.sha256(hashed).hexdigest()
 
 
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -1140,15 +1148,19 @@ def show_clickup_analysis(result) -> None:
     st.divider()
     download_left, download_right = st.columns(2)
     with download_left:
+        clickup_report_key = f"{result['space_name']}:{result['cutoff']}:{_frame_signature(tasks)}"
+        if st.session_state.get("clickup_excel_report_key") != clickup_report_key:
+            st.session_state["clickup_excel_report"] = analysis_excel(result)
+            st.session_state["clickup_excel_report_key"] = clickup_report_key
         st.download_button(
             "Download ClickUp Analysis Excel",
-            data=analysis_excel(result),
+            data=st.session_state["clickup_excel_report"],
             file_name="clickup_performance_analysis.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
     with download_right:
-        report_key = f"{result['space_name']}:{result['cutoff']}:{len(tasks)}"
+        report_key = clickup_report_key
         if st.session_state.get("clickup_word_report_key") != report_key:
             st.session_state["clickup_word_report"] = create_clickup_word_report(result)
             st.session_state["clickup_word_report_key"] = report_key
@@ -1240,11 +1252,19 @@ def show_department_analysis(result: dict) -> None:
     st.divider()
     excel_name = f"Department_Performance_{_filename_component(result['department_name'])}.xlsx"
     word_name = f"Department_Performance_{_filename_component(result['department_name'])}.docx"
+    department_report_key = (
+        f"{result.get('department_id')}:{result.get('data_source')}:"
+        f"{result.get('cutoff')}:{_frame_signature(result.get('tasks'))}"
+    )
+    if st.session_state.get("department_report_key") != department_report_key:
+        st.session_state["department_excel_report"] = department_excel(result)
+        st.session_state["department_word_report"] = department_word(result)
+        st.session_state["department_report_key"] = department_report_key
     left, right = st.columns(2)
-    left.download_button("Download Excel Report", department_excel(result), excel_name,
+    left.download_button("Download Excel Report", st.session_state["department_excel_report"], excel_name,
                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                          use_container_width=True)
-    right.download_button("Download Word Report", department_word(result), word_name,
+    right.download_button("Download Word Report", st.session_state["department_word_report"], word_name,
                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                           use_container_width=True)
 

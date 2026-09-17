@@ -8,6 +8,7 @@ APIs; source collection remains in the established collector screens.
 from __future__ import annotations
 
 import tempfile
+import hashlib
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
@@ -210,9 +211,13 @@ def render_company_launcher(st: Any) -> None:
             clickup_prepared=clickup_items,
         )
         st.subheader("Complete Task Preview")
-        st.caption(f"{len(preview)} task(s) collected across {len(prepared_items)} source Space(s).")
+        filtered_preview = _preview_filters(st, preview)
+        st.caption(
+            f"Showing {len(filtered_preview)} of {len(preview)} collected task(s) "
+            f"across {len(prepared_items)} source Space(s). Preview filters do not change the analysis scope."
+        )
         st.dataframe(
-            _preview_table_rows(preview),
+            _preview_table_rows(filtered_preview),
             hide_index=True,
             use_container_width=True,
         )
@@ -335,6 +340,17 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
             recommendations=recommendations,
         ).read_bytes()
     return excel, raw, word
+
+
+def _cached_output_bytes(st: Any, result: CompanyAnalysisResult, model: Any) -> tuple[bytes, bytes, bytes]:
+    selected = sorted((detail.source_tool, detail.task_id) for detail in model.task_details)
+    material = repr((result.snapshots[0].period_start if result.snapshots else None,
+                     result.snapshots[0].period_end if result.snapshots else None, selected))
+    key = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    if st.session_state.get("company_output_cache_key") != key:
+        st.session_state["company_output_cache"] = _output_bytes(result, model)
+        st.session_state["company_output_cache_key"] = key
+    return st.session_state["company_output_cache"]
 
 
 def _average_text(values: list[int | float]) -> str:
@@ -553,7 +569,7 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         st.subheader("Data Quality")
         st.dataframe(_table_rows(model.data_quality), hide_index=True, use_container_width=True)
 
-    excel, raw, word = _output_bytes(result, model)
+    excel, raw, word = _cached_output_bytes(st, result, model)
     st.subheader("Downloads")
     left, middle, right = st.columns(3)
     left.download_button(

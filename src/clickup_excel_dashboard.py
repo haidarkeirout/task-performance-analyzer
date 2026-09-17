@@ -8,6 +8,7 @@ import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from excel_safety import write_excel_cell
 
 DARK = "17324D"
 MID = "2F5D7E"
@@ -63,14 +64,14 @@ def _card(sheet, start_col, label, value, row):
 
 def _write_table(sheet, start_row, start_col, headers, rows):
     for offset, value in enumerate(headers):
-        cell = sheet.cell(start_row, start_col + offset, value)
+        cell = write_excel_cell(sheet, start_row, start_col + offset, value)
         cell.fill = PatternFill("solid", fgColor=DARK)
         cell.font = Font(color=WHITE, bold=True)
     for row_offset, row in enumerate(rows, start=1):
         for col_offset, value in enumerate(row):
             if isinstance(value, pd.Timestamp):
                 value = value.to_pydatetime().replace(tzinfo=None) if value.tzinfo else value.to_pydatetime()
-            sheet.cell(start_row + row_offset, start_col + col_offset, value)
+            write_excel_cell(sheet, start_row + row_offset, start_col + col_offset, value)
     return start_row + len(rows)
 
 

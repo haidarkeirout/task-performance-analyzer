@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from excel_safety import write_excel_cell
 
 from clickup_excel_dashboard import add_clickup_executive_dashboard
 from clickup_filters import (
@@ -523,7 +524,7 @@ def analyze_clickup(prepared_data):
 def _write_sheet(workbook, name: str, frame: pd.DataFrame):
     sheet = workbook.create_sheet(name)
     for column, value in enumerate(frame.columns, 1):
-        cell = sheet.cell(1, column, value)
+        cell = write_excel_cell(sheet, 1, column, value)
         cell.fill = PatternFill("solid", fgColor="17324D")
         cell.font = Font(color="FFFFFF", bold=True)
     for row_number, row in enumerate(frame.itertuples(index=False, name=None), 2):
@@ -532,7 +533,7 @@ def _write_sheet(workbook, name: str, frame: pd.DataFrame):
                 value = json.dumps(value, ensure_ascii=False)
             if isinstance(value, pd.Timestamp):
                 value = value.isoformat()
-            sheet.cell(row_number, column, value)
+            write_excel_cell(sheet, row_number, column, value)
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     for column_cells in sheet.columns:

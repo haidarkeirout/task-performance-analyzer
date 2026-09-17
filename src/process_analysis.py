@@ -8,6 +8,7 @@ import json
 from datetime import datetime, time
 from io import BytesIO
 import pandas as pd
+from excel_safety import safe_excel_value
 from metrics_engine import aggregate, get_status_events, parse_timestamp
 from jira_excel_dashboard import add_jira_executive_dashboard
 
@@ -310,7 +311,8 @@ def excel_bytes(frame, tables):
               "by_assignee": aggregate(frame, ["assignee_name"]), "by_issue_type": aggregate(frame, ["issue_type"])}
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for name, data in sheets.items():
-            data.to_excel(writer, sheet_name=name, index=False)
+            safe_data = data.map(safe_excel_value) if hasattr(data, "map") else data.applymap(safe_excel_value)
+            safe_data.to_excel(writer, sheet_name=name, index=False)
             sheet = writer.sheets[name]
             sheet.freeze_panes = "A2"
             sheet.auto_filter.ref = sheet.dimensions

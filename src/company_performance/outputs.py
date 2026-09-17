@@ -23,6 +23,7 @@ from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from excel_safety import write_excel_cell
 
 from .dashboard import CompanyDashboardModel
 from .kpis import BottleneckCandidate, Recommendation
@@ -85,7 +86,7 @@ def _write_table(sheet: Any, rows: Iterable[Sequence[Any]], *, start_row: int = 
     """Write a simple header-first table and return the next free row."""
     for row_index, row in enumerate(rows, start_row):
         for column_index, value in enumerate(row, 1):
-            cell = sheet.cell(row=row_index, column=column_index, value=_safe_text(value))
+            cell = write_excel_cell(sheet, row_index, column_index, _safe_text(value))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             if row_index == start_row:
                 cell.fill = _HEADER_FILL
@@ -100,7 +101,7 @@ def _write_excel_table(sheet: Any, rows: Iterable[Sequence[Any]], *, start_row: 
         return start_row
     for row_index, row in enumerate(values, start_row):
         for column_index, value in enumerate(row, 1):
-            cell = sheet.cell(row=row_index, column=column_index, value=_excel_value(value))
+            cell = write_excel_cell(sheet, row_index, column_index, _excel_value(value))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = _THIN_BORDER
             if row_index == start_row:
@@ -751,4 +752,3 @@ def write_company_word_report(
 
     document.save(output)
     return output
-

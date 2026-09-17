@@ -7,6 +7,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from excel_safety import write_excel_cell
 
 @dataclass
 class ClickUpPreparedData:
@@ -31,12 +32,12 @@ class ClickUpPreparedData:
 def _sheet(wb, name, headers, rows):
     ws = wb.create_sheet(name)
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(1, col, header)
+        cell = write_excel_cell(ws, 1, col, header)
         cell.fill = PatternFill("solid", fgColor="17324D")
         cell.font = Font(color="FFFFFF", bold=True)
     for r, row in enumerate(rows, 2):
         for c, value in enumerate(row, 1):
-            ws.cell(r, c, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
+            write_excel_cell(ws, r, c, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 

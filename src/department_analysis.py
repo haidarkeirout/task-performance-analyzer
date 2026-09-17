@@ -12,6 +12,7 @@ from docx.shared import Inches
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
+from excel_safety import write_excel_cell
 from openpyxl.utils import get_column_letter
 
 
@@ -261,7 +262,7 @@ def _write_frame(ws, frame: pd.DataFrame, start_row=1, title=None):
         ws.cell(row, 1, title).font = Font(bold=True, size=14, color="17324D")
         row += 2
     for column, value in enumerate(frame.columns, 1):
-        cell = ws.cell(row, column, value)
+        cell = write_excel_cell(ws, row, column, value)
         cell.fill = PatternFill("solid", fgColor="17324D")
         cell.font = Font(color="FFFFFF", bold=True)
     for values in frame.itertuples(index=False, name=None):
@@ -269,7 +270,7 @@ def _write_frame(ws, frame: pd.DataFrame, start_row=1, title=None):
         for column, value in enumerate(values, 1):
             if isinstance(value, pd.Timestamp): value = value.isoformat()
             if pd.isna(value) if not isinstance(value, (list, dict)) else False: value = None
-            ws.cell(row, column, value)
+            write_excel_cell(ws, row, column, value)
     return row
 
 
