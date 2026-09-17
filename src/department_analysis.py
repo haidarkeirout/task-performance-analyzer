@@ -171,6 +171,8 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
 def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict, space_name: str, cutoff) -> dict:
     """Adapt verified Jira metrics to the same department presentation contract."""
     source = task_metrics.copy()
+    issue_types = source.get("issue_type", pd.Series("", index=source.index)).fillna("").astype(str)
+    is_subtask = issue_types.str.casefold().str.replace("-", "", regex=False).str.replace(" ", "", regex=False).eq("subtask")
     tasks = pd.DataFrame({
         "Task ID": source.get("issue_key"), "Task Name": source.get("task_name"),
         "Assignee": source.get("assignee_name", pd.Series("Unassigned", index=source.index)).fillna("Unassigned"),
@@ -182,14 +184,16 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
         "WIP?": source.get("is_wip", False), "Lead Time Hours": source.get("lead_time_business_hours"),
         "Execution Hours": source.get("execution_business_hours"),
         "On Time?": source.get("on_time_completion"), "Overdue Days": source.get("overdue_days"),
+        "Is Subtask": is_subtask,
     })
-    total = len(tasks); cancelled = int(tasks["Cancelled?"].eq(True).sum())
-    completed = int(tasks["Completed?"].eq(True).sum()); open_count = int(tasks["Open?"].eq(True).sum())
-    completion_denominator = total
+    parent_tasks = tasks.loc[~tasks["Is Subtask"]].copy()
+    total = len(tasks); cancelled = int(parent_tasks["Cancelled?"].eq(True).sum())
+    completed = int(parent_tasks["Completed?"].eq(True).sum()); open_count = int(tasks["Open?"].eq(True).sum())
+    completion_denominator = len(parent_tasks)
     open_due_tasks = int((tasks["Open?"].eq(True) & tasks["Due Date"].notna()).sum())
     overdue = int((tasks["Open?"].eq(True) & pd.to_numeric(tasks["Overdue Days"], errors="coerce").gt(0)).sum())
-    due_known = tasks["Completed?"].eq(True) & tasks["Due Date"].notna() & tasks["Completed"].notna()
-    on_time = int((due_known & tasks["On Time?"].eq(True)).sum())
+    due_known = parent_tasks["Completed?"].eq(True) & parent_tasks["Due Date"].notna() & parent_tasks["Completed"].notna()
+    on_time = int((due_known & parent_tasks["On Time?"].eq(True)).sum())
     history_valid = source.get("history_complete", pd.Series(False, index=source.index)).eq(True)
     exception = (
         source.get("rework_count", pd.Series(0, index=source.index)).fillna(0).gt(0)
@@ -203,7 +207,7 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
         ("On-Time Completion Rate (%)", _rate(on_time, int(due_known.sum())), on_time, int(due_known.sum())),
         ("Open Overdue Tasks", overdue, overdue, open_due_tasks),
         ("Open Overdue Rate (%)", _rate(overdue, open_due_tasks), overdue, open_due_tasks),
-        ("Average Lead Time (hours)", pd.to_numeric(tasks.loc[tasks["Completed?"].eq(True), "Lead Time Hours"], errors="coerce").mean(), completed, completed),
+        ("Average Lead Time (hours)", pd.to_numeric(parent_tasks.loc[parent_tasks["Completed?"].eq(True), "Lead Time Hours"], errors="coerce").mean(), completed, completed),
         ("Workflow Exception Rate (%)", _rate(exception_count, exception_denominator), exception_count, exception_denominator),
         ("Cancelled/Rejected Tasks", cancelled, cancelled, total),
         ("Cancellation/Rejected Rate (%)", _rate(cancelled, total), cancelled, total),

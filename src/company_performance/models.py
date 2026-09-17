@@ -87,6 +87,7 @@ class TaskRecord:
     parent_id: str | None = None
     parent_classification: ParentClassification = ParentClassification.STANDALONE
     collection_timestamp: datetime | None = None
+    history_through: datetime | None = None
     workflow_history: tuple[StatusTransition, ...] = ()
     history_complete: bool = False
     data_quality_flags: set[str] = field(default_factory=set)

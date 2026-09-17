@@ -27,14 +27,25 @@ def _same_day(left: date, right: date) -> bool:
 
 def _history_available(task: TaskRecord, period_end: date, collection_date: date | None) -> bool:
     if task.history_complete:
-        return bool(task.initial_status or task.workflow_history)
+        coverage_date = calendar_date(task.history_through)
+        return bool(
+            (task.initial_status or task.workflow_history)
+            and coverage_date is not None
+            and coverage_date >= period_end
+        )
     # A same-day collection can only use a marked snapshot fallback.  It is not
     # treated as historical workflow coverage.
     return False
 
 
 def _status_as_of(task: TaskRecord, period_end: date, collection_date: date | None, flags: set[str]) -> UnifiedStatus:
-    if task.history_complete and (task.initial_status or task.workflow_history):
+    coverage_date = calendar_date(task.history_through)
+    if (
+        task.history_complete
+        and (task.initial_status or task.workflow_history)
+        and coverage_date is not None
+        and coverage_date >= period_end
+    ):
         status = normalize_status(task.source_tool, task.initial_status)
         if task.initial_status is None:
             first = _ordered_events(task.workflow_history)[0]
@@ -58,7 +69,10 @@ def _status_as_of(task: TaskRecord, period_end: date, collection_date: date | No
             flags.add("Unmapped Status")
         return status
 
-    flags.add("Missing Workflow History")
+    if task.history_complete and coverage_date is not None and coverage_date < period_end:
+        flags.add("Analysis Period Exceeds History Coverage")
+    else:
+        flags.add("Missing Workflow History")
     return UnifiedStatus.UNKNOWN
 
 

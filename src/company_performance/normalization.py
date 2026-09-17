@@ -167,7 +167,10 @@ def deduplicate_tasks(records: Iterable[TaskRecord]) -> list[TaskRecord]:
         groups.setdefault(record.unique_key, []).append(record)
 
     output: list[TaskRecord] = []
-    protected = {"collection_timestamp", "workflow_history", "data_quality_flags"}
+    protected = {
+        "collection_timestamp", "history_through", "workflow_history",
+        "data_quality_flags",
+    }
     for group in groups.values():
         selected = _latest_record(group)
         if len(group) == 1:

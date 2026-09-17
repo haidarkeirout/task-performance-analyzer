@@ -288,6 +288,16 @@ def build_company_analysis(
 
     collection = combine_company_sources(*sources)
     records = deduplicate_tasks(collection.records)
+    coverage_dates = [
+        calendar_date(record.history_through or record.collection_timestamp)
+        for record in records
+    ]
+    usable_coverage = [value for value in coverage_dates if value is not None]
+    if usable_coverage and period_end > min(usable_coverage):
+        raise ValueError(
+            "Analysis Period To cannot be later than the collected source coverage. "
+            f"Choose {min(usable_coverage).isoformat()} or earlier, or collect the sources again."
+        )
     snapshots = tuple(
         reconstruct_task(
             record,

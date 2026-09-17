@@ -244,6 +244,7 @@ def adapt_jira_collection(
             history = {}
         workflow = _history_transitions(history)
         history_complete = history.get("history_complete") is True
+        history_through = _collection_time(history.get("history_through"))
         if history_complete:
             complete_count += 1
         status = fields.get("status")
@@ -281,6 +282,7 @@ def adapt_jira_collection(
             parent_id=parent_id,
             parent_classification=_parent_classification(parent_id),
             collection_timestamp=collected_at,
+            history_through=history_through,
             workflow_history=workflow,
             history_complete=history_complete,
             data_quality_flags=flags,
@@ -376,6 +378,7 @@ def adapt_clickup_collection(
             parent_id=parent_id,
             parent_classification=_parent_classification(parent_id),
             collection_timestamp=collected_at,
+            history_through=collected_at,
             workflow_history=(),
             history_complete=False,
             data_quality_flags=flags,

@@ -116,10 +116,11 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         if normalize_priority(item.task.source_tool, item.task.priority) in {"Critical", "High"}
     ]
     unassigned = [item for item in open_items if not item.task.assignees]
-    # Project Performance defines completion against every selected task.
-    # Cancelled/rejected tasks remain in the total, matching the Project Excel
-    # workbook and the dashboard's Total Tasks card.
-    eligible = len(known) - len(cancelled) - len(rejected)
+    # Completion is defined against every selected parent/standalone task,
+    # including cancelled/rejected work.  When any selected task has an unknown
+    # period-end status, the rate is unavailable instead of silently treating
+    # missing historical evidence as non-completion.
+    all_statuses_known = len(known) == len(tasks)
 
     completed_with_due = [
         item for item in completed if item.task.due_date is not None and item.final_completion_date is not None
@@ -153,7 +154,9 @@ def calculate_core_kpis(snapshots: Iterable[TaskPeriodSnapshot]) -> CoreKPIs:
         high_priority_open_tasks=len(high_open),
         high_priority_overdue_tasks=len(high_overdue),
         unassigned_open_tasks=len(unassigned),
-        completion_rate=safe_rate(len(completed), len(tasks)),
+        completion_rate=(
+            safe_rate(len(completed), len(tasks)) if all_statuses_known else None
+        ),
         overdue_open_rate=safe_rate(len(overdue), len(open_with_due)),
         on_time_completion_rate=safe_rate(len(on_time), len(completed_with_due)),
         late_completion_rate=safe_rate(len(late), len(completed_with_due)),
