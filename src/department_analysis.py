@@ -84,9 +84,13 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
     total = len(tasks)
     is_subtask = tasks.get("Is Subtask", pd.Series(False, index=tasks.index)).fillna(False).astype(bool)
     parent_tasks = tasks.loc[~is_subtask].copy()
+    known_parent_tasks = parent_tasks.loc[
+        parent_tasks.get("Status Known?", pd.Series(True, index=parent_tasks.index)).fillna(False).eq(True)
+    ].copy()
     cancelled = int(parent_tasks["Cancelled?"].sum()) if not parent_tasks.empty else 0
     completed = int(parent_tasks["Completed?"].sum()) if not parent_tasks.empty else 0
-    completion_denominator = len(parent_tasks)
+    all_parent_statuses_known = len(known_parent_tasks) == len(parent_tasks)
+    completion_denominator = len(parent_tasks) if all_parent_statuses_known else 0
     open_tasks = int(tasks["Open?"].sum()) if total else 0
     open_due_tasks = int((tasks["Open?"] & tasks["Due Date"].notna()).sum()) if total else 0
     overdue = int((

@@ -7,7 +7,7 @@ same List name may be present in more than one Space.
 from __future__ import annotations
 
 import json
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -182,6 +182,12 @@ def _period_bounds(start_date, end_date, source_timezone: str = "Asia/Damascus")
         datetime.combine(_date_value(end_date), time.max, tzinfo=zone)
     ).tz_convert("UTC")
     return start, end
+
+
+def _analysis_cutoff(start_date, end_date, source_timezone: str) -> pd.Timestamp:
+    """Return the selected local period end without extending into the future."""
+    _, period_end = _period_bounds(start_date, end_date, source_timezone)
+    return min(period_end, pd.Timestamp(datetime.now(timezone.utc)))
 
 
 def _period_filter(
@@ -382,7 +388,7 @@ def render_department_collection(settings):
     if st.button("Done", type="primary", key="department_done", disabled=not filtered_tasks):
         st.session_state.pop("clickup_error", None)
         try:
-            _, end_cutoff_value = _period_bounds(
+            end_cutoff_value = _analysis_cutoff(
                 start_date, end_date, settings.source_timezone
             )
             end_cutoff = end_cutoff_value.isoformat()
@@ -442,7 +448,7 @@ def render_department_collection(settings):
         if not prepared_is_current:
             try:
                 with st.spinner("Updating the Department analysis source..."):
-                    _, end_cutoff_value = _period_bounds(
+                    end_cutoff_value = _analysis_cutoff(
                         start_date, end_date, settings.source_timezone
                     )
                     end_cutoff = end_cutoff_value.isoformat()

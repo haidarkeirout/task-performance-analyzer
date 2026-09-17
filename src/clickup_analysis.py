@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from openpyxl import Workbook
@@ -246,6 +247,14 @@ def analyze_clickup(prepared_data):
     raw_tasks = payload.get("tasks") if isinstance(payload, dict) else []
     time_payloads = payload.get("time_in_status", {}) if isinstance(payload, dict) else {}
     cutoff = pd.to_datetime(timestamp(prepared_data.cutoff), utc=True, errors="coerce")
+    source_timezone = getattr(prepared_data, "source_timezone", "Asia/Damascus")
+    source_zone = ZoneInfo(source_timezone)
+    collected_at = timestamp(getattr(prepared_data, "collected_at", None))
+    historical_snapshot = (
+        pd.notna(cutoff)
+        and pd.notna(collected_at)
+        and cutoff.tz_convert(source_zone).date() < collected_at.tz_convert(source_zone).date()
+    )
     rows: list[dict[str, Any]] = []
     status_rows: list[dict[str, Any]] = []
 
@@ -259,9 +268,30 @@ def analyze_clickup(prepared_data):
         start = timestamp(task.get("start_date"))
         due = timestamp(task.get("due_date"))
         completed = timestamp(task.get("date_closed") or task.get("date_done"))
-        cancelled = status_key in CANCELLED_STATUSES
-        completed_flag = (status_key in TERMINAL_STATUSES or is_closed(task) or pd.notna(completed)) and not cancelled
-        open_flag = not completed_flag and not cancelled
+        source_cancelled = status_key in CANCELLED_STATUSES
+        source_completed = (
+            status_key in TERMINAL_STATUSES or is_closed(task) or pd.notna(completed)
+        ) and not source_cancelled
+        status_known = not historical_snapshot
+        status_basis = "Collection snapshot"
+        if historical_snapshot:
+            if source_completed and pd.notna(completed) and completed <= cutoff:
+                status_known = True
+                status_basis = "Completion date on or before cutoff"
+            elif source_cancelled and pd.notna(completed) and completed <= cutoff:
+                status_known = True
+                status_basis = "Cancellation close date on or before cutoff"
+            else:
+                status_known = False
+                status_basis = "Historical status unavailable from ClickUp snapshot"
+
+        cancelled = bool(status_known and source_cancelled)
+        completed_flag = bool(status_known and source_completed and pd.notna(completed) and completed <= cutoff)
+        if status_known and source_completed and pd.isna(completed):
+            # The current-day snapshot can confirm the terminal state even when
+            # ClickUp omitted its close timestamp; historical snapshots cannot.
+            completed_flag = not historical_snapshot
+        open_flag = bool(status_known and not completed_flag and not cancelled)
         wip_flag = open_flag and status_key not in NOT_STARTED_STATUSES
         end = completed if pd.notna(completed) else cutoff
         lead_time_hours = _duration_hours(created, end)
@@ -308,6 +338,9 @@ def analyze_clickup(prepared_data):
             "Parent Task ID": str(task.get("parent") or ""),
             "Is Subtask": bool(task.get("parent")),
             "Current Status": status,
+            "Status at Cutoff": status if status_known else "Unknown",
+            "Status Known?": status_known,
+            "Historical Status Basis": status_basis,
             "Status State": state or "Unavailable",
             "Created": created,
             "Updated": updated,
@@ -342,7 +375,8 @@ def analyze_clickup(prepared_data):
     columns = [
         "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
         "Space", "List", "Parent Task ID", "Is Subtask",
-        "Current Status", "Status State", "Created", "Updated", "Start Date", "Due Date", "Completed",
+        "Current Status", "Status at Cutoff", "Status Known?", "Historical Status Basis",
+        "Status State", "Created", "Updated", "Start Date", "Due Date", "Completed",
         "Completed?", "Cancelled?", "Open?", "WIP?", "Elapsed Hours", "Lead Time Hours", "Execution Hours",
         "Time to Start Hours", "Timing Data Status", "On Time?", "Due Variance (days)", "Due Variance Basis", "Due Variance Category",
         "Overdue Days", "Time Estimate Hours", "Time Tracked Hours", "Current Status Time (min)",
@@ -357,7 +391,7 @@ def analyze_clickup(prepared_data):
     open_tasks = task_frame[task_frame["Open?"]] if total else task_frame
     due_known_completed = completed[completed["Due Variance (days)"].notna()] if total else task_frame
     status_summary = _status_summary(status_frame)
-    status_counts = (task_frame["Current Status"].fillna("Unavailable").value_counts().rename_axis("Status").reset_index(name="Tasks")
+    status_counts = (task_frame["Status at Cutoff"].fillna("Unavailable").value_counts().rename_axis("Status").reset_index(name="Tasks")
                      if total else pd.DataFrame(columns=["Status", "Tasks"]))
     weekly_flow = _weekly_flow(task_frame, cutoff)
     due_status_summary = _due_status_summary(task_frame, cutoff)
@@ -391,7 +425,10 @@ def analyze_clickup(prepared_data):
         ("Open tasks", int(task_frame["Open?"].sum()) if total else 0),
         ("WIP tasks", int(task_frame["WIP?"].sum()) if total else 0),
         ("Cancelled tasks", int(task_frame["Cancelled?"].sum()) if total else 0),
-        ("Completion rate (%)", float(task_frame["Completed?"].mean() * 100.0) if total else None),
+        ("Completion rate (%)", (
+            float(task_frame["Completed?"].mean() * 100.0)
+            if total and task_frame["Status Known?"].all() else None
+        )),
         ("On-time completion rate (%)", _safe_rate(completed["On Time?"]) if total else None),
         ("Open overdue tasks", int(len(overdue_open))),
         ("Completed late tasks", int(len(late_completed))),
@@ -437,6 +474,9 @@ def analyze_clickup(prepared_data):
          "Info" if future_start_tasks else "OK"),
         ("Tasks with timing chronology conflicts", timing_conflicts,
          "Review" if timing_conflicts else "OK"),
+        ("Tasks with historical status unavailable",
+         int((~task_frame["Status Known?"]).sum()) if total else 0,
+         "Unavailable" if total and (~task_frame["Status Known?"]).any() else "OK"),
     ], columns=["Check", "Value", "Status"])
     metric_definitions = pd.DataFrame([
         ("Due Variance (days)", "Completed task: Completed date minus Due date. Open task: Evaluation cutoff minus Due date. Positive is late/overdue; negative is early/time remaining."),
@@ -444,6 +484,7 @@ def analyze_clickup(prepared_data):
         ("Execution and time to start", "Calculated only when the recorded start date is on or before the completion date or evaluation cutoff. Date-only starts on the creation day use creation time as the effective start. Chronology conflicts remain unavailable."),
         ("WIP tasks", "Open tasks whose current status is not a common not-started status (Backlog, To Do, Planning, Ready, or Open)."),
         ("Status-duration data", "Read only from ClickUp Total time in Status when the ClickApp/API exposes it. Missing values stay unavailable."),
+        ("Historical ClickUp status", "A current ClickUp snapshot is never presented as a past status. If no chronological evidence establishes the cutoff state, status-dependent metrics remain unavailable."),
         ("Individual assignment", "Uses the assignee snapshot returned by ClickUp. It does not establish individual contribution or ownership at completion."),
     ], columns=["Metric", "Definition"])
     findings = pd.DataFrame([

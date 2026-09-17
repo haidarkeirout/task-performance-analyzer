@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import date
+import json
+from types import SimpleNamespace
 import unittest
 
 import pandas as pd
 
+from clickup_analysis import analyze_clickup
 from department_analysis import filter_jira_department_period
-from department_collection import _period_bounds, _period_filter
+from department_collection import _analysis_cutoff, _period_bounds, _period_filter
 from jira_department_collection import _period_query
 
 
@@ -69,6 +72,38 @@ class DepartmentPeriodScopeTests(unittest.TestCase):
             [task], date(2026, 9, 1), date(2026, 9, 30), "Asia/Damascus"
         )
         self.assertEqual([item["id"] for item in kept], ["closed-later"])
+
+    def test_department_cutoff_never_extends_beyond_collection_time(self):
+        cutoff = _analysis_cutoff(
+            date(2026, 9, 1), date(2099, 9, 30), "Asia/Damascus"
+        )
+        self.assertLessEqual(cutoff, pd.Timestamp.now(tz="UTC"))
+
+    def test_later_clickup_completion_is_not_counted_at_historical_cutoff(self):
+        task = {
+            "id": "closed-later",
+            "name": "Closed after cutoff",
+            "date_created": _milliseconds("2026-09-10T09:00:00Z"),
+            "date_closed": _milliseconds("2026-10-05T09:00:00Z"),
+            "status": {"status": "complete", "type": "closed"},
+            "assignees": [],
+        }
+        prepared = SimpleNamespace(
+            history_json=json.dumps({"tasks": [task], "time_in_status": {}}).encode(),
+            cutoff="2026-09-30T20:59:59Z",
+            collected_at="2026-10-10T09:00:00Z",
+            source_timezone="Asia/Damascus",
+            space_name="Operations",
+            space_names=["Operations"],
+            filter_summary="Department period",
+            period_start="2026-09-01",
+            period_end="2026-09-30",
+            duplicate_count=0,
+        )
+        row = analyze_clickup(prepared)["tasks"].iloc[0]
+        self.assertFalse(bool(row["Completed?"]))
+        self.assertFalse(bool(row["Status Known?"]))
+        self.assertEqual(row["Status at Cutoff"], "Unknown")
 
     def test_jira_query_does_not_discard_tasks_created_before_period(self):
         query = _period_query("ENG", date(2026, 9, 1), date(2026, 9, 30))
