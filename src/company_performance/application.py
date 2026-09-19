@@ -23,7 +23,7 @@ from .adapters import (
 )
 from .dashboard import CompanyDashboardModel, DashboardFilters, build_company_dashboard
 from .kpis import BottleneckCandidate, Recommendation, generate_recommendations, identify_bottleneck_candidates
-from .models import TaskPeriodSnapshot
+from .models import ParentClassification, TaskPeriodSnapshot
 from .normalization import assignee_group, calendar_date, deduplicate_tasks, normalize_priority, normalize_status
 from .workflow import reconstruct_task
 
@@ -228,7 +228,11 @@ def build_company_preview(
 
     if not sources:
         return ()
-    records = deduplicate_tasks(combine_company_sources(*sources).records)
+    records = tuple(
+        record
+        for record in deduplicate_tasks(combine_company_sources(*sources).records)
+        if record.parent_classification is not ParentClassification.CONTAINER
+    )
     return tuple(
         CompanyPreviewRow(
             source_tool=task.source_tool,
@@ -353,7 +357,11 @@ def build_company_analysis(
         raise ValueError("Collect at least one Jira or ClickUp space before running Company Performance.")
 
     collection = combine_company_sources(*sources)
-    records = deduplicate_tasks(collection.records)
+    records = tuple(
+        record
+        for record in deduplicate_tasks(collection.records)
+        if record.parent_classification is not ParentClassification.CONTAINER
+    )
     coverage_dates = [
         calendar_date(record.history_through or record.collection_timestamp)
         for record in records
