@@ -201,6 +201,21 @@ def remember_company_source_mapping(
     return registry
 
 
+def forget_company_source_mapping(
+    session_state: MutableMapping[str, Any],
+    company_id: str,
+) -> dict[str, Any]:
+    """Remove every source entry assigned to one explicit company mapping."""
+    raw = session_state.get(COMPANY_SOURCE_MAPPINGS_KEY) or {}
+    registry = dict(raw) if isinstance(raw, Mapping) else {}
+    for mapping_key, value in list(registry.items()):
+        record = _mapping_record(value)
+        if record and record[0] == company_id:
+            registry.pop(mapping_key, None)
+    session_state[COMPANY_SOURCE_MAPPINGS_KEY] = registry
+    return registry
+
+
 def clear_company_catalog_cache() -> None:
     """Invalidate the catalog after a mapping is changed in the UI."""
     st.session_state.pop("company_catalog", None)
@@ -214,8 +229,44 @@ def render_company_source_mapping(catalog: tuple[CompanyCatalogEntry, ...]) -> N
     only needed when, for example, Jira calls a project ``Najm Al-Shamal
     Website`` while ClickUp calls its Space ``Najm Al-Shamal``.
     """
+    registry = _source_mapping_registry()
     source_candidates = [entry for entry in catalog if len(entry.sources) == 1]
     target_candidates = list(catalog)
+    if registry:
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for mapping_key, value in registry.items():
+            record = _mapping_record(value)
+            if record:
+                grouped.setdefault((record[0], record[1]), []).append(mapping_key)
+        with st.expander("Manage saved company mappings", expanded=False):
+            st.caption(
+                "Remove a mapping to separate the sources again. "
+                "You can then save a new target mapping."
+            )
+            for index, ((company_id, company_name), mapping_keys) in enumerate(sorted(grouped.items())):
+                row = st.columns([5, 1])
+                row[0].write(f"{company_name} — {', '.join(sorted(mapping_keys))}")
+                if row[1].button("Remove", key=f"remove_company_mapping_{index}_{_slug(company_id)}"):
+                    remaining = forget_company_source_mapping(st.session_state, company_id)
+                    try:
+                        persist_company_source_mappings(remaining)
+                    except (OSError, TypeError, ValueError) as exc:
+                        st.error(f"The mapping was removed for this session but could not be saved: {exc}")
+                        return
+                    clear_company_catalog_cache()
+                    for key in (
+                        "company_selected_company",
+                        "company_active_selection",
+                        "company_prepared_items",
+                        "company_collection_attempted",
+                        "company_collection_error",
+                        "company_collection_errors",
+                        "company_partial_prepared_items",
+                        "company_analysis",
+                    ):
+                        st.session_state.pop(key, None)
+                    st.rerun()
+
     if not source_candidates or len(target_candidates) < 2:
         return
     with st.expander("Map Jira / ClickUp sources to one company", expanded=False):

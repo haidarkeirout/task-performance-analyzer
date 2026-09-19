@@ -13,6 +13,7 @@ from company_performance.collection import (
     _project_names,
     collect_company_spaces,
     discover_company_catalog,
+    forget_company_source_mapping,
     persist_company_source_mappings,
     remember_company_source_mapping,
 )
@@ -195,6 +196,19 @@ class CompanyCollectionCompletenessTests(unittest.TestCase):
                     loaded = _source_mapping_registry()
 
         self.assertEqual(loaded, registry)
+
+    def test_forget_mapping_removes_all_platform_entries_for_company(self):
+        fake_st = _Streamlit()
+        fake_st.session_state[COMPANY_SOURCE_MAPPINGS_KEY] = {
+            "jira:NAST": {"company_id": "najm", "company_name": "Najm", "aliases": []},
+            "jira:MARCH": {"company_id": "marchent", "company_name": "Marchent", "aliases": []},
+            "clickup:901234": {"company_id": "najm", "company_name": "Najm", "aliases": []},
+        }
+
+        remaining = forget_company_source_mapping(fake_st.session_state, "najm")
+
+        self.assertEqual(set(remaining), {"jira:MARCH"})
+        self.assertEqual(fake_st.session_state[COMPANY_SOURCE_MAPPINGS_KEY], remaining)
 
     def test_differently_named_sources_stay_separate_without_explicit_mapping(self):
         fake_st = _Streamlit()
