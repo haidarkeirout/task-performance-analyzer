@@ -86,6 +86,7 @@ def _period_defaults(prepared_items: tuple[Any, ...]) -> tuple[date, date]:
 def _preview_table_rows(rows: Any) -> list[dict[str, Any]]:
     return [
         {
+            "Company": row.company_name or row.project_name,
             "Project": row.project_name,
             "Source Tool": row.source_tool,
             "Space": row.space,
@@ -172,8 +173,10 @@ def render_company_launcher(st: Any) -> None:
     """Render the automatic Company preview and date-only run controls."""
     prepared_items = tuple(st.session_state.get("company_prepared_items") or ())
     has_analysis = st.session_state.get("company_analysis") is not None
+    selected_company_name = st.session_state.get("company_selected_company_name", "Company")
     with st.expander(
-        "Company Performance — All Projects" if not has_analysis else "Collected Tasks & Analysis Period",
+        f"Company Performance — {selected_company_name}"
+        if not has_analysis else "Collected Tasks & Analysis Period",
         expanded=bool(prepared_items) and not has_analysis,
     ):
         if not prepared_items:
@@ -184,9 +187,8 @@ def render_company_launcher(st: Any) -> None:
             return
 
         st.caption(
-            "The system collected every accessible Jira project and ClickUp Space. "
-            "Source Spaces are grouped under inferred project names; the original "
-            "source Space remains visible in task details."
+            f"Scope: {selected_company_name}. The original source Space/Project remains "
+            "visible in task details; Company and Project grouping are kept separately."
         )
 
         project_rows = []
@@ -202,7 +204,7 @@ def render_company_launcher(st: Any) -> None:
                 "Source Spaces": " | ".join(sorted(source_spaces)),
             })
 
-        st.subheader("Detected Projects")
+        st.subheader("Detected Company Sources")
         st.dataframe(project_rows, hide_index=True, use_container_width=True)
 
         jira_items = tuple(item for item in prepared_items if getattr(item, "source_tool", "") == "Jira")

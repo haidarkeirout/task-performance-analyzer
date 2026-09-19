@@ -34,6 +34,11 @@ from clickup_analysis import analyze_clickup, analysis_excel
 from clickup_report import create_clickup_word_report
 from company_performance.dashboard import metric_help
 from kpi_transparency import build_population, render_population_card
+from company_performance.collection import (
+    ALL_COMPANIES_ID,
+    company_option_label,
+    discover_company_catalog,
+)
 from company_performance.ui import (
     remember_prepared_source,
     render_company_launcher,
@@ -1338,7 +1343,9 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "company_prepared_jira", "company_prepared_clickup",
         "company_prepared_jira_spaces", "company_prepared_clickup_spaces",
         "company_selected_jira_spaces", "company_selected_clickup_spaces",
-        "company_selected_company",
+        "company_selected_company", "company_selected_company_name", "company_active_selection",
+        "company_catalog", "company_catalog_revision", "company_collection_selection",
+        "company_collection_company_name",
         "company_unified_project", "company_period_start", "company_period_end",
         "project_catalog_revision", "project_selected_jira_space", "project_selected_clickup_space",
         "project_selection_fingerprint", "project_jira_prepared", "project_clickup_prepared",
@@ -1350,19 +1357,64 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
     st.session_state["active_analysis_mode"] = analysis_mode
 st.caption("Choose an analysis, apply its filters, and run the available process analysis.")
 if analysis_mode == "company":
-    # Presentation-only gate: once a company is selected, the existing Company
-    # collection and analysis flow below runs unchanged.
+    # Company mode discovers the connected source catalog before collecting any
+    # tasks.  The selected ID is stable for the session; display names remain
+    # presentation-only.
+    company_catalog = discover_company_catalog(settings)
+    if not company_catalog:
+        st.selectbox(
+            "Choose Company",
+            ["Choose a company"],
+            index=0,
+            key="company_selected_company",
+        )
+        st.info(
+            "Choose a company once a connected source is available. "
+            "No companies were discovered from the connected Jira or ClickUp sources yet."
+        )
+        st.stop()
+    company_options = [ALL_COMPANIES_ID, *(entry.company_id for entry in company_catalog)]
+    company_labels = {
+        ALL_COMPANIES_ID: f"All Companies ({len(company_catalog)} available)",
+        **{entry.company_id: company_option_label(entry) for entry in company_catalog},
+    }
     selected_company = st.selectbox(
         "Choose Company",
-        ["Choose a company", "Company"],
+        ["Choose a company", *company_options],
         index=0,
+        format_func=lambda value: "Choose a company" if value == "Choose a company" else company_labels[value],
         key="company_selected_company",
     )
     if selected_company == "Choose a company":
-        st.info("Choose a company to load its Jira Projects and ClickUp Spaces.")
+        st.info("Choose a company or All Companies to load its Jira Projects and ClickUp Spaces.")
         st.stop()
+    selected_entry = next(
+        (entry for entry in company_catalog if entry.company_id == selected_company),
+        None,
+    )
+    selected_company_name = (
+        "All Companies" if selected_company == ALL_COMPANIES_ID
+        else selected_entry.company_name if selected_entry else selected_company
+    )
+    if st.session_state.get("company_active_selection") != selected_company:
+        for key in (
+            "company_prepared_items",
+            "company_collection_attempted",
+            "company_collection_error",
+            "company_collection_errors",
+            "company_partial_prepared_items",
+            "company_analysis",
+            "company_report_key",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state["company_active_selection"] = selected_company
+    st.session_state["company_selected_company_name"] = selected_company_name
 
-prepared_data, run_button = render_collection(settings, analysis_mode=analysis_mode)
+prepared_data, run_button = render_collection(
+    settings,
+    analysis_mode=analysis_mode,
+    company_selection=selected_company if analysis_mode == "company" else None,
+)
 cutoff_text = prepared_data.cutoff if prepared_data else ""
 
 if analysis_mode == "project":

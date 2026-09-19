@@ -213,14 +213,14 @@ def _render_active_job_full_rerun(job):
     return prepared, run_clicked
 
 
-def render_collection(settings, analysis_mode="existing"):
+def render_collection(settings, analysis_mode="existing", company_selection=None):
     """Route to the selected connector without sharing collection state."""
     if analysis_mode == "employee":
         return render_employee_collection(settings)
     if analysis_mode == "project":
         return render_project_collection(settings)
     if analysis_mode == "company":
-        return render_company_collection(settings)
+        return render_company_collection(settings, selected_company=company_selection)
     if analysis_mode == "department":
         # Department has its own Department-first ClickUp flow. Do not route it
         # through the legacy Space-first connector selector.

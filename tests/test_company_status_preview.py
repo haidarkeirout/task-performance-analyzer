@@ -10,12 +10,13 @@ from openpyxl import Workbook, load_workbook
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from company_performance.adapters import adapt_clickup_collection
-from company_performance.application import build_company_analysis, build_company_preview, filter_company_preview
+from company_performance.application import CompanyPreparedItem, build_company_analysis, build_company_preview, filter_company_preview
 from company_performance.dashboard import DashboardFilters, build_company_dashboard
 from company_performance.models import StatusTransition, TaskRecord, UnifiedStatus
 from company_performance.normalization import deduplicate_tasks, normalize_status
 from company_performance.workflow import reconstruct_task
 from company_performance.outputs import write_company_excel, write_company_word_report
+from company_performance.ui import _preview_table_rows
 
 def jira_xlsx(space='Engineering', status='Done'):
     wb=Workbook();s=wb.active;s.title='Jira_Data';s.append(['Issue key','Issue id','Summary','Project key','Project name','Status','Priority','Assignee','Created','Due date','Custom field (Start date)']);s.append(['ENG-1','1','Ship feature','ENG',space,status,'High','Maya','2026-09-01T08:00:00Z','2026-09-10','2026-09-02']);b=BytesIO();wb.save(b);return b.getvalue()
@@ -33,14 +34,36 @@ class CompanySourceSelectionTests(unittest.TestCase):
         text=(ROOT/'src/company_performance/ui.py').read_text(encoding='utf-8')
         self.assertIn('collect_company_spaces', (ROOT/'src/company_performance/collection.py').read_text(encoding='utf-8'))
         self.assertIn('Complete Task Preview', text)
+        self.assertIn('"Company": row.company_name', text)
         self.assertIn('Analysis Period From', text)
         self.assertIn('Analysis Period To', text)
         self.assertIn('Run Company Analysis', text)
+
+    def test_app_exposes_all_companies_and_passes_selected_scope_to_collection(self):
+        text=(ROOT/'app.py').read_text(encoding='utf-8')
+        self.assertIn('ALL_COMPANIES_ID', text)
+        self.assertIn('All Companies', text)
+        self.assertIn('company_selection=selected_company', text)
     def test_combined_preview_contains_selected_jira_and_clickup(self):
         rows=build_company_preview(jira_prepared=(JiraPrepared(),),clickup_prepared=(ClickPrepared(),))
         self.assertEqual({r.source_tool for r in rows},{'Jira','ClickUp'})
         click=next(r for r in rows if r.source_tool=='ClickUp')
         self.assertEqual(click.space,'Growth');self.assertEqual(click.original_status,'Review');self.assertEqual(click.final_status,'In Review')
+
+    def test_all_companies_preview_preserves_company_label(self):
+        prepared = CompanyPreparedItem(
+            prepared=JiraPrepared(),
+            source_tool='Jira',
+            source_space='Engineering',
+            project_name='Najm Al-Shamal [TEST]',
+            company_id='najm-al-shamal-test',
+            company_name='Najm Al-Shamal [TEST]',
+            source_id='NAST',
+            source_kind='jira_project',
+        )
+        rows = build_company_preview(jira_prepared=(prepared,))
+        self.assertEqual(rows[0].company_name, 'Najm Al-Shamal [TEST]')
+        self.assertEqual(_preview_table_rows(rows)[0]['Company'], 'Najm Al-Shamal [TEST]')
     def test_preview_filtering_covers_requested_fields(self):
         rows=build_company_preview(jira_prepared=(JiraPrepared(),),clickup_prepared=(ClickPrepared(),ClickPrepared(space='Ops',task_id='cu-2',status={'status':'In Progress'},priority='1',name='Launch API')))
         self.assertEqual(len(filter_company_preview(rows,source_tools=['ClickUp'])),2)

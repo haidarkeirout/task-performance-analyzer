@@ -47,6 +47,10 @@ class CompanyPreparedItem:
     source_tool: str
     source_space: str
     project_name: str
+    company_id: str | None = None
+    company_name: str | None = None
+    source_id: str | None = None
+    source_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,7 @@ class CompanyPreviewRow:
     priority: str
     due_date: date | None
     project_name: str | None = None
+    company_name: str | None = None
 
 
 def _value(row: Mapping[str, Any], name: str) -> Any:
@@ -131,6 +136,13 @@ def _prepared_metadata(item: Any) -> tuple[Any, str | None, str | None]:
     )
 
 
+def _prepared_company_name(item: Any) -> str | None:
+    """Return the discovered company label when collection metadata exists."""
+    if isinstance(item, CompanyPreparedItem):
+        return item.company_name or item.project_name
+    return getattr(item, "company_name", None)
+
+
 def _adapt_jira_prepared(item: Any, unified_project: str):
     prepared_data, _, source_space = _prepared_metadata(item)
     return adapt_jira_collection(
@@ -158,11 +170,15 @@ def build_company_preview(
 ) -> tuple[CompanyPreviewRow, ...]:
     """Build the combined source preview without running historical analysis."""
     sources = []
+    prepared_by_scope: dict[tuple[str, str | None, str | None], str | None] = {}
     for prepared in _prepared_items(jira_prepared):
         _, project_name, _ = _prepared_metadata(prepared)
+        source_space = _prepared_metadata(prepared)[2]
+        prepared_by_scope[("Jira", source_space, project_name)] = _prepared_company_name(prepared)
         sources.append(_adapt_jira_prepared(prepared, project_name or "Preview"))
     for prepared in _prepared_items(clickup_prepared):
         prepared_data, project_name, source_space = _prepared_metadata(prepared)
+        prepared_by_scope[("ClickUp", source_space, project_name)] = _prepared_company_name(prepared)
         sources.append(
             adapt_clickup_prepared(
                 prepared_data,
@@ -185,6 +201,9 @@ def build_company_preview(
             priority=normalize_priority(task.source_tool, task.priority),
             due_date=task.due_date,
             project_name=task.unified_project,
+            company_name=prepared_by_scope.get(
+                (task.source_tool, task.source_space, task.unified_project)
+            ),
         )
         for task in records
     )
