@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Iterable, Mapping
@@ -42,6 +44,10 @@ class EmployeeRecord:
 
 
 def _active(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        return bool(value)
     return str(value or "").strip().casefold() in {
         "1",
         "true",
@@ -49,6 +55,31 @@ def _active(value: object) -> bool:
         "y",
         "on",
     }
+
+
+def _text(value: object) -> str:
+    """Return a stable cell value without leaking pandas' NaN marker."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
+def _primary_source(value: object) -> str:
+    """Normalize harmless Excel variations while keeping routing unambiguous."""
+    raw = unicodedata.normalize("NFKC", _text(value)).casefold()
+    compact = re.sub(r"[^a-z0-9]+", "", raw)
+    return {
+        "jira": "jira",
+        "jiracloud": "jira",
+        "atlassianjira": "jira",
+        "clickup": "clickup",
+        "clickupcloud": "clickup",
+    }.get(compact, raw)
 
 
 def _directory_url() -> str:
@@ -164,8 +195,17 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
     seen: set[str] = set()
 
     for line_number, row in enumerate(rows, 2):
-        name = str(row.get("employee_name") or "").strip()
-        source = str(row.get("primary_source") or "").strip().casefold()
+        name = _text(row.get("employee_name"))
+        active = _active(row.get("active", ""))
+
+        # The workbook may retain inactive employees or blank template rows.
+        # They are not part of Employee analysis and must not block active rows
+        # because their source/ID fields are intentionally incomplete.
+        if not active:
+            continue
+
+        raw_source = _text(row.get("primary_source"))
+        source = _primary_source(raw_source)
         if not name:
             raise ValueError(
                 f"Employee directory row {line_number} in {source_label} has no employee_name."
@@ -176,11 +216,12 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
             )
         if source not in {"jira", "clickup"}:
             raise ValueError(
-                f"Employee directory row {line_number} has an invalid primary_source."
+                f"Employee directory row {line_number} ({name}) has an invalid "
+                f"primary_source {raw_source!r}. Use 'jira' or 'clickup'."
             )
 
-        jira_id = str(row.get("jira_account_id") or "").strip()
-        clickup_id = str(row.get("clickup_user_id") or "").strip()
+        jira_id = _text(row.get("jira_account_id"))
+        clickup_id = _text(row.get("clickup_user_id"))
         if source == "jira" and not jira_id:
             raise ValueError(
                 f"Employee directory row {line_number} needs jira_account_id."
@@ -194,11 +235,11 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
         records.append(
             EmployeeRecord(
                 name=name,
-                department=str(row.get("department") or "").strip(),
+                department=_text(row.get("department")),
                 primary_source=source,
                 jira_account_id=jira_id,
                 clickup_user_id=clickup_id,
-                active=_active(row.get("active", "")),
+                active=active,
             )
         )
 
