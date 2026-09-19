@@ -30,6 +30,18 @@ def jira_workbook() -> bytes:
     return stream.getvalue()
 
 
+def jira_workbook_with_epic() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Jira_Data"
+    sheet.append(["Issue key", "Issue id", "Summary", "Issue Type", "Project key", "Project name", "Status", "Created"])
+    sheet.append(["ENG-EPIC", "10", "Website rollout", "Epic", "ENG", "Engineering", "Done", "2026-09-01T08:00:00Z"])
+    sheet.append(["ENG-1", "11", "Ship feature", "Task", "ENG", "Engineering", "Done", "2026-09-01T08:00:00Z"])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 class JiraPrepared:
     xlsx = jira_workbook()
     space_name = "Engineering"
@@ -47,6 +59,24 @@ class JiraPrepared:
     }).encode()
 
 
+class JiraEpicPrepared:
+    xlsx = jira_workbook_with_epic()
+    space_name = "Engineering"
+    collected_at = "2026-09-30T20:00:00Z"
+    history_json = json.dumps({
+        key: {
+            "history_complete": True,
+            "history_through": "2026-09-30T20:00:00Z",
+            "initial_status": "To Do",
+            "status_events": [
+                {"changed_at": "2026-09-02T08:00:00Z", "from_status": "To Do", "to_status": "In Progress"},
+                {"changed_at": "2026-09-03T08:00:00Z", "from_status": "In Progress", "to_status": "Done"},
+            ],
+        }
+        for key in ("ENG-EPIC", "ENG-1")
+    }).encode()
+
+
 class ClickUpPrepared:
     space_name = "Growth"
     collected_at = "2026-09-30T20:00:00Z"
@@ -60,6 +90,14 @@ class ClickUpPrepared:
 
 
 class CompanyApplicationTests(unittest.TestCase):
+    def test_jira_epics_are_not_counted_as_company_tasks(self):
+        result = build_company_analysis(
+            period_start=date(2026, 9, 1), period_end=date(2026, 9, 30),
+            jira_prepared=JiraEpicPrepared(), jira_project="Company Delivery",
+        )
+        self.assertEqual(result.model.kpis.total_tasks, 1)
+        self.assertEqual(result.model.kpis.completed_tasks, 1)
+
     def test_streamlit_bridge_keeps_one_prepared_payload_per_source(self):
         """Company mode reuses authenticated collector output; it never owns credentials."""
         session_state = {}

@@ -144,6 +144,23 @@ def _parent(value: Any) -> str | None:
     return _text(value)
 
 
+def _issue_type(value: Any) -> str | None:
+    """Return Jira's work-item type without interpreting its business meaning."""
+    return _named(value)
+
+
+def _jira_type_key(value: str | None) -> str:
+    return " ".join(str(value or "").strip().casefold().replace("_", " ").split())
+
+
+def _jira_is_epic(issue_type: str | None) -> bool:
+    return _jira_type_key(issue_type) in {"epic", "portfolio epic", "initiative"}
+
+
+def _jira_is_subtask(issue_type: str | None) -> bool:
+    return _jira_type_key(issue_type) in {"sub-task", "subtask", "sub task"}
+
+
 def _parent_classification(parent_id: str | None) -> ParentClassification:
     return ParentClassification.SUBTASK if parent_id else ParentClassification.STANDALONE
 
@@ -157,8 +174,20 @@ def _classify_parent_relationships(records: list[TaskRecord]) -> None:
     """
     referenced_parent_ids = {record.parent_id for record in records if record.parent_id}
     for record in records:
+        # A Jira Epic is a container even when work items reference it as their
+        # parent.  It must never be promoted to an operational parent task.
+        if record.parent_classification is ParentClassification.CONTAINER:
+            continue
         if record.parent_id:
-            record.parent_classification = ParentClassification.SUBTASK
+            # Jira's ``parent`` field is also used for an Epic relationship in
+            # newer Cloud APIs.  Only an explicitly typed Sub-task is a
+            # completion/KPI child; Task/Story/Bug remain operational items.
+            if not (
+                record.source_tool.strip().casefold() == "jira"
+                and record.issue_type
+                and not _jira_is_subtask(record.issue_type)
+            ):
+                record.parent_classification = ParentClassification.SUBTASK
         elif record.task_id in referenced_parent_ids:
             record.parent_classification = ParentClassification.INDEPENDENT
         else:
@@ -249,6 +278,7 @@ def adapt_jira_collection(
             complete_count += 1
         status = fields.get("status")
         priority = fields.get("priority")
+        issue_type = _issue_type(fields.get("issuetype") or fields.get("issue_type"))
         parent_id = _parent(fields.get("parent"))
         start_value = None
         if planned_start_field:
@@ -265,10 +295,19 @@ def adapt_jira_collection(
             flags.add("Missing Workflow Coverage Timestamp")
         if history and len(workflow) < len(history.get("status_events") or ()):
             flags.add("Invalid Workflow Event")
+        if _jira_is_epic(issue_type):
+            parent_classification = ParentClassification.CONTAINER
+        elif _jira_is_subtask(issue_type):
+            parent_classification = _parent_classification(parent_id)
+        else:
+            # A standard Jira issue may have an Epic in ``fields.parent``;
+            # that relationship is hierarchy metadata, not a Sub-task.
+            parent_classification = ParentClassification.STANDALONE
         record = TaskRecord(
             source_tool="Jira",
             task_id=task_id,
             task_name=_text(fields.get("summary")),
+            issue_type=issue_type,
             source_space=actual_space,
             unified_project=unified_project,
             department="Tech Development",
@@ -280,7 +319,7 @@ def adapt_jira_collection(
             planned_start_date=_source_date(start_value),
             due_date=_source_date(fields.get("duedate")),
             parent_id=parent_id,
-            parent_classification=_parent_classification(parent_id),
+            parent_classification=parent_classification,
             collection_timestamp=collected_at,
             history_through=history_through,
             workflow_history=workflow,

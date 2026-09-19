@@ -19,6 +19,40 @@ from company_performance.models import ParentClassification
 
 
 class JiraAdapterTests(unittest.TestCase):
+    def test_jira_epic_is_container_and_epic_children_are_not_subtasks(self):
+        epic = {
+            "key": "TECH-EPIC",
+            "fields": {
+                "summary": "Website rollout", "issuetype": {"name": "Epic"},
+                "project": {"name": "Platform"}, "status": {"name": "Done"},
+            },
+        }
+        task = {
+            "key": "TECH-1",
+            "fields": {
+                "summary": "Build landing page", "issuetype": {"name": "Task"},
+                "project": {"name": "Platform"}, "status": {"name": "Done"},
+                # Jira Cloud uses parent for an Epic relationship as well as
+                # for native Sub-task relationships.
+                "parent": {"key": "TECH-EPIC"},
+            },
+        }
+        subtask = {
+            "key": "TECH-2",
+            "fields": {
+                "summary": "Write copy", "issuetype": {"name": "Sub-task"},
+                "project": {"name": "Platform"}, "status": {"name": "Done"},
+                "parent": {"key": "TECH-1"},
+            },
+        }
+
+        result = adapt_jira_collection([epic, task, subtask], {}, unified_project="P")
+        records = {record.task_id: record for record in result.records}
+        self.assertEqual(records["TECH-EPIC"].issue_type, "Epic")
+        self.assertIs(records["TECH-EPIC"].parent_classification, ParentClassification.CONTAINER)
+        self.assertIs(records["TECH-1"].parent_classification, ParentClassification.STANDALONE)
+        self.assertIs(records["TECH-2"].parent_classification, ParentClassification.SUBTASK)
+
     def test_jira_parent_and_subtask_relationships_are_classified(self):
         parent = {
             "key": "TECH-1",

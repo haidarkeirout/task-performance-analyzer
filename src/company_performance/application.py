@@ -104,6 +104,7 @@ def _jira_export_issues(prepared_data: Any) -> list[dict[str, Any]]:
             "id": str(_value(row, "Issue id") or ""),
             "fields": {
                 "summary": _value(row, "Summary"),
+                "issuetype": {"name": _value(row, "Issue Type")},
                 "project": {"key": _value(row, "Project key"), "name": _value(row, "Project name")},
                 "status": {"name": _value(row, "Status")},
                 "priority": {"name": _value(row, "Priority")},
