@@ -151,6 +151,20 @@ def _parent(value: Any) -> str | None:
     return _text(value)
 
 
+def _parent_name(value: Any) -> str | None:
+    """Read a Jira parent/Epic summary when the API includes it inline."""
+    if not isinstance(value, Mapping):
+        return None
+    for key in ("summary", "name"):
+        result = _text(value.get(key))
+        if result:
+            return result
+    nested_fields = value.get("fields")
+    if isinstance(nested_fields, Mapping):
+        return _text(nested_fields.get("summary") or nested_fields.get("name"))
+    return None
+
+
 def _issue_type(value: Any) -> str | None:
     """Return Jira's work-item type without interpreting its business meaning."""
     return _named(value)
@@ -199,6 +213,34 @@ def _classify_parent_relationships(records: list[TaskRecord]) -> None:
             record.parent_classification = ParentClassification.INDEPENDENT
         else:
             record.parent_classification = ParentClassification.STANDALONE
+
+
+def _attach_jira_epic_names(records: list[TaskRecord]) -> None:
+    """Resolve Jira Epic keys to business-facing Epic/Workstream names.
+
+    A Jira export can contain either the modern ``parent`` relation or the
+    legacy Epic Link custom field.  Both are represented by ``parent_id`` in
+    the neutral record; resolving against the collected Epic rows keeps the
+    company/project name separate from the Epic workstream name.
+    """
+    by_id = {record.task_id: record for record in records}
+    epic_names = {
+        record.task_id: record.task_name
+        for record in records
+        if _jira_is_epic(record.issue_type) and record.task_name
+    }
+    for record in records:
+        if record.source_tool.strip().casefold() != "jira" or _jira_is_epic(record.issue_type):
+            continue
+        parent = by_id.get(record.parent_id) if record.parent_id else None
+        if parent and _jira_is_epic(parent.issue_type):
+            record.epic_name = parent.task_name
+        elif parent and parent.epic_name:
+            # Carry the workstream through a real Jira Sub-task nested below
+            # an operational Task.
+            record.epic_name = parent.epic_name
+        elif record.parent_id in epic_names:
+            record.epic_name = epic_names[record.parent_id]
 
 
 def _history_transitions(history: Mapping[str, Any] | None) -> tuple[StatusTransition, ...]:
@@ -289,6 +331,7 @@ def adapt_jira_collection(
         parent_id = _parent(fields.get("parent")) or _parent(
             fields.get("epic_link") or fields.get("epicLink")
         )
+        inline_parent_name = _parent_name(fields.get("parent"))
         start_value = None
         if planned_start_field:
             start_value = fields.get(planned_start_field)
@@ -328,6 +371,7 @@ def adapt_jira_collection(
             planned_start_date=_source_date(start_value),
             due_date=_source_date(fields.get("duedate")),
             parent_id=parent_id,
+            epic_name=inline_parent_name if _jira_is_epic(issue_type) is False and not _jira_is_subtask(issue_type) else None,
             parent_classification=parent_classification,
             collection_timestamp=collected_at,
             history_through=history_through,
@@ -340,6 +384,7 @@ def adapt_jira_collection(
         raw_workflow.append((record.unique_key, history))
 
     _classify_parent_relationships(records)
+    _attach_jira_epic_names(records)
 
     flags: list[str] = []
     if not values:

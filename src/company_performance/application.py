@@ -70,6 +70,7 @@ class CompanyPreviewRow:
     issue_type: str | None = None
     parent_id: str | None = None
     parent_classification: str | None = None
+    epic_name: str | None = None
 
 
 def _value(row: Mapping[str, Any], name: str) -> Any:
@@ -245,6 +246,7 @@ def build_company_preview(
             ),
             parent_id=task.parent_id,
             parent_classification=task.parent_classification.value,
+            epic_name=task.epic_name,
         )
         for task in records
     )

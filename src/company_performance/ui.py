@@ -89,6 +89,7 @@ def _preview_table_rows(rows: Any) -> list[dict[str, Any]]:
             "Company": row.company_name or row.project_name,
             "Project": row.project_name,
             "Issue Type": row.issue_type,
+            "Epic / Workstream": row.epic_name,
             "Parent / Epic": row.parent_id,
             "Hierarchy Role": row.parent_classification,
             "Source Tool": row.source_tool,

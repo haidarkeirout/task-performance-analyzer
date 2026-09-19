@@ -86,6 +86,7 @@ class TaskRecord:
     planned_start_date: date | None = None
     due_date: date | None = None
     parent_id: str | None = None
+    epic_name: str | None = None
     parent_classification: ParentClassification = ParentClassification.STANDALONE
     collection_timestamp: datetime | None = None
     history_through: datetime | None = None

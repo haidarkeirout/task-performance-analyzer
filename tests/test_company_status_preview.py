@@ -103,8 +103,10 @@ class CompanySourceSelectionTests(unittest.TestCase):
         self.assertEqual(epic.parent_classification, 'Container Parent')
         self.assertEqual(child.issue_type, 'Task')
         self.assertEqual(child.parent_id, 'ENG-EPIC')
+        self.assertEqual(child.epic_name, 'Website rollout')
         table = _preview_table_rows(rows)
         child_table = next(row for row in table if row['Task Name'] == 'Ship landing page')
+        self.assertEqual(child_table['Epic / Workstream'], 'Website rollout')
         self.assertEqual(child_table['Parent / Epic'], 'ENG-EPIC')
         self.assertEqual(child_table['Issue Type'], 'Task')
     def test_preview_filtering_covers_requested_fields(self):

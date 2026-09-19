@@ -50,6 +50,8 @@ class JiraAdapterTests(unittest.TestCase):
         records = {record.task_id: record for record in result.records}
         self.assertEqual(records["TECH-EPIC"].issue_type, "Epic")
         self.assertIs(records["TECH-EPIC"].parent_classification, ParentClassification.CONTAINER)
+        self.assertIsNone(records["TECH-EPIC"].epic_name)
+        self.assertEqual(records["TECH-1"].epic_name, "Website rollout")
         self.assertIs(records["TECH-1"].parent_classification, ParentClassification.STANDALONE)
         self.assertIs(records["TECH-2"].parent_classification, ParentClassification.SUBTASK)
 
