@@ -141,6 +141,13 @@ def _parent(value: Any) -> str | None:
             if result:
                 return result
         return None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, Mapping):
+            return _parent(parsed)
     return _text(value)
 
 
@@ -279,7 +286,9 @@ def adapt_jira_collection(
         status = fields.get("status")
         priority = fields.get("priority")
         issue_type = _issue_type(fields.get("issuetype") or fields.get("issue_type"))
-        parent_id = _parent(fields.get("parent"))
+        parent_id = _parent(fields.get("parent")) or _parent(
+            fields.get("epic_link") or fields.get("epicLink")
+        )
         start_value = None
         if planned_start_field:
             start_value = fields.get(planned_start_field)

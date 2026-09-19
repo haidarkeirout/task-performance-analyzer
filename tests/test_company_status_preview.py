@@ -64,6 +64,49 @@ class CompanySourceSelectionTests(unittest.TestCase):
         rows = build_company_preview(jira_prepared=(prepared,))
         self.assertEqual(rows[0].company_name, 'Najm Al-Shamal [TEST]')
         self.assertEqual(_preview_table_rows(rows)[0]['Company'], 'Najm Al-Shamal [TEST]')
+
+    def test_jira_preview_exposes_issue_type_and_epic_relationship(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Jira_Data'
+        sheet.append([
+            'Issue key', 'Issue id', 'Summary', 'Issue Type', 'Parent',
+            'Project key', 'Project name', 'Status', 'Created',
+        ])
+        sheet.append([
+            'ENG-EPIC', '10', 'Website rollout', 'Epic', None,
+            'ENG', 'Engineering', 'Done', '2026-09-01T08:00:00Z',
+        ])
+        sheet.append([
+            'ENG-1', '11', 'Ship landing page', 'Task',
+            '{"key":"ENG-EPIC"}', 'ENG', 'Engineering', 'Done',
+            '2026-09-01T08:00:00Z',
+        ])
+        stream = BytesIO()
+        workbook.save(stream)
+
+        prepared = JiraPrepared()
+        prepared.xlsx = stream.getvalue()
+        prepared.history_json = json.dumps({
+            key: {
+                'history_complete': True,
+                'history_through': '2026-09-30T20:00:00Z',
+                'initial_status': 'To Do',
+                'status_events': [],
+            }
+            for key in ('ENG-EPIC', 'ENG-1')
+        }).encode()
+        rows = build_company_preview(jira_prepared=(prepared,))
+        epic = next(row for row in rows if row.task_name == 'Website rollout')
+        child = next(row for row in rows if row.task_name == 'Ship landing page')
+        self.assertEqual(epic.issue_type, 'Epic')
+        self.assertEqual(epic.parent_classification, 'Container Parent')
+        self.assertEqual(child.issue_type, 'Task')
+        self.assertEqual(child.parent_id, 'ENG-EPIC')
+        table = _preview_table_rows(rows)
+        child_table = next(row for row in table if row['Task Name'] == 'Ship landing page')
+        self.assertEqual(child_table['Parent / Epic'], 'ENG-EPIC')
+        self.assertEqual(child_table['Issue Type'], 'Task')
     def test_preview_filtering_covers_requested_fields(self):
         rows=build_company_preview(jira_prepared=(JiraPrepared(),),clickup_prepared=(ClickPrepared(),ClickPrepared(space='Ops',task_id='cu-2',status={'status':'In Progress'},priority='1',name='Launch API')))
         self.assertEqual(len(filter_company_preview(rows,source_tools=['ClickUp'])),2)

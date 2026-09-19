@@ -67,11 +67,40 @@ class CompanyPreviewRow:
     due_date: date | None
     project_name: str | None = None
     company_name: str | None = None
+    issue_type: str | None = None
+    parent_id: str | None = None
+    parent_classification: str | None = None
 
 
 def _value(row: Mapping[str, Any], name: str) -> Any:
     value = row.get(name)
     return None if value == "" else value
+
+
+def _row_value(row: Mapping[str, Any], *names: str) -> Any:
+    """Read a Jira export column while tolerating collector naming variants."""
+    for name in names:
+        value = _value(row, name)
+        if value is not None:
+            return value
+    expected = {name.strip().casefold() for name in names}
+    for key, value in row.items():
+        if str(key).strip().casefold() in expected and value not in (None, ""):
+            return value
+    return None
+
+
+def _jira_reference(value: Any) -> Any:
+    """Restore a Jira relation stored as a plain value or exported JSON text."""
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, Mapping) else value
+    return value
 
 
 def _jira_export_issues(prepared_data: Any) -> list[dict[str, Any]]:
@@ -95,23 +124,29 @@ def _jira_export_issues(prepared_data: Any) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for values in rows:
         row = dict(zip(headers, values))
-        key = _value(row, "Issue key") or _value(row, "Issue id")
+        key = _row_value(row, "Issue key") or _row_value(row, "Issue id")
         if not key:
             continue
-        assignee = _value(row, "Assignee")
+        assignee = _row_value(row, "Assignee")
+        parent = _jira_reference(_row_value(row, "Parent", "Parent key", "Parent ID"))
+        epic_link = _jira_reference(_row_value(
+            row, "Epic Link", "Epic link", "Custom field (Epic Link)"
+        ))
         output.append({
             "key": str(key),
-            "id": str(_value(row, "Issue id") or ""),
+            "id": str(_row_value(row, "Issue id") or ""),
             "fields": {
-                "summary": _value(row, "Summary"),
-                "issuetype": {"name": _value(row, "Issue Type")},
-                "project": {"key": _value(row, "Project key"), "name": _value(row, "Project name")},
-                "status": {"name": _value(row, "Status")},
-                "priority": {"name": _value(row, "Priority")},
+                "summary": _row_value(row, "Summary"),
+                "issuetype": {"name": _row_value(row, "Issue Type")},
+                "project": {"key": _row_value(row, "Project key"), "name": _row_value(row, "Project name")},
+                "status": {"name": _row_value(row, "Status")},
+                "priority": {"name": _row_value(row, "Priority")},
                 "assignee": {"displayName": assignee} if assignee else None,
-                "created": _value(row, "Created"),
-                "duedate": _value(row, "Due date"),
-                "start_date": _value(row, "Custom field (Start date)"),
+                "created": _row_value(row, "Created"),
+                "duedate": _row_value(row, "Due date"),
+                "start_date": _row_value(row, "Custom field (Start date)"),
+                "parent": parent,
+                "epic_link": epic_link,
             },
         })
     return output
@@ -205,6 +240,11 @@ def build_company_preview(
             company_name=prepared_by_scope.get(
                 (task.source_tool, task.source_space, task.unified_project)
             ),
+            issue_type=task.issue_type or (
+                "Sub-task" if task.parent_classification.value == "Subtask" else "Task"
+            ),
+            parent_id=task.parent_id,
+            parent_classification=task.parent_classification.value,
         )
         for task in records
     )
