@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from company_performance.collection import (
     _project_names,
     collect_company_spaces,
     discover_company_catalog,
+    persist_company_source_mappings,
     remember_company_source_mapping,
 )
 
@@ -164,6 +167,34 @@ class CompanyCollectionCompletenessTests(unittest.TestCase):
         self.assertEqual(registry["jira:NAST"]["company_id"], "najm-al-shamal")
         self.assertEqual(registry["clickup:901234"]["company_id"], "najm-al-shamal")
         self.assertIn("Najm Al-Shamal Website", registry["jira:NAST"]["aliases"])
+
+    def test_mapping_registry_can_be_reloaded_after_a_new_session(self):
+        fake_st = _Streamlit()
+        registry = {
+            "jira:NAST": {
+                "company_id": "najm-al-shamal",
+                "company_name": "Najm Al-Shamal",
+                "aliases": ["Najm Al-Shamal Website"],
+            },
+            "clickup:901234": {
+                "company_id": "najm-al-shamal",
+                "company_name": "Najm Al-Shamal",
+                "aliases": ["Najm Al-Shamal"],
+            },
+        }
+        with TemporaryDirectory() as directory:
+            mapping_path = Path(directory) / "company_source_mappings.json"
+            with patch("company_performance.collection.COMPANY_SOURCE_MAPPING_PATH", mapping_path):
+                persist_company_source_mappings(registry)
+                self.assertEqual(mapping_path.read_text(encoding="utf-8").strip().startswith("{"), True)
+
+                fresh_st = _Streamlit()
+                with patch("company_performance.collection.st", fresh_st):
+                    from company_performance.collection import _source_mapping_registry
+
+                    loaded = _source_mapping_registry()
+
+        self.assertEqual(loaded, registry)
 
     def test_differently_named_sources_stay_separate_without_explicit_mapping(self):
         fake_st = _Streamlit()

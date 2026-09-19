@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 import streamlit as st
@@ -33,6 +34,9 @@ _PREFIX_RE = re.compile(
 
 ALL_COMPANIES_ID = "__all_companies__"
 COMPANY_SOURCE_MAPPINGS_KEY = "company_source_mappings"
+COMPANY_SOURCE_MAPPING_PATH = (
+    Path(__file__).resolve().parents[2] / "configs" / "company_source_mappings.json"
+)
 
 
 @dataclass(frozen=True)
@@ -128,8 +132,36 @@ def _mapping_record(value: Any) -> tuple[str, str, tuple[str, ...]] | None:
 
 
 def _source_mapping_registry() -> dict[str, Any]:
-    raw = st.session_state.get(COMPANY_SOURCE_MAPPINGS_KEY) or {}
-    return dict(raw) if isinstance(raw, Mapping) else {}
+    persisted: dict[str, Any] = {}
+    try:
+        payload = json.loads(COMPANY_SOURCE_MAPPING_PATH.read_text(encoding="utf-8"))
+        if isinstance(payload, Mapping):
+            persisted = dict(payload)
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as exc:
+        st.session_state["company_mapping_persistence_error"] = str(exc)
+
+    raw = st.session_state.get(COMPANY_SOURCE_MAPPINGS_KEY)
+    if not isinstance(raw, Mapping):
+        st.session_state[COMPANY_SOURCE_MAPPINGS_KEY] = dict(persisted)
+        return persisted
+    merged = dict(persisted)
+    merged.update(raw)
+    st.session_state[COMPANY_SOURCE_MAPPINGS_KEY] = merged
+    return merged
+
+
+def persist_company_source_mappings(registry: Mapping[str, Any] | None = None) -> None:
+    """Write the validated source mapping registry for reuse after restart."""
+    values = dict(_source_mapping_registry() if registry is None else registry)
+    COMPANY_SOURCE_MAPPING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = COMPANY_SOURCE_MAPPING_PATH.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(values, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(COMPANY_SOURCE_MAPPING_PATH)
 
 
 def remember_company_source_mapping(
@@ -137,7 +169,7 @@ def remember_company_source_mapping(
     source_entry: CompanyCatalogEntry,
     target_entry: CompanyCatalogEntry,
 ) -> dict[str, Any]:
-    """Persist an explicit cross-platform company mapping in session state.
+    """Remember an explicit cross-platform company mapping in session state.
 
     Jira keys/project IDs and ClickUp Space IDs are intentionally kept in
     separate namespaces.  A mapping joins those IDs to the selected company;
@@ -217,7 +249,15 @@ def render_company_source_mapping(catalog: tuple[CompanyCatalogEntry, ...]) -> N
         if st.button("Save company source mapping", key="save_company_source_mapping"):
             source_entry = next(entry for entry in source_candidates if entry.company_id == source_id)
             target_entry = next(entry for entry in target_candidates if entry.company_id == target_id)
-            remember_company_source_mapping(st.session_state, source_entry, target_entry)
+            registry = remember_company_source_mapping(st.session_state, source_entry, target_entry)
+            try:
+                persist_company_source_mappings(registry)
+            except (OSError, TypeError, ValueError) as exc:
+                st.error(
+                    "The mapping is active for this session, but could not be saved permanently: "
+                    f"{exc}"
+                )
+                return
             clear_company_catalog_cache()
             for key in (
                 "company_selected_company",
