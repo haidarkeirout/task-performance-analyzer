@@ -33,6 +33,7 @@ from process_analysis import workbook_context, workbook_histories, process_table
 from clickup_analysis import analyze_clickup, analysis_excel
 from clickup_report import create_clickup_word_report
 from company_performance.dashboard import metric_help
+from kpi_transparency import build_population, render_population_card
 from company_performance.ui import (
     remember_prepared_source,
     render_company_launcher,
@@ -487,39 +488,43 @@ def show_executive_dashboard(
     )
 
     help_text = _employee_kpi_help(task_metrics, values)
-    columns = st.columns(6)
+    population = build_population(
+        values["total"],
+        values.get("known_status_tasks", values["total"]),
+        {"Unknown status/history": values.get("unknown_status_tasks", 0)},
+    )
+    columns = st.columns(3)
 
     columns[0].metric(
         "Total Tasks",
         values["total"],
         help=help_text["total"],
     )
-
-    columns[1].metric(
-        "Completed",
-        values["completed"],
-        help=help_text["completed"],
-    )
-
+    render_population_card(columns[1], population)
     columns[2].metric(
         "Completion Rate",
         values["completion_rate"],
         help=help_text["completion_rate"],
     )
 
-    columns[3].metric(
+    columns = st.columns(4)
+    columns[0].metric(
+        "Completed",
+        values["completed"],
+        help=help_text["completed"],
+    )
+
+    columns[1].metric(
         "On-Time Rate",
         values["on_time_rate"],
         help=help_text["on_time_rate"],
     )
-
-    columns[4].metric(
+    columns[2].metric(
         "Open Overdue",
         values["overdue"],
         help=help_text["overdue"],
     )
-
-    columns[5].metric(
+    columns[3].metric(
         "WIP Tasks",
         values["wip"],
         help=help_text["wip"],
@@ -972,13 +977,20 @@ def show_clickup_analysis(result) -> None:
 
     with tab_dashboard:
         st.subheader("Executive Overview")
-        cards = st.columns(6)
+        population = build_population(
+            clickup_total,
+            clickup_known,
+            {"Unknown status/history": clickup_total - clickup_known},
+        )
+        cards = st.columns(3)
         cards[0].metric("Total Tasks", count("Total tasks"), help=clickup_help["total"])
-        cards[1].metric("Completed", count("Completed tasks"), help=clickup_help["completed"])
+        render_population_card(cards[1], population)
         cards[2].metric("Completion Rate", percent("Completion rate (%)"), help=clickup_help["completion"])
-        cards[3].metric("On-Time Rate", percent("On-time completion rate (%)"), help=clickup_help["on_time"])
-        cards[4].metric("Open Overdue", count("Open overdue tasks"), help=clickup_help["overdue"])
-        cards[5].metric("WIP Tasks", count("WIP tasks"), help=clickup_help["wip"])
+        cards = st.columns(4)
+        cards[0].metric("Completed", count("Completed tasks"), help=clickup_help["completed"])
+        cards[1].metric("On-Time Rate", percent("On-time completion rate (%)"), help=clickup_help["on_time"])
+        cards[2].metric("Open Overdue", count("Open overdue tasks"), help=clickup_help["overdue"])
+        cards[3].metric("WIP Tasks", count("WIP tasks"), help=clickup_help["wip"])
 
         st.divider()
         st.subheader("Management Averages")
@@ -1193,14 +1205,25 @@ def show_department_analysis(result: dict) -> None:
         f"{', '.join(map(str, result.get('space_names', [result['space_name']])))} · "
         f"Cutoff: {result['cutoff']}"
     )
-    cards = st.columns(6)
+    cards = st.columns(3)
     cards[0].metric("Total Tasks", int(value("Total Tasks", 0)))
-    cards[1].metric("Task Completion Rate", percent("Task Completion Rate (%)"))
-    cards[2].metric("On-Time Completion Rate", percent("On-Time Completion Rate (%)"))
-    cards[3].metric("Open Overdue Tasks", int(value("Open Overdue Tasks", 0)))
+    population = result.get("completion_rate_population")
+    if population is None:
+        denominator = result["kpis"].loc[
+            result["kpis"]["KPI"].eq("Task Completion Rate (%)"), "Denominator"
+        ]
+        population = build_population(
+            int(value("Total Tasks", 0)),
+            int(denominator.iloc[0]) if not denominator.empty and pd.notna(denominator.iloc[0]) else 0,
+        )
+    render_population_card(cards[1], population)
+    cards[2].metric("Task Completion Rate", percent("Task Completion Rate (%)"))
+    cards = st.columns(4)
+    cards[0].metric("On-Time Completion Rate", percent("On-Time Completion Rate (%)"))
+    cards[1].metric("Open Overdue Tasks", int(value("Open Overdue Tasks", 0)))
     lead = value("Average Lead Time (hours)")
-    cards[4].metric("Average Lead Time", "Unavailable" if lead is None or pd.isna(lead) else f"{float(lead):.1f} h")
-    cards[5].metric("Workflow Exception Rate", percent("Workflow Exception Rate (%)"))
+    cards[2].metric("Average Lead Time", "Unavailable" if lead is None or pd.isna(lead) else f"{float(lead):.1f} h")
+    cards[3].metric("Workflow Exception Rate", percent("Workflow Exception Rate (%)"))
     st.caption(
         f"Cancelled/Rejected: {int(value('Cancelled/Rejected Tasks', 0))} · "
         f"Rate: {percent('Cancellation/Rejected Rate (%)')} · "

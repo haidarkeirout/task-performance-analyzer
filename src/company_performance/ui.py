@@ -26,6 +26,7 @@ from .dashboard import DashboardFilters, build_company_dashboard, data_quality_t
 from .kpis import generate_recommendations, identify_bottleneck_candidates
 from .models import UnifiedStatus
 from .outputs import write_company_excel, write_company_raw_data, write_company_word_report
+from kpi_transparency import population_from_snapshots, render_population_card
 
 
 _MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -499,16 +500,27 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
             for item in selected
             if item.counted_in_kpis
         })
-        card_values = [
-            ("Total Projects", str(project_count), "Distinct inferred project names in the selected scope."),
-            ("Total Tasks", str(kpis.total_tasks), "Count of distinct counted tasks in the selected period."),
-            ("Completed Tasks", str(kpis.completed_tasks), "Tasks whose status is Completed at period end."),
-            ("Completion Rate", "N/A" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / tasks with a verified status at period end × 100. Unknown statuses are excluded and shown in Data Quality."),
-            ("On-Time Rate", "N/A" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
-            ("Open Overdue", str(kpis.overdue_open_tasks), "Open tasks with a valid due date before period end."),
-        ]
-        cards = st.columns(6)
-        for column, (label, value, help_text) in zip(cards, card_values):
+        card_values = {
+            "total-projects": ("Total Projects", str(project_count), "Distinct inferred project names in the selected scope."),
+            "total-tasks": ("Total Tasks", str(kpis.total_tasks), "Count of distinct tasks in the selected period."),
+            "completed-tasks": ("Completed Tasks", str(kpis.completed_tasks), "Tasks whose status is Completed at period end."),
+            "completion-rate": ("Completion Rate", "N/A" if kpis.completion_rate is None else f"{kpis.completion_rate:.1f}%", "Completed tasks / tasks with a verified status at period end × 100. Unknown statuses are excluded and shown in Data Quality."),
+            "on-time-rate": ("On-Time Rate", "N/A" if kpis.on_time_completion_rate is None else f"{kpis.on_time_completion_rate:.1f}%", "Completed tasks on or before due date / completed tasks with valid dates × 100."),
+            "overdue-open": ("Open Overdue", str(kpis.overdue_open_tasks), "Open tasks with a valid due date before period end."),
+        }
+        population = population_from_snapshots(selected)
+        cards = st.columns(3)
+        label, value, help_text = card_values["total-tasks"]
+        cards[0].metric(label, value, help=help_text)
+        render_population_card(cards[1], population)
+        label, value, help_text = card_values["completion-rate"]
+        cards[2].metric(label, value, help=help_text)
+        cards = st.columns(4)
+        for column, key in zip(
+            cards,
+            ("total-projects", "completed-tasks", "on-time-rate", "overdue-open"),
+        ):
+            label, value, help_text = card_values[key]
             column.metric(label, value, help=help_text)
 
         st.subheader("Management Averages")

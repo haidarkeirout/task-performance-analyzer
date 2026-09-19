@@ -14,6 +14,7 @@ from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from excel_safety import write_excel_cell
 from openpyxl.utils import get_column_letter
+from kpi_transparency import build_population
 
 
 def _metric(result: dict, name: str, default=None):
@@ -91,6 +92,12 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
             ["Unknown", "Unavailable", None]
         )
     known_parent_tasks = parent_tasks.loc[status_known.fillna(False).eq(True)].copy()
+    all_status_known = tasks.get("Status Known?")
+    if all_status_known is None:
+        all_status_known = ~tasks.get("Status at Cutoff", pd.Series("Unknown", index=tasks.index)).isin(
+            ["Unknown", "Unavailable", None]
+        )
+    all_status_known = all_status_known.fillna(False).eq(True)
     cancelled = int(parent_tasks["Cancelled?"].sum()) if not parent_tasks.empty else 0
     completed = int(known_parent_tasks["Completed?"].sum()) if not known_parent_tasks.empty else 0
     completion_denominator = len(known_parent_tasks)
@@ -117,6 +124,14 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
         ("Cancelled/Rejected Tasks", cancelled, cancelled, total),
         ("Cancellation/Rejected Rate (%)", _rate(cancelled, total), cancelled, total),
     ], columns=["KPI", "Value", "Numerator", "Denominator"])
+    completion_population = build_population(
+        total,
+        completion_denominator,
+        {
+            "Subtask": int(is_subtask.sum()),
+            "Unknown status/history": int((~is_subtask & ~all_status_known).sum()),
+        },
+    )
 
     employees = clickup_result["assignee_summary"].copy()
     if not employees.empty:
@@ -168,6 +183,7 @@ def build_department_result(clickup_result: dict, prepared_data) -> dict:
         "department_quality": quality,
         "space_names": getattr(prepared_data, "space_names", [prepared_data.space_name]),
         "data_source": "ClickUp",
+        "completion_rate_population": completion_population,
     }
 
 
@@ -226,6 +242,14 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
         ("Cancelled/Rejected Tasks", cancelled, cancelled, total),
         ("Cancellation/Rejected Rate (%)", _rate(cancelled, total), cancelled, total),
     ], columns=["KPI", "Value", "Numerator", "Denominator"])
+    completion_population = build_population(
+        total,
+        completion_denominator,
+        {
+            "Subtask": int(is_subtask.sum()),
+            "Unknown status/history": int((~is_subtask & ~tasks["Status Known?"]).sum()),
+        },
+    )
     employees = (tasks.groupby("Assignee", dropna=False)
                  .agg(**{"Total Assigned": ("Task ID", "count"), "Completed": ("Completed?", "sum"),
                          "Open": ("Open?", "sum"), "WIP": ("WIP?", "sum")}).reset_index())
@@ -266,6 +290,7 @@ def build_jira_department_result(task_metrics: pd.DataFrame, process_data: dict,
             columns={"week_start":"Week Starting", "tasks_opened":"Tasks Created", "tasks_completed":"Tasks Completed"}),
         "department_name": "Tech Development", "department_id": "jira-tech-development",
         "space_name": space_name, "cutoff": cutoff, "data_source": "Jira",
+        "completion_rate_population": completion_population,
     }
 
 

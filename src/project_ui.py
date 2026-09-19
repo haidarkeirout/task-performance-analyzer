@@ -23,6 +23,7 @@ from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
 from company_performance.application import CompanyAnalysisResult, build_company_analysis, build_company_preview
 from company_performance.kpis import calculate_status_metrics
+from kpi_transparency import population_from_snapshots, render_population_card
 from jira_export import PreparedData, _json, build_workbook
 from jira_gateway import CollectionError, JiraGateway
 from resumable_jira import collect_jira_query
@@ -1552,8 +1553,26 @@ def _render_project_result(st: Any, result: CompanyAnalysisResult, scope_label: 
     st.title("Project Performance Analysis")
     st.caption(f"{scope_label} · {result.model.period_start.isoformat()} to {result.model.period_end.isoformat()}")
 
-    cards = st.columns(len(result.model.cards))
-    for column, card in zip(cards, result.model.cards):
+    cards_by_key = {card.key: card for card in result.model.cards}
+    population = population_from_snapshots(result.snapshots)
+    headline = st.columns(3)
+    headline[0].metric(
+        cards_by_key["total-tasks"].title,
+        cards_by_key["total-tasks"].value,
+        help=cards_by_key["total-tasks"].supporting_text,
+    )
+    render_population_card(headline[1], population)
+    headline[2].metric(
+        cards_by_key["completion-rate"].title,
+        cards_by_key["completion-rate"].value,
+        help=cards_by_key["completion-rate"].supporting_text,
+    )
+    secondary = st.columns(4)
+    for column, key in zip(
+        secondary,
+        ("total-projects", "current-wip", "overdue-open", "on-time-rate"),
+    ):
+        card = cards_by_key[key]
         column.metric(card.title, card.value, help=card.supporting_text)
 
     st.subheader("Management Averages")
