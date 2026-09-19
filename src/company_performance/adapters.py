@@ -104,6 +104,16 @@ def _clickup_priority(value: Any) -> str | None:
     return _text(value)
 
 
+def _clickup_list(value: Any) -> tuple[str | None, str | None]:
+    """Return the authoritative ClickUp List name and ID from a task payload."""
+    if isinstance(value, Mapping):
+        return (
+            _text(value.get("name") or value.get("list_name")),
+            _text(value.get("id") or value.get("list_id")),
+        )
+    return _text(value), None
+
+
 def _collection_time(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -441,14 +451,19 @@ def adapt_clickup_collection(
             continue
         raw_status, status_unresolved = _clickup_status(task.get("status"))
         priority = _clickup_priority(task.get("priority"))
-        list_value = task.get("list") if isinstance(task.get("list"), Mapping) else {}
-        department = _named(list_value.get("name"))
+        list_name, list_id = _clickup_list(task.get("list"))
+        # Department collection annotates the task with the list selected by
+        # the user. Prefer that explicit source metadata over a mutable nested
+        # task field, then fall back to the native task List object.
+        department = _text(task.get("_department_list_name")) or list_name
+        department_id = _text(task.get("_department_list_id")) or list_id
         parent_id = _parent(task.get("parent"))
         flags = {"ClickUp Chronological History Unavailable", "Missing Workflow History"}
         if status_unresolved:
             flags.add("ClickUp Status Unresolved")
         if not department:
             flags.add("Missing ClickUp List Name")
+            department = "Unmapped Department"
         payload = status_payloads.get(task_id)
         if isinstance(payload, Mapping):
             timed_count += 1
@@ -461,6 +476,7 @@ def adapt_clickup_collection(
             source_space=source_space,
             unified_project=unified_project,
             department=department,
+            department_id=department_id,
             raw_status=raw_status,
             initial_status=None,
             priority=priority,

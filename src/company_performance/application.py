@@ -67,6 +67,8 @@ class CompanyPreviewRow:
     due_date: date | None
     project_name: str | None = None
     company_name: str | None = None
+    department: str | None = None
+    department_id: str | None = None
     issue_type: str | None = None
     parent_id: str | None = None
     parent_classification: str | None = None
@@ -241,6 +243,8 @@ def build_company_preview(
             company_name=prepared_by_scope.get(
                 (task.source_tool, task.source_space, task.unified_project)
             ),
+            department=task.department,
+            department_id=task.department_id,
             issue_type=task.issue_type or (
                 "Sub-task" if task.parent_classification.value == "Subtask" else "Task"
             ),

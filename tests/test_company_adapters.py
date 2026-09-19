@@ -153,7 +153,7 @@ class ClickUpAdapterTests(unittest.TestCase):
             "start_date": "1788343200000",
             "due_date": "1789034400000",
             "parent": "cu-parent",
-            "list": {"name": "Marketing"},
+            "list": {"id": "list-marketing", "name": "Marketing"},
         }
         time_status = {"cu-1": {"current_status": {"status": "Review", "total_time": {"by_minute": 45}}}}
         result = adapt_clickup_collection(
@@ -164,6 +164,7 @@ class ClickUpAdapterTests(unittest.TestCase):
         self.assertEqual(record.source_tool, "ClickUp")
         self.assertEqual(record.source_space, "Growth Space")
         self.assertEqual(record.department, "Marketing")
+        self.assertEqual(record.department_id, "list-marketing")
         self.assertEqual(record.assignees, ("Haidar", "maya@example.com"))
         self.assertEqual(record.parent_id, "cu-parent")
         self.assertFalse(record.history_complete)
@@ -171,6 +172,27 @@ class ClickUpAdapterTests(unittest.TestCase):
         self.assertNotIn("ClickUp Total Time in Status Unavailable", record.data_quality_flags)
         self.assertIn(record.unique_key, result.raw_time_in_status)
         self.assertEqual(result.coverage.history_mode, "Unavailable")
+
+    def test_clickup_list_metadata_is_authoritative_and_missing_lists_are_explicit(self):
+        annotated = {
+            "id": "cu-annotated", "name": "Annotated task",
+            "status": {"status": "To Do"},
+            "list": {"id": "native-list", "name": "Wrong fallback"},
+            "_department_list_id": "selected-list",
+            "_department_list_name": "Finance",
+        }
+        missing = {
+            "id": "cu-missing", "name": "Missing list",
+            "status": {"status": "To Do"},
+        }
+        result = adapt_clickup_collection(
+            [annotated, missing], {}, unified_project="P", source_space="S"
+        )
+        records = {record.task_id: record for record in result.records}
+        self.assertEqual(records["cu-annotated"].department, "Finance")
+        self.assertEqual(records["cu-annotated"].department_id, "selected-list")
+        self.assertEqual(records["cu-missing"].department, "Unmapped Department")
+        self.assertIn("Missing ClickUp List Name", records["cu-missing"].data_quality_flags)
 
     def test_clickup_partial_time_status_and_prepared_payload(self):
         tasks = [

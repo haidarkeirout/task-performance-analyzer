@@ -64,6 +64,7 @@ class CompanySourceSelectionTests(unittest.TestCase):
         rows = build_company_preview(jira_prepared=(prepared,))
         self.assertEqual(rows[0].company_name, 'Najm Al-Shamal [TEST]')
         self.assertEqual(_preview_table_rows(rows)[0]['Company'], 'Najm Al-Shamal [TEST]')
+        self.assertEqual(_preview_table_rows(rows)[0]['Department'], 'Tech Development')
 
     def test_jira_preview_exposes_issue_type_and_epic_relationship(self):
         workbook = Workbook()
