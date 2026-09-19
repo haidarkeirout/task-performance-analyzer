@@ -7,9 +7,10 @@ project label for the company-level analysis.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, MutableMapping
 
 import streamlit as st
 
@@ -31,6 +32,7 @@ _PREFIX_RE = re.compile(
 )
 
 ALL_COMPANIES_ID = "__all_companies__"
+COMPANY_SOURCE_MAPPINGS_KEY = "company_source_mappings"
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,151 @@ def company_option_label(entry: CompanyCatalogEntry) -> str:
     return f"{entry.company_name} ({entry.source_summary})"
 
 
+def _source_mapping_key(source_tool: str, source_id: str) -> str:
+    """Return the stable, platform-qualified key used by the mapping registry."""
+    return f"{str(source_tool).casefold()}:{str(source_id)}"
+
+
+def _source_mapping_keys(ref: CompanySourceRef) -> tuple[str, ...]:
+    """Return primary and platform-native aliases for one source record."""
+    candidates = [ref.source_id]
+    if ref.source_tool == "Jira":
+        candidates.append(str(ref.item.get("key") or ""))
+    return tuple(
+        dict.fromkeys(
+            _source_mapping_key(ref.source_tool, candidate)
+            for candidate in candidates
+            if str(candidate).strip()
+        )
+    )
+
+
+def _mapping_record(value: Any) -> tuple[str, str, tuple[str, ...]] | None:
+    """Normalize a stored mapping while accepting the initial string format."""
+    if isinstance(value, str):
+        company_id = value.strip()
+        if not company_id:
+            return None
+        return company_id, company_id, ()
+    if not isinstance(value, Mapping):
+        return None
+    company_id = str(value.get("company_id") or "").strip()
+    company_name = str(value.get("company_name") or company_id).strip()
+    if not company_id:
+        return None
+    aliases = value.get("aliases") or ()
+    if isinstance(aliases, str):
+        aliases = (aliases,)
+    return company_id, company_name, tuple(str(alias).strip() for alias in aliases if str(alias).strip())
+
+
+def _source_mapping_registry() -> dict[str, Any]:
+    raw = st.session_state.get(COMPANY_SOURCE_MAPPINGS_KEY) or {}
+    return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def remember_company_source_mapping(
+    session_state: MutableMapping[str, Any],
+    source_entry: CompanyCatalogEntry,
+    target_entry: CompanyCatalogEntry,
+) -> dict[str, Any]:
+    """Persist an explicit cross-platform company mapping in session state.
+
+    Jira keys/project IDs and ClickUp Space IDs are intentionally kept in
+    separate namespaces.  A mapping joins those IDs to the selected company;
+    it never assumes that an ID from one platform can equal an ID from the
+    other platform.
+    """
+    if source_entry.company_id == target_entry.company_id:
+        raise ValueError("A company source cannot be mapped to itself.")
+    registry = dict(session_state.get(COMPANY_SOURCE_MAPPINGS_KEY) or {})
+    aliases = tuple(
+        dict.fromkeys(
+            [
+                target_entry.company_name,
+                *(source.source_name for source in source_entry.sources),
+                *(source.source_name for source in target_entry.sources),
+            ]
+        )
+    )
+    record = {
+        "company_id": target_entry.company_id,
+        "company_name": target_entry.company_name,
+        "aliases": aliases,
+    }
+    for entry in (source_entry, target_entry):
+        for source in entry.sources:
+            for mapping_key in _source_mapping_keys(source):
+                registry[mapping_key] = record
+    session_state[COMPANY_SOURCE_MAPPINGS_KEY] = registry
+    return registry
+
+
+def clear_company_catalog_cache() -> None:
+    """Invalidate the catalog after a mapping is changed in the UI."""
+    st.session_state.pop("company_catalog", None)
+    st.session_state.pop("company_catalog_revision", None)
+
+
+def render_company_source_mapping(catalog: tuple[CompanyCatalogEntry, ...]) -> None:
+    """Render an optional UI for joining differently named source records.
+
+    Exact normalized names continue to merge automatically.  This control is
+    only needed when, for example, Jira calls a project ``Najm Al-Shamal
+    Website`` while ClickUp calls its Space ``Najm Al-Shamal``.
+    """
+    source_candidates = [entry for entry in catalog if len(entry.sources) == 1]
+    target_candidates = list(catalog)
+    if not source_candidates or len(target_candidates) < 2:
+        return
+    with st.expander("Map Jira / ClickUp sources to one company", expanded=False):
+        st.caption(
+            "Use this only when the same company has different names. "
+            "Platform IDs remain independent and are linked explicitly."
+        )
+        labels = {
+            entry.company_id: (
+                f"{entry.company_name} — "
+                + ", ".join(
+                    f"{source.source_tool}:{source.source_id}"
+                    for source in entry.sources
+                )
+            )
+            for entry in target_candidates
+        }
+        source_id = st.selectbox(
+            "Source to map",
+            [entry.company_id for entry in source_candidates],
+            format_func=lambda value: labels[value],
+            key="company_mapping_source",
+        )
+        target_options = [entry.company_id for entry in target_candidates if entry.company_id != source_id]
+        target_id = st.selectbox(
+            "Existing company target",
+            target_options,
+            format_func=lambda value: labels[value],
+            key="company_mapping_target",
+        )
+        if st.button("Save company source mapping", key="save_company_source_mapping"):
+            source_entry = next(entry for entry in source_candidates if entry.company_id == source_id)
+            target_entry = next(entry for entry in target_candidates if entry.company_id == target_id)
+            remember_company_source_mapping(st.session_state, source_entry, target_entry)
+            clear_company_catalog_cache()
+            for key in (
+                "company_selected_company",
+                "company_active_selection",
+                "company_prepared_items",
+                "company_collection_attempted",
+                "company_collection_error",
+                "company_collection_errors",
+                "company_partial_prepared_items",
+                "company_analysis",
+            ):
+                st.session_state.pop(key, None)
+            st.success("Company source mapping saved. The catalog will be rebuilt.")
+            st.rerun()
+
+
 def canonical_project_name(space_name: str | None) -> str:
     """Return the company-facing project label for one source Space name.
 
@@ -116,11 +263,15 @@ def discover_company_catalog(settings) -> tuple[CompanyCatalogEntry, ...]:
     """Discover selectable companies from the currently connected sources.
 
     A ClickUp Space and a Jira Project with the same exact normalized name are
-    grouped into one company.  The source IDs remain attached to the entry;
-    names are only used to build the initial catalog, never as task identity.
-    Ambiguous duplicate names within one source are kept separate.
+    grouped into one company.  A saved explicit mapping can join different
+    names by their platform-qualified IDs (and Jira key aliases). The source
+    IDs remain attached to the entry; names are only used to build the initial
+    catalog, never as task identity. Ambiguous duplicate names within one
+    source are kept separate.
     """
-    revision = str(getattr(settings, "revision", ""))
+    mapping_registry = _source_mapping_registry()
+    mapping_signature = json.dumps(mapping_registry, sort_keys=True, default=str)
+    revision = f"{getattr(settings, 'revision', '')}|mappings:{mapping_signature}"
     if st.session_state.get("company_catalog_revision") == revision:
         cached = st.session_state.get("company_catalog")
         if cached is not None:
@@ -131,7 +282,7 @@ def discover_company_catalog(settings) -> tuple[CompanyCatalogEntry, ...]:
         *[("Jira", item, index) for index, item in enumerate(jira_spaces.values(), 1)],
         *[("ClickUp", item, index) for index, item in enumerate(clickup_spaces.values(), 1)],
     ]
-    groups: dict[str, list[CompanySourceRef]] = {}
+    raw_refs: list[CompanySourceRef] = []
     for source, item, index in raw_sources:
         source_name = str(
             item.get("name")
@@ -140,14 +291,55 @@ def discover_company_catalog(settings) -> tuple[CompanyCatalogEntry, ...]:
             or f"{source} Company {index}"
         ).strip()
         source_id = _source_id(source, item, index)
-        ref = CompanySourceRef(source, source_id, source_name, dict(item))
-        groups.setdefault(_company_match_key(source_name), []).append(ref)
+        raw_refs.append(CompanySourceRef(source, source_id, source_name, dict(item)))
+
+    mapped_targets: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    mapped_aliases: dict[str, set[str]] = {}
+    group_names: dict[str, str] = {}
+    for ref in raw_refs:
+        mapped = next(
+            (
+                _mapping_record(mapping_registry.get(mapping_key))
+                for mapping_key in _source_mapping_keys(ref)
+                if mapping_key in mapping_registry
+            ),
+            None,
+        )
+        if mapped:
+            company_id, company_name, aliases = mapped
+            group_key = f"mapped:{company_id}"
+            for mapping_key in _source_mapping_keys(ref):
+                mapped_targets[mapping_key] = mapped
+            group_names[group_key] = company_name
+            mapped_aliases.setdefault(group_key, set()).update(
+                _company_match_key(alias) for alias in aliases
+            )
+    groups: dict[str, list[CompanySourceRef]] = {}
+    for ref in raw_refs:
+        mapped = next(
+            (mapped_targets.get(mapping_key) for mapping_key in _source_mapping_keys(ref) if mapping_key in mapped_targets),
+            None,
+        )
+        if mapped:
+            group_key = f"mapped:{mapped[0]}"
+        else:
+            normalized_name = _company_match_key(ref.source_name)
+            matching_groups = [
+                group_key
+                for group_key, aliases in mapped_aliases.items()
+                if normalized_name in aliases
+            ]
+            # An alias is applied only when it identifies one mapping target;
+            # conflicting aliases stay separate instead of being guessed.
+            group_key = matching_groups[0] if len(set(matching_groups)) == 1 else f"name:{normalized_name}"
+            group_names.setdefault(group_key, ref.source_name)
+        groups.setdefault(group_key, []).append(ref)
 
     entries: list[CompanyCatalogEntry] = []
-    for refs in groups.values():
+    for group_key, refs in groups.items():
         if not refs:
             continue
-        company_name = refs[0].source_name
+        company_name = group_names.get(group_key, refs[0].source_name)
         counts: dict[str, int] = {}
         for ref in refs:
             counts[ref.source_tool] = counts.get(ref.source_tool, 0) + 1

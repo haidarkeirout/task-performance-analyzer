@@ -5,9 +5,13 @@ from unittest.mock import patch
 from jira_gateway import CollectionError
 from company_performance.collection import (
     ALL_COMPANIES_ID,
+    COMPANY_SOURCE_MAPPINGS_KEY,
+    CompanyCatalogEntry,
+    CompanySourceRef,
     _project_names,
     collect_company_spaces,
     discover_company_catalog,
+    remember_company_source_mapping,
 )
 
 
@@ -113,6 +117,71 @@ class CompanyCollectionCompletenessTests(unittest.TestCase):
         names = tuple(_project_names(ambiguous).values())
         self.assertEqual(len(set(names)), 2)
         self.assertTrue(all("[ClickUp:" in name for name in names))
+
+    def test_explicit_mapping_joins_differently_named_jira_and_clickup_sources(self):
+        fake_st = _Streamlit()
+        jira = {
+            "NAST": {"id": "jira-project-7", "key": "NAST", "name": "Najm Al-Shamal Website"},
+        }
+        clickup = {
+            "cu-1": {"id": "clickup-space-9", "name": "Najm Al-Shamal"},
+        }
+        settings = SimpleNamespace(revision="mapping-v1")
+        fake_st.session_state[COMPANY_SOURCE_MAPPINGS_KEY] = {
+            "jira:jira-project-7": {
+                "company_id": "najm-al-shamal",
+                "company_name": "Najm Al-Shamal",
+                "aliases": ["Najm Al-Shamal Website", "Najm Al-Shamal"],
+            },
+            "clickup:clickup-space-9": {
+                "company_id": "najm-al-shamal",
+                "company_name": "Najm Al-Shamal",
+                "aliases": ["Najm Al-Shamal Website", "Najm Al-Shamal"],
+            },
+        }
+        with (
+            patch("company_performance.collection.st", fake_st),
+            patch("company_performance.collection._load_catalogs", return_value=(jira, clickup)),
+        ):
+            catalog = discover_company_catalog(settings)
+
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(catalog[0].company_name, "Najm Al-Shamal")
+        self.assertEqual(
+            {(source.source_tool, source.source_id) for source in catalog[0].sources},
+            {("Jira", "jira-project-7"), ("ClickUp", "clickup-space-9")},
+        )
+
+    def test_mapping_helper_persists_platform_qualified_ids_and_aliases(self):
+        fake_st = _Streamlit()
+        source = CompanySourceRef("Jira", "NAST", "Najm Al-Shamal Website", {"key": "NAST"})
+        target_source = CompanySourceRef("ClickUp", "901234", "Najm Al-Shamal", {"id": "901234"})
+        target = CompanyCatalogEntry("najm-al-shamal", "Najm Al-Shamal", (target_source,))
+        source_entry = CompanyCatalogEntry("najm-al-shamal-website", "Najm Al-Shamal Website", (source,))
+        remember_company_source_mapping(fake_st.session_state, source_entry, target)
+
+        registry = fake_st.session_state[COMPANY_SOURCE_MAPPINGS_KEY]
+        self.assertEqual(registry["jira:NAST"]["company_id"], "najm-al-shamal")
+        self.assertEqual(registry["clickup:901234"]["company_id"], "najm-al-shamal")
+        self.assertIn("Najm Al-Shamal Website", registry["jira:NAST"]["aliases"])
+
+    def test_differently_named_sources_stay_separate_without_explicit_mapping(self):
+        fake_st = _Streamlit()
+        settings = SimpleNamespace(revision="unmapped-v1")
+        with (
+            patch("company_performance.collection.st", fake_st),
+            patch(
+                "company_performance.collection._load_catalogs",
+                return_value=(
+                    {"NAST": {"id": "jira-1", "name": "Najm Al-Shamal Website"}},
+                    {"cu-1": {"id": "clickup-1", "name": "Najm Al-Shamal"}},
+                ),
+            ),
+        ):
+            catalog = discover_company_catalog(settings)
+
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual({entry.source_summary for entry in catalog}, {"Jira", "ClickUp"})
 
     def test_failed_space_blocks_partial_dashboard_and_retry_reuses_success(self):
         fake_st = _Streamlit()

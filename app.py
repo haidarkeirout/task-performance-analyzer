@@ -37,6 +37,7 @@ from kpi_transparency import build_population, render_population_card
 from company_performance.collection import (
     ALL_COMPANIES_ID,
     company_option_label,
+    render_company_source_mapping,
     discover_company_catalog,
 )
 from company_performance.ui import (
@@ -1373,6 +1374,7 @@ if analysis_mode == "company":
             "No companies were discovered from the connected Jira or ClickUp sources yet."
         )
         st.stop()
+    render_company_source_mapping(company_catalog)
     company_options = [ALL_COMPANIES_ID, *(entry.company_id for entry in company_catalog)]
     company_labels = {
         ALL_COMPANIES_ID: f"All Companies ({len(company_catalog)} available)",
