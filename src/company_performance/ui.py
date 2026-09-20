@@ -518,6 +518,7 @@ def render_company_result(
         result.snapshots,
         coverages=result.collection.coverages,
         filters=filters,
+        scope_label=scope_label,
     )
     selected_keys = {(detail.source_tool, detail.task_id) for detail in model.task_details}
     selected = [
@@ -601,7 +602,7 @@ def render_company_result(
                 use_container_width=True,
             )
 
-        st.subheader("Company Weekly Task Flow")
+        st.subheader(f"{scope_label} Weekly Task Flow")
         flow = _weekly_company_flow_frame(selected)
         if flow.empty:
             st.info("No created/completed dates are available for the selected scope.")
