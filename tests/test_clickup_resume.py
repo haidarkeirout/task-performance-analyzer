@@ -47,6 +47,7 @@ class ClickUpResumeTests(unittest.TestCase):
 
     def test_fresh_space_collection_replaces_stale_snapshot(self):
         gateway = ResumableClickUpGateway()
+        gateway.fail_page_one_once = False
         checkpoint = {
             "lists": [{"id": "list-1", "name": "List"}],
             "tasks": {"OLD": {"id": "OLD", "status": {"status": "in progress"}}},
