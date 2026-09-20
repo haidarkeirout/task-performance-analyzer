@@ -5,6 +5,10 @@ import streamlit as st
 
 import jira_ui as _jira_ui
 from clickup_ui import _render_clickup_collection
+from employee_ui import render_employee_collection
+from project_ui import render_project_collection
+from company_performance.collection import render_company_collection
+from department_collection import render_department_collection
 
 # Re-export these symbols for existing tests and callers.
 CollectionError = _jira_ui.CollectionError
@@ -209,8 +213,18 @@ def _render_active_job_full_rerun(job):
     return prepared, run_clicked
 
 
-def render_collection(settings):
+def render_collection(settings, analysis_mode="existing", company_selection=None):
     """Route to the selected connector without sharing collection state."""
+    if analysis_mode == "employee":
+        return render_employee_collection(settings)
+    if analysis_mode == "project":
+        return render_project_collection(settings)
+    if analysis_mode == "company":
+        return render_company_collection(settings, selected_company=company_selection)
+    if analysis_mode == "department":
+        # Department has its own Department-first ClickUp flow. Do not route it
+        # through the legacy Space-first connector selector.
+        return render_department_collection(settings)
     source = st.radio(
         "Data source",
         ["Jira", "ClickUp"],
@@ -218,7 +232,7 @@ def render_collection(settings):
         key="data_source",
     )
     if source == "ClickUp":
-        return _render_clickup_collection(settings)
+        return _render_clickup_collection(settings, analysis_mode=analysis_mode)
 
     # Tests patch wrapper-level objects, so keep the Jira implementation synchronized.
     _jira_ui.JiraGateway = JiraGateway

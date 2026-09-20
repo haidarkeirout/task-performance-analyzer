@@ -7,6 +7,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from excel_safety import write_excel_cell
 
 @dataclass
 class ClickUpPreparedData:
@@ -23,17 +24,20 @@ class ClickUpPreparedData:
     source_timezone: str
     filter_summary: str = "All tasks in the selected ClickUp Space"
     filter_criteria: dict = field(default_factory=dict, repr=False)
+    analysis_mode: str = "existing"
+    department_name: str = ""
+    department_id: str = ""
 
 
 def _sheet(wb, name, headers, rows):
     ws = wb.create_sheet(name)
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(1, col, header)
+        cell = write_excel_cell(ws, 1, col, header)
         cell.fill = PatternFill("solid", fgColor="17324D")
         cell.font = Font(color="FFFFFF", bold=True)
     for r, row in enumerate(rows, 2):
         for c, value in enumerate(row, 1):
-            ws.cell(r, c, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
+            write_excel_cell(ws, r, c, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
@@ -77,7 +81,7 @@ def _current_status_info(payload):
 
 def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/Damascus", progress=None,
                  space_id=None, time_status_data=None, time_status_error="", filter_summary="",
-                 filter_criteria=None):
+                 filter_criteria=None, analysis_mode="existing", department_name="", department_id="", cutoff=None):
     """Prepare ClickUp tasks and explicitly supplied status-duration data.
 
     This function never calls a status/activity endpoint itself.  The UI only
@@ -85,7 +89,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     filter, then passes the returned map here. Jira's collector and workbook
     are untouched.
     """
-    cutoff = datetime.now(timezone.utc).isoformat()
+    cutoff = str(cutoff) if cutoff is not None else datetime.now(timezone.utc).isoformat()
     time_status = {}
     time_status_error = str(time_status_error or "")
     activity_notes = []
@@ -102,6 +106,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     missing_time_status = 0
     for index, task in enumerate(tasks, 1):
         task_id = str(task.get("id", ""))
+        task_space_id = task.get("space_id") or space_id
         if progress:
             progress(f"Preparing ClickUp task {index} of {len(tasks)}...")
         payload = time_status.get(task_id)
@@ -114,7 +119,9 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
         current_minutes, current_since = _current_status_info(payload)
         history_ids = ""
         rows.append([
-            space_id or task.get("space_id"), task_id, task.get("name"),
+            task_space_id, task.get("_department_space_name") or "",
+            task.get("_department_list_name") or "",
+            task_id, task.get("name"),
             ", ".join(str(a.get("username") or a.get("email") or a.get("id")) for a in assignees) or "Unassigned",
             priority.get("priority") if isinstance(priority, dict) else priority,
             status.get("status") if isinstance(status, dict) else status,
@@ -124,14 +131,14 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
             current_minutes, current_since, history_ids,
             *[values.get(name) for name in status_names],
         ])
-        raw.append([task_id, "task", json.dumps({**task, "selected_space_id": space_id}, ensure_ascii=False)])
+        raw.append([task_id, "task", json.dumps({**task, "selected_space_id": task_space_id}, ensure_ascii=False)])
         if payload is not None:
             raw.append([task_id, "time_in_status", json.dumps(payload, ensure_ascii=False)])
 
     wb = Workbook()
     wb.remove(wb.active)
     data_headers = [
-        "Space ID", "Task ID", "Task Name", "Assignee", "Priority", "Current Status",
+        "Space ID", "Space Name", "List Name", "Task ID", "Task Name", "Assignee", "Priority", "Current Status",
         "Created", "Due Date", "Completed", "Time Estimate (ms)", "Time Spent (ms)",
         "Total Time in Status (JSON)", "Current Status Time (min)", "Current Status Since", "History IDs",
         *[f"Time in Status - {name} (min)" for name in status_names],
@@ -140,6 +147,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
     _sheet(wb, "Activity", ["Space ID", "Task ID", "History ID", "Timestamp", "User", "Event Type", "Field", "From", "To", "Comment"], activity_rows)
     context_rows = [
         ["Process Name", space_name], ["Space ID", space_id or ""],
+        ["Department", department_name or ""],
         ["Evaluation Scope", filter_summary or "All tasks in the selected ClickUp Space"],
         ["Dataset Type", "ClickUp API collection"],
         ["Evaluation Cutoff Date", cutoff], ["Source Timezone", source_timezone], ["Task Count", len(tasks)],
@@ -169,6 +177,7 @@ def collect_data(gateway, tasks, space_name, fingerprint, source_timezone="Asia/
         datetime.now(timezone.utc).isoformat(), space_name, fingerprint, len(tasks), filename,
         space_name, source_timezone,
         filter_summary or "All tasks in the selected ClickUp Space", dict(filter_criteria or {}),
+        analysis_mode, department_name, department_id,
     )
     prepared.clickup_activity_available = False
     prepared.clickup_time_status_available = bool(time_status)

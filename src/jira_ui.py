@@ -1,6 +1,7 @@
 """English-only sign-in, space selection, filters, and persistent collection screens."""
 from __future__ import annotations
 
+import time
 import pandas as pd
 import streamlit as st
 
@@ -13,6 +14,8 @@ from jira_gateway import CollectionError, JiraGateway
 
 
 RESULT_KEYS = ("task_metrics", "process_data", "validation_log", "cutoff_text")
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCK_SECONDS = 300
 
 
 def invalidate_selection():
@@ -33,14 +36,35 @@ def _detach_session_job():
 
 
 def _login(settings):
+    now = time.time()
+    locked_until = float(st.session_state.get("login_locked_until", 0) or 0)
+    if locked_until > now:
+        remaining = max(1, int(locked_until - now))
+        st.session_state["login_error"] = (
+            f"Too many failed sign-in attempts. Try again in {remaining} seconds."
+        )
+        st.session_state["login_password"] = ""
+        return
+    if locked_until:
+        st.session_state.pop("login_locked_until", None)
+        st.session_state["login_failed_attempts"] = 0
+
     username = st.session_state.get("login_username", "")
     password = st.session_state.get("login_password", "")
     if credentials_match(username, password, settings):
         st.session_state.clear()
         st.session_state["auth_revision"] = settings.revision
     else:
+        attempts = int(st.session_state.get("login_failed_attempts", 0) or 0) + 1
+        st.session_state["login_failed_attempts"] = attempts
         st.session_state["login_password"] = ""
-        st.session_state["login_error"] = "Incorrect username or password. Please try again."
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            st.session_state["login_locked_until"] = now + LOGIN_LOCK_SECONDS
+            st.session_state["login_error"] = (
+                "Too many failed sign-in attempts. Try again in 5 minutes."
+            )
+        else:
+            st.session_state["login_error"] = "Incorrect username or password. Please try again."
 
 
 def _logout():
@@ -56,7 +80,7 @@ def require_sign_in():
             values = {}
         settings = read_settings(values)
     except (SetupError, ValueError):
-        st.title("Jira Performance")
+        st.title("Task Performance Intelligence")
         st.info("The system is being configured. Please contact the administrator.")
         st.stop()
     if st.session_state.get("auth_revision") != settings.revision:
@@ -65,13 +89,14 @@ def require_sign_in():
             st.session_state.clear()
         _, center, _ = st.columns([1, 1.3, 1])
         with center:
-            st.title("Jira Performance")
+            st.title("Task Performance Intelligence")
             st.caption("Sign in to select a space and analyze its work items.")
             with st.form("sign_in"):
                 st.text_input("Username", key="login_username")
                 st.text_input("Password", type="password", key="login_password")
+                locked = float(st.session_state.get("login_locked_until", 0) or 0) > time.time()
                 st.form_submit_button("Sign In", type="primary", width="stretch",
-                                      on_click=_login, args=(settings,))
+                                      on_click=_login, args=(settings,), disabled=locked)
             if st.session_state.get("login_error"):
                 st.error(st.session_state["login_error"])
         st.stop()

@@ -8,6 +8,7 @@ import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from excel_safety import write_excel_cell
 
 DARK = "17324D"
 MID = "2F5D7E"
@@ -75,14 +76,14 @@ def _card(sheet, start_col: int, label: str, value, row: int):
 
 def _write_support_table(sheet, start_row: int, start_col: int, headers, rows):
     for offset, value in enumerate(headers):
-        cell = sheet.cell(start_row, start_col + offset, value)
+        cell = write_excel_cell(sheet, start_row, start_col + offset, value)
         cell.fill = PatternFill("solid", fgColor=DARK)
         cell.font = Font(color=WHITE, bold=True)
     for row_offset, row in enumerate(rows, start=1):
         for col_offset, value in enumerate(row):
             if isinstance(value, pd.Timestamp):
                 value = value.to_pydatetime().replace(tzinfo=None) if value.tzinfo else value.to_pydatetime()
-            sheet.cell(start_row + row_offset, start_col + col_offset, value)
+            write_excel_cell(sheet, start_row + row_offset, start_col + col_offset, value)
     return start_row + len(rows)
 
 
@@ -216,7 +217,7 @@ def add_jira_executive_dashboard(workbook, frame: pd.DataFrame, tables: dict) ->
 
     summary = tables.get("overall_summary") if tables else None
     summary_row = summary.iloc[0] if summary is not None and not summary.empty else {}
-    total = summary_row.get("total_tasks", len(frame)) if hasattr(summary_row, "get") else len(frame)
+    total = summary_row.get("known_status_tasks", summary_row.get("total_tasks", len(frame))) if hasattr(summary_row, "get") else len(frame)
     completed = summary_row.get("completed_tasks", 0) if hasattr(summary_row, "get") else 0
     on_time = summary_row.get("on_time_tasks", 0) if hasattr(summary_row, "get") else 0
     on_time_valid = summary_row.get("on_time_valid_tasks", 0) if hasattr(summary_row, "get") else 0

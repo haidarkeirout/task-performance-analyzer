@@ -8,13 +8,14 @@ import json
 from datetime import datetime, time
 from io import BytesIO
 import pandas as pd
+from excel_safety import safe_excel_value
 from metrics_engine import aggregate, get_status_events, parse_timestamp
 from jira_excel_dashboard import add_jira_executive_dashboard
 
 EVENT_COLUMNS = ["issue_key", "task_name", "from_status", "to_status", "event_type", "changed_at", "author_name", "source", "included_in_metrics"]
 STAGE_COLUMNS = ["status", "tasks_visited", "elapsed_total_hours", "elapsed_mean_hours", "elapsed_median_hours", "business_total_hours", "business_mean_hours", "business_median_hours", "open_tasks_currently_here"]
 RATE_DEFINITIONS = {
-    "Completion rate": "Completed tasks / all tasks created by cutoff. Unknown status tasks remain in total and are disclosed.",
+    "Completion rate": "Completed tasks / tasks with a verified status at cutoff. Unknown status tasks are excluded from the denominator and disclosed in Data Quality.",
     "On-time completion rate": "On-time completed tasks / completed tasks with known completion and due date. Due dates are the uploaded schedule snapshot, not a reconstructed historical baseline.",
     "Open overdue rate": "Overdue open tasks / open tasks with a known due date. Completed and rejected tasks are excluded.",
     "Rework rate": "Distinct reviewed tasks with In Review -> In Progress / distinct reviewed tasks with complete history.",
@@ -310,7 +311,8 @@ def excel_bytes(frame, tables):
               "by_assignee": aggregate(frame, ["assignee_name"]), "by_issue_type": aggregate(frame, ["issue_type"])}
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for name, data in sheets.items():
-            data.to_excel(writer, sheet_name=name, index=False)
+            safe_data = data.map(safe_excel_value) if hasattr(data, "map") else data.applymap(safe_excel_value)
+            safe_data.to_excel(writer, sheet_name=name, index=False)
             sheet = writer.sheets[name]
             sheet.freeze_panes = "A2"
             sheet.auto_filter.ref = sheet.dimensions
