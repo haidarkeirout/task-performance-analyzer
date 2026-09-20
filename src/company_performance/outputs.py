@@ -54,6 +54,13 @@ _HEADER_FONT = Font(color="FFFFFF", bold=True)
 _CARD_FILL = PatternFill("solid", fgColor="EAF2F8")
 _THIN_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
 
+def _scope_token(scope_label: str) -> str:
+    """Return a stable worksheet prefix for a report scope."""
+    normalized = " ".join(str(scope_label or "Company").split())
+    return normalized.replace(" ", "_") or "Company"
+
+
+
 
 def _display(value: Any) -> str:
     """Keep unavailable values explicit in executive deliverables."""
@@ -255,21 +262,37 @@ def write_company_excel(
     snapshots: Iterable[TaskPeriodSnapshot] = (),
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
+    scope_label: str = "Company",
 ) -> Path:
-    """Write the exact Company Performance workbook requested by the user."""
+    """Write the dashboard workbook for the requested analysis scope."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     snapshots = tuple(snapshots)
     bottlenecks = tuple(bottlenecks)
     recommendations = tuple(recommendations)
+    scope_label = str(scope_label or "Company").strip() or "Company"
+    summary_sheet = f"{_scope_token(scope_label)}_Executive_Dashboard"
+    expected_sheet_names = (
+        summary_sheet,
+        BREAKDOWN_SHEET,
+        DETAILS_SHEET,
+        "Overdue Tasks",
+        "Late Completed Tasks",
+        "Bottlenecks",
+        "Workflow Exceptions",
+        "Weekly Flow",
+        QUALITY_SHEET,
+        "Analysis Context",
+        "Metric Definitions",
+    )
     rows = _task_rows(model, snapshots)
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    dashboard = workbook.create_sheet("Company_Executive_Dashboard")
+    dashboard = workbook.create_sheet(summary_sheet)
     dashboard.sheet_view.showGridLines = False
     dashboard.merge_cells("A1:K1")
-    dashboard["A1"] = "Company Performance"
+    dashboard["A1"] = f"{scope_label} Performance"
     dashboard["A1"].fill = PatternFill("solid", fgColor="17324D")
     dashboard["A1"].font = Font(color="FFFFFF", bold=True, size=16)
     dashboard["A1"].alignment = Alignment(horizontal="center")
@@ -466,10 +489,10 @@ def write_company_excel(
 
     context = workbook.create_sheet("Analysis Context")
     _write_excel_table(context, [["Field", "Value"],
-        ["Analysis Level", "Company"],
+        ["Analysis Level", scope_label],
         ["Source Systems", "Jira and ClickUp"],
         ["Analysis Period", f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"],
-        ["Task Scope", "All collected source Spaces unified into Company Performance."],
+        ["Task Scope", f"All collected source Spaces unified into {scope_label} Performance."],
         ["Deduplication", "Distinct Source Tool + Task ID."],
         ["Subtasks", "Visible in Task Details; excluded from KPI rates."],
     ])
@@ -477,7 +500,7 @@ def write_company_excel(
 
     definitions = workbook.create_sheet("Metric Definitions")
     _write_excel_table(definitions, [["Metric", "Definition"],
-        ["Total Tasks", "All tasks in the selected Company scope; subtasks remain visible."],
+        ["Total Tasks", f"All tasks in the selected {scope_label} scope; subtasks remain visible."],
         ["Completed", "Tasks with normalized Completed status at period end."],
         ["Completion Rate", "Completed tasks divided by KPI-counted tasks with a verified status at period end; Unknown statuses are excluded and shown in Data Quality."],
         ["On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."],
@@ -491,8 +514,8 @@ def write_company_excel(
 
     for sheet in workbook.worksheets:
         sheet.sheet_view.showGridLines = False
-    if tuple(workbook.sheetnames) != COMPANY_SHEET_NAMES:
-        raise AssertionError("Company Performance workbook sheet order changed unexpectedly")
+    if tuple(workbook.sheetnames) != expected_sheet_names:
+        raise AssertionError(f"{scope_label} Performance workbook sheet order changed unexpectedly")
     workbook.save(output)
     return output
 
@@ -520,10 +543,10 @@ def write_company_raw_data(snapshots: Iterable[TaskPeriodSnapshot], output_path:
     return output
 
 
-def _configure_document(document: Document) -> None:
+def _configure_document(document: Document, *, scope_label: str = "Company") -> None:
     configure_report_document(
         document,
-        header_label="COMPANY PERFORMANCE REPORT | PERFORMANCE EVALUATION",
+        header_label=f"{scope_label.upper()} PERFORMANCE REPORT | PERFORMANCE EVALUATION",
         footer_label="Task Performance Intelligence",
     )
 
@@ -688,13 +711,15 @@ def write_company_word_report(
     snapshots: Iterable[TaskPeriodSnapshot] = (),
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
+    scope_label: str = "Company",
 ) -> Path:
-    """Create a Company report using the same structure as Project reports."""
+    """Create a scope-specific report using the same structure as Project reports."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     snapshots = tuple(snapshots)
     bottlenecks = tuple(bottlenecks)
     recommendations = tuple(recommendations)
+    scope_label = str(scope_label or "Company").strip() or "Company"
     rows = _task_rows(model, snapshots)
     source_spaces = " / ".join(
         f"{item.source_tool}: {item.source_space or 'N/A'}"
@@ -705,17 +730,17 @@ def write_company_word_report(
     on_time = _display(model.kpis.on_time_completion_rate)
 
     document = Document()
-    _configure_document(document)
+    _configure_document(document, scope_label=scope_label)
     add_report_title(
         document,
-        "Company Performance Report",
-        "Company-wide Jira and ClickUp analysis",
+        f"{scope_label} Performance Report",
+        f"{scope_label}-wide Jira and ClickUp analysis",
         metadata=(f"Source Spaces: {source_spaces}", f"Analysis period: {period}"),
     )
 
-    document.add_heading("Company Executive Summary", level=1)
+    document.add_heading(f"{scope_label} Executive Summary", level=1)
     document.add_paragraph(
-        f"The Company scope combines the selected Jira projects and ClickUp Spaces for {period}. "
+        f"The {scope_label} scope combines the selected Jira projects and ClickUp Spaces for {period}. "
         f"It contains {model.kpis.total_tasks} task(s), including visible subtasks, with "
         f"{model.kpis.completed_tasks} completed. Completion rate is {completion}; on-time rate is "
         f"{on_time}; {model.kpis.overdue_open_tasks} open overdue task(s) require follow-up."
@@ -723,16 +748,16 @@ def write_company_word_report(
 
     document.add_heading("Data Sources and Analysis Scope", level=1)
     _add_table(document, ("Field", "Value"), [
-        ("Company", "Company-wide Jira and ClickUp scope"),
+        (scope_label, f"{scope_label}-wide Jira and ClickUp scope"),
         ("Source", "Jira and ClickUp"),
         ("Source Spaces", source_spaces),
         ("Analysis Period", period),
-        ("Scope Rule", "All collected source Spaces are unified into one Company scope; duplicate Source Tool + Task ID records are removed."),
+        ("Scope Rule", f"All collected source Spaces are unified into one {scope_label} scope; duplicate Source Tool + Task ID records are removed."),
         ("Subtask Rule", "Subtasks remain visible in task-level output but are excluded from KPI rates."),
         ("Status Rule", "Original source statuses are retained; verified historical status is used for KPI calculations and Unknown is reported in Data Quality."),
     ])
 
-    document.add_heading("Company KPI Summary", level=1)
+    document.add_heading(f"{scope_label} KPI Summary", level=1)
     _add_table(document, ("KPI", "Value"), [
         ("Total Tasks", model.kpis.total_tasks),
         ("Completed", model.kpis.completed_tasks),
@@ -764,7 +789,7 @@ def write_company_word_report(
     weekly_rows = _weekly_rows(rows)
     _add_table(document, ("Week Starting", "Tasks Opened", "Tasks Completed", "Net Flow", "Cumulative Net Flow"), weekly_rows or [(model.period_start, 0, 0, 0, 0)])
 
-    document.add_heading("Company-wide Bottlenecks", level=1)
+    document.add_heading(f"{scope_label}-wide Bottlenecks", level=1)
     _add_table(document, ("Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"), [
         (item.status.value, item.strength, "; ".join(item.evidence), item.metrics.average_days,
          item.metrics.open_tasks_now, item.metrics.overdue_open_tasks)
@@ -868,7 +893,7 @@ def write_company_word_report(
 
     document.add_heading("Metric Definitions", level=1)
     _add_table(document, ("Metric", "Definition"), [
-        ("Total Tasks", "All tasks in the selected Company scope; subtasks remain visible."),
+        ("Total Tasks", f"All tasks in the selected {scope_label} scope; subtasks remain visible."),
         ("Completed", "Tasks with verified Completed status at period end."),
         ("Completion Rate", "Completed tasks divided by KPI-counted tasks with a verified status at period end; Unknown statuses are excluded and shown in Data Quality."),
         ("On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."),
