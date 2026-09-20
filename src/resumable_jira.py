@@ -32,6 +32,21 @@ def _recent_completed_payload(payload: dict[str, Any]) -> bool:
     return (datetime.now(timezone.utc) - collected).total_seconds() <= 1800
 
 
+def _persisted_issue_keys(payload: dict[str, Any] | None) -> set[str]:
+    """Return the seeded issue keys stored with a persisted collection."""
+    if not isinstance(payload, dict):
+        return set()
+    keys: set[str] = set()
+    for item in payload.get("items") or ():
+        if not isinstance(item, dict):
+            continue
+        seed = item.get("seed_item") or {}
+        key = item.get("issue_key") or (seed.get("key") if isinstance(seed, dict) else None)
+        if key:
+            keys.add(str(key))
+    return keys
+
+
 def collect_jira_query(
     settings,
     *,
@@ -58,6 +73,15 @@ def collect_jira_query(
     keep_store = True
     try:
         payload = store.latest_for_fingerprint(owner_key, fingerprint)
+        # Employee collection supplies a freshly discovered issue list. Never
+        # resume a persisted job whose seeded list belongs to a different
+        # snapshot; doing so can make collection_save_item reject a valid issue
+        # as "not part of this collection".
+        if payload and seed_issues is not None:
+            current_keys = {str(item.get("key")) for item in seed_issues if item.get("key")}
+            persisted_keys = _persisted_issue_keys(payload)
+            if persisted_keys != current_keys:
+                payload = None
         job = None
         if payload and (
             payload.get("status") in {"running", "error", "paused"}
@@ -96,7 +120,10 @@ def collect_jira_query(
         if job.error:
             raise CollectionError(job.error, retryable=True)
 
-        if seed_issues is not None and not payload:
+        if seed_issues is not None:
+            # Idempotently repair/reassert the ordered item list before the
+            # first item is saved. This also repairs old jobs whose item rows
+            # were only partially seeded before an interrupted request.
             store.seed_items(owner_key, job.id, list(seed_issues))
 
         while True:

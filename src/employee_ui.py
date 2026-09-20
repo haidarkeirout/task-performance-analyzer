@@ -265,11 +265,21 @@ def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
     progress = st.progress(0.0, text=f"Collecting Jira tasks: 0 / {total}")
     query = snapshot["query"]
     space_name = f"Employee: {record.name}"
+    # Include the discovered issue set and a version marker in the persistent
+    # fingerprint. Employee snapshots can change while the selected name and
+    # Spaces stay the same; an old checkpoint must not be reused for a new set.
+    issue_signature = hashlib.sha256(
+        json.dumps(
+            sorted(str(issue.get("key")) for issue in issues),
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    durable_fingerprint = f"{fingerprint}:v2:{issue_signature}"
     result = collect_jira_query(
         settings,
         space={"id": "*", "key": f"employee-{record.name}", "name": space_name},
         query=query,
-        fingerprint=fingerprint,
+        fingerprint=durable_fingerprint,
         seed_issues=issues,
         progress=lambda fraction, message: progress.progress(
             fraction, text=message
@@ -378,7 +388,9 @@ def render_employee_collection(settings):
         json.dumps({"snapshot": snapshot_key, "spaces": selected_spaces}, sort_keys=True).encode()
     ).hexdigest()
     prepared = st.session_state.get("employee_prepared")
-    if prepared is not None and not getattr(prepared, "fingerprint", "").endswith(fingerprint):
+    prepared_fingerprint = str(getattr(prepared, "fingerprint", "")) if prepared is not None else ""
+    same_scope = prepared_fingerprint.endswith(fingerprint) or f":{fingerprint}:v2:" in prepared_fingerprint
+    if prepared is not None and not same_scope:
         st.session_state.pop("employee_prepared", None)
         prepared = None
 
