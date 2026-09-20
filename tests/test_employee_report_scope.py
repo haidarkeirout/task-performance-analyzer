@@ -51,6 +51,30 @@ def _employee_snapshot():
     return reconstruct_task(task, START, END)
 
 
+def _clickup_snapshot():
+    task = TaskRecord(
+        source_tool="ClickUp",
+        task_id="EMP-C-1",
+        task_name="Employee ClickUp task",
+        source_space="Operations",
+        unified_project="Employee: Test Employee",
+        raw_status="Complete",
+        initial_status="To Do",
+        created_date=START,
+        workflow_history=(
+            StatusTransition(
+                datetime(2026, 9, 3, 9, tzinfo=UTC),
+                "To Do",
+                "Complete",
+            ),
+        ),
+        history_complete=True,
+        history_through=datetime(2026, 10, 1, tzinfo=UTC),
+        collection_timestamp=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    return reconstruct_task(task, START, END)
+
+
 class _FakeColumn:
     def __init__(self, keys):
         self.keys = keys
@@ -133,21 +157,23 @@ class EmployeeScopeTests(TestCase):
         self.assertEqual(output.call_count, 2)
 
     def test_employee_exports_use_employee_labels_without_changing_task_content(self):
-        snapshot = _employee_snapshot()
-        model = build_company_dashboard((snapshot,), scope_label="Employee")
+        jira_snapshot = _employee_snapshot()
+        clickup_snapshot = _clickup_snapshot()
+        snapshots = (jira_snapshot, clickup_snapshot)
+        model = build_company_dashboard(snapshots, scope_label="Employee")
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             excel_path = write_company_excel(
                 model,
                 root / "employee_performance_analysis.xlsx",
-                snapshots=(snapshot,),
+                snapshots=snapshots,
                 scope_label="Employee",
             )
             word_path = write_company_word_report(
                 model,
                 root / "employee_performance_report.docx",
-                snapshots=(snapshot,),
+                snapshots=snapshots,
                 scope_label="Employee",
             )
 
@@ -162,6 +188,7 @@ class EmployeeScopeTests(TestCase):
         self.assertEqual(workbook["Analysis Context"]["B2"].value, "Employee")
         self.assertEqual(workbook["Task Details"]["A2"].value, "Jira")
         self.assertEqual(workbook["Task Details"]["D2"].value, "EMP-J-1")
+        self.assertEqual(workbook["Task Details"]["D3"].value, "EMP-C-1")
 
         document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         self.assertIn("Employee Performance Report", document_text)
