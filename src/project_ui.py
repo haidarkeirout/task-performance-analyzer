@@ -223,10 +223,10 @@ def _collect_clickup_space(
     try:
         report_progress(0, f"Loading task list from ClickUp — {space_name}...")
         checkpoints = dict(st.session_state.get("project_clickup_checkpoints") or {})
-        checkpoint = checkpoints.setdefault(fingerprint, {})
+        checkpoint = checkpoints.setdefault(effective_fingerprint, {})
 
         def save_checkpoint(state):
-            checkpoints[fingerprint] = state
+            checkpoints[effective_fingerprint] = state
             st.session_state["project_clickup_checkpoints"] = checkpoints
 
         tasks = gateway.all_tasks_for_space(
