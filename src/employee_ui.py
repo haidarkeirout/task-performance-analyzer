@@ -60,6 +60,7 @@ def _clear_employee_state() -> None:
         "clickup_prepared_data", "clickup_analysis", "task_metrics", "process_data",
         "validation_log", "department_analysis", "employee_run_requested",
         "clickup_run_analysis", "cutoff_text", "prepared_data",
+        "employee_company_analysis",
     ):
         st.session_state.pop(key, None)
 
