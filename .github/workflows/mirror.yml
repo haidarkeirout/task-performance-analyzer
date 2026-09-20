@@ -1,0 +1,22 @@
+name: Mirror to task-performance-v2
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror to target repo
+        run: |
+          git remote add target https://x-access-token:${{ secrets.MIRROR_TOKEN }}@github.com/baraa-sheikha/task-performance-v2.git
+          git push target --mirror
