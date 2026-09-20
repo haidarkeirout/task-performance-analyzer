@@ -8,6 +8,7 @@ analysis pipeline.
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
@@ -83,6 +84,8 @@ def _collect(
     progress,
     fingerprint: str,
     seed_items_by_project: dict[str, list[dict]] | None = None,
+    collection_id: str | None = None,
+    fresh: bool = False,
 ) -> PreparedData:
     source_timezone = settings.source_timezone
     cutoff = _analysis_cutoff(end_date, source_timezone)
@@ -112,6 +115,8 @@ def _collect(
             space=space,
             query=query,
             fingerprint=f"{fingerprint}:{project_key}",
+            collection_id=collection_id,
+            fresh=fresh,
             cutoff=cutoff,
             seed_issues=seeds,
             progress=lambda fraction, message, label=name: progress(
@@ -212,11 +217,26 @@ def render_jira_department_collection(settings):
         st.error("The From date must be on or before the To date.")
         return None, False
 
+    if "jira_department_collection_id" not in st.session_state:
+        st.session_state["jira_department_collection_id"] = uuid4().hex
+        st.session_state["jira_department_collection_fresh"] = True
+    if st.button("Refresh Live Data", key="jira_department_refresh"):
+        for key in (
+            "jira_department_prepared_data",
+            "jira_department_preview_cache",
+            "department_analysis",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state["jira_department_collection_id"] = uuid4().hex
+        st.session_state["jira_department_collection_fresh"] = True
+        st.rerun()
+
     fingerprint = json.dumps({
         "department": "jira-tech-development",
         "from": str(start_date),
         "to": str(end_date),
         "spaces": [(str(s.get("id")), str(s.get("key"))) for s in spaces],
+        "collection_id": st.session_state.get("jira_department_collection_id"),
     }, sort_keys=True)
     previous = st.session_state.get("jira_department_prepared_data")
     if previous is not None and previous.fingerprint != fingerprint:
@@ -276,6 +296,8 @@ def render_jira_department_collection(settings):
         if items:
             preview_spaces.append(space)
 
+    if st.session_state.get("jira_department_collection_collected_at"):
+        st.caption(f"Data collected at: {st.session_state['jira_department_collection_collected_at']}")
     st.caption(
         f"{len(preview_items)} Jira work items found across "
         f"{len(preview_spaces)} space(s)."
@@ -301,9 +323,13 @@ def render_jira_department_collection(settings):
                 end_date,
                 lambda message: progress.progress(0.0, text=str(message)),
                 fingerprint=fingerprint,
+                collection_id=st.session_state.get("jira_department_collection_id"),
+                fresh=st.session_state.get("jira_department_collection_fresh", False),
                 seed_items_by_project=preview_items_by_project,
             )
             st.session_state["jira_department_prepared_data"] = prepared
+            st.session_state["jira_department_collection_fresh"] = False
+            st.session_state["jira_department_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
             progress.progress(1.0, text="Tech Jira collection completed.")
         except Exception as exc:
             st.error(f"Tech Jira collection could not be completed: {exc}")
@@ -349,6 +375,7 @@ def render_jira_department_collection(settings):
                 st.session_state["jira_department_prepared_data"] = prepared
                 progress.progress(1.0, text="Tech Jira source updated.")
             except Exception as exc:
+                st.session_state["jira_department_collection_fresh"] = False
                 st.error(f"Tech Jira source could not be updated: {exc}")
                 return None, False
         st.session_state["jira_department_run_requested"] = True
