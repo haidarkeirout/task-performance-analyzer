@@ -14,7 +14,14 @@ jobs:
       - name: Checkout full history
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # required — grabs all branches/tags/history
+
+      - name: Verify token is set (safe debug)
+        run: |
+          echo "Token length: ${#MIRROR_TOKEN}"
+          echo "Token prefix: ${MIRROR_TOKEN:0:4}"
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
 
       - name: Mirror to target repo
         run: |
