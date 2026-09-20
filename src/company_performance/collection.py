@@ -594,14 +594,18 @@ def collect_company_spaces(
             fingerprint = (
                 f"company:{selected_company}:{source.casefold()}:{source_key}"
             )
+            collector_options = (
+                {"collection_id": collection_id, "fresh": fresh}
+                if collection_id is not None or fresh
+                else {}
+            )
             if source == "Jira":
                 source_data = _collect_jira_space(
                     settings,
                     item,
                     fingerprint,
                     progress=update_source_progress,
-                    collection_id=collection_id,
-                    fresh=fresh,
+                    **collector_options,
                 )
             else:
                 source_data = _collect_clickup_space(
@@ -609,8 +613,7 @@ def collect_company_spaces(
                     item,
                     fingerprint,
                     progress=update_source_progress,
-                    collection_id=collection_id,
-                    fresh=fresh,
+                    **collector_options,
                 )
             saved[identity] = CompanyPreparedItem(
                 prepared=source_data,
