@@ -686,6 +686,8 @@ def render_company_collection(settings, selected_company: str = ALL_COMPANIES_ID
             "company_collection_errors",
             "company_partial_prepared_items",
             "company_analysis",
+            "company_output_cache_key",
+            "company_output_cache",
         ):
             st.session_state.pop(key, None)
         st.session_state["company_collection_id"] = uuid4().hex
