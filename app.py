@@ -1464,6 +1464,8 @@ if analysis_mode == "employee" and st.session_state.get("employee_company_analys
         scope_title=f"Employee Performance — {getattr(prepared_data, 'employee_name', 'Selected Employee')}",
         close_state_key="employee_company_analysis",
         download_stem="employee_performance",
+        scope_key="employee",
+        scope_label="Employee",
     )
     st.stop()
 
