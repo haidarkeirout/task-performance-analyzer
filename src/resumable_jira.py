@@ -54,6 +54,8 @@ def collect_jira_query(
     query: str,
     fingerprint: str,
     cutoff: str | None = None,
+    collection_id: str | None = None,
+    fresh: bool = False,
     seed_issues: list[dict[str, Any]] | None = None,
     progress: Progress | None = None,
 ):
@@ -71,8 +73,12 @@ def collect_jira_query(
         )
     owner_key = persistence_owner_key(settings)
     keep_store = True
+    job_fingerprint = (
+        f"{fingerprint}:collection:{collection_id}"
+        if collection_id else fingerprint
+    )
     try:
-        payload = store.latest_for_fingerprint(owner_key, fingerprint)
+        payload = None if fresh else store.latest_for_fingerprint(owner_key, job_fingerprint)
         # Employee collection supplies a freshly discovered issue list. Never
         # resume a persisted job whose seeded list belongs to a different
         # snapshot; doing so can make collection_save_item reject a valid issue
@@ -105,7 +111,7 @@ def collect_jira_query(
                 settings,
                 space,
                 query,
-                fingerprint,
+                job_fingerprint,
                 definitions,
                 JiraGateway,
                 store=store,
