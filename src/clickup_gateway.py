@@ -165,9 +165,12 @@ class ClickUpGateway:
         })
 
     def all_tasks_for_list(
-        self, list_id: str, progress=None, checkpoint=None, checkpoint_callback=None
+        self, list_id: str, progress=None, checkpoint=None, checkpoint_callback=None,
+        fresh: bool = False,
     ):
         state = checkpoint if checkpoint is not None else {}
+        if fresh:
+            state.clear()
         stored = state.setdefault("tasks", {})
         page = int(state.get("next_page", 0))
         result, seen = list(stored.values()), set(stored)
@@ -197,9 +200,12 @@ class ClickUpGateway:
         return result
 
     def all_tasks_for_space(
-        self, space_id: str, progress=None, checkpoint=None, checkpoint_callback=None
+        self, space_id: str, progress=None, checkpoint=None, checkpoint_callback=None,
+        fresh: bool = False,
     ):
         state = checkpoint if checkpoint is not None else {}
+        if fresh:
+            state.clear()
         if "lists" not in state:
             lists = list(self.folderless_lists(space_id))
             for folder in self.folders(space_id):
@@ -214,7 +220,7 @@ class ClickUpGateway:
         for current_list in lists:
             list_id = str(current_list["id"])
             list_state = list_states.setdefault(list_id, {})
-            if list_state.get("complete"):
+            if list_state.get("complete") and not fresh:
                 continue
             page = int(list_state.get("next_page", 0))
             while True:
