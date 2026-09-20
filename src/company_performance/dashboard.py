@@ -498,6 +498,7 @@ def build_company_dashboard(
     *,
     coverages: Iterable[SourceCoverage] | None = None,
     filters: DashboardFilters | None = None,
+    scope_label: str = "Company",
 ) -> CompanyDashboardModel:
     """Build a complete Company Performance dashboard view model.
 
@@ -532,7 +533,7 @@ def build_company_dashboard(
             selected_in_period,
             period_start=period_start,
             period_end=period_end,
-            scope="Company-wide scope",
+            scope=f"{scope_label} scope",
         ),
         executive_charts=_executive_charts(selected_in_period),
         source_coverage=_coverage_views(coverages, selected_in_period),
