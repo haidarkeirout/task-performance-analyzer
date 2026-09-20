@@ -229,23 +229,43 @@ def render_jira_department_collection(settings):
     if cached_preview is not None:
         preview_items_by_project = cached_preview
     else:
-        with st.spinner("Scanning every Jira space for Tech work items..."):
-            preview_gateway = JiraGateway(settings)
-            try:
-                preview_items_by_project = {}
-                for space in spaces:
-                    key = str(space.get("key") or "").strip()
-                    if not key:
-                        continue
-                    query = _period_query(key, start_date, end_date)
-                    preview_items_by_project[key] = preview_gateway.all_issues(query)
-                preview_cache = {fingerprint: preview_items_by_project}
-                st.session_state["jira_department_preview_cache"] = preview_cache
-            except CollectionError as exc:
-                st.error(str(exc))
-                return None, False
-            finally:
-                preview_gateway.close()
+        preview_gateway = JiraGateway(settings)
+        preview_progress = st.progress(
+            0.0, text=f"Scanning Jira department Spaces: 0 / {len(spaces)}"
+        )
+        try:
+            preview_items_by_project = {}
+            active_spaces = [
+                space for space in spaces if str(space.get("key") or "").strip()
+            ]
+            for index, space in enumerate(active_spaces):
+                key = str(space.get("key") or "").strip()
+                query = _period_query(key, start_date, end_date)
+
+                def update_preview(message, position=index, label=key):
+                    fraction = position / len(active_spaces) if active_spaces else 1.0
+                    preview_progress.progress(
+                        fraction,
+                        text=f"{label}: {message}",
+                    )
+
+                preview_items_by_project[key] = preview_gateway.all_issues(
+                    query, progress=update_preview
+                )
+                preview_progress.progress(
+                    (index + 1) / len(active_spaces) if active_spaces else 1.0,
+                    text=f"Scanned Jira department Spaces: {index + 1} / {len(active_spaces)}",
+                )
+            preview_cache = {fingerprint: preview_items_by_project}
+            st.session_state["jira_department_preview_cache"] = preview_cache
+            preview_progress.progress(
+                1.0, text=f"Jira department collection complete: {sum(len(items) for items in preview_items_by_project.values())} tasks"
+            )
+        except CollectionError as exc:
+            st.error(str(exc))
+            return None, False
+        finally:
+            preview_gateway.close()
 
     preview_items = []
     preview_spaces = []
@@ -273,25 +293,18 @@ def render_jira_department_collection(settings):
         disabled=not preview_items,
     ):
         try:
-            with st.status(
-                "Collecting Tech work items from Jira...",
-                expanded=True,
-            ) as progress:
-                prepared = _collect(
-                    settings,
-                    spaces,
-                    start_date,
-                    end_date,
-                    lambda message: progress.update(label=message),
-                    fingerprint=fingerprint,
-                    seed_items_by_project=preview_items_by_project,
-                )
-                st.session_state["jira_department_prepared_data"] = prepared
-                progress.update(
-                    label="Tech Jira collection completed.",
-                    state="complete",
-                    expanded=False,
-                )
+            progress = st.progress(0.0, text="Collecting Tech work items from Jira...")
+            prepared = _collect(
+                settings,
+                spaces,
+                start_date,
+                end_date,
+                lambda message: progress.progress(0.0, text=str(message)),
+                fingerprint=fingerprint,
+                seed_items_by_project=preview_items_by_project,
+            )
+            st.session_state["jira_department_prepared_data"] = prepared
+            progress.progress(1.0, text="Tech Jira collection completed.")
         except Exception as exc:
             st.error(f"Tech Jira collection could not be completed: {exc}")
 
@@ -323,17 +336,18 @@ def render_jira_department_collection(settings):
     if run_clicked:
         if not prepared_is_current:
             try:
-                with st.spinner("Updating the Tech Jira analysis source..."):
-                    prepared = _collect(
-                        settings,
-                        spaces,
-                        start_date,
-                        end_date,
-                        lambda message: st.write(message),
-                        fingerprint=fingerprint,
-                        seed_items_by_project=preview_items_by_project,
-                    )
-                    st.session_state["jira_department_prepared_data"] = prepared
+                progress = st.progress(0.0, text="Updating the Tech Jira analysis source...")
+                prepared = _collect(
+                    settings,
+                    spaces,
+                    start_date,
+                    end_date,
+                    lambda message: progress.progress(0.0, text=str(message)),
+                    fingerprint=fingerprint,
+                    seed_items_by_project=preview_items_by_project,
+                )
+                st.session_state["jira_department_prepared_data"] = prepared
+                progress.progress(1.0, text="Tech Jira source updated.")
             except Exception as exc:
                 st.error(f"Tech Jira source could not be updated: {exc}")
                 return None, False

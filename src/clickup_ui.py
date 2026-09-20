@@ -221,11 +221,13 @@ def _render_clickup_collection(settings, analysis_mode="existing"):
         try:
             gateway = _clickup_gateway(settings, workspace_id)
             try:
-                with st.spinner("Loading ClickUp tasks..."):
-                    tasks = (
-                        gateway.all_tasks_for_list(department_id)
-                        if department_mode else gateway.all_tasks_for_space(selected)
-                    )
+                progress = st.progress(0.0, text="Loading ClickUp tasks...")
+                progress_callback = lambda message: progress.progress(0.0, text=str(message))
+                tasks = (
+                    gateway.all_tasks_for_list(department_id, progress=progress_callback)
+                    if department_mode else gateway.all_tasks_for_space(selected, progress=progress_callback)
+                )
+                progress.progress(1.0, text=f"ClickUp collection complete: {len(tasks)} tasks")
             finally:
                 gateway.close()
         except ClickUpCollectionError as exc:

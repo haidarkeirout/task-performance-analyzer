@@ -86,23 +86,55 @@ def _clickup_assigned(task: dict, user_id: str) -> bool:
     return any(str(person.get("id")) == str(user_id) for person in (task.get("assignees") or []))
 
 
-def _load_jira(record: EmployeeRecord, settings) -> dict:
+def _scaled_progress(progress, fraction: float, text: str, start: float, end: float) -> None:
+    if progress is None:
+        return
+    value = start + (end - start) * max(0.0, min(1.0, fraction))
+    progress.progress(value, text=str(text))
+
+
+def _load_jira(
+    record: EmployeeRecord,
+    settings,
+    *,
+    progress=None,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
+) -> dict:
     gateway = JiraGateway(settings)
+    if progress is None:
+        progress = st.progress(0.0, text="Collecting Jira tasks...")
     try:
         query = f'assignee = "{record.jira_account_id}" ORDER BY created DESC'
-        issues = gateway.all_issues(query, progress=lambda message: st.caption(message))
+        issues = gateway.all_issues(
+            query,
+            progress=lambda message: _scaled_progress(
+                progress, 0.0, str(message), progress_start, progress_end
+            ),
+        )
         spaces = {}
         for issue in issues:
             key = _jira_space_key(issue)
             if key:
                 spaces[key] = _jira_space_name(issue)
+        _scaled_progress(
+            progress, 1.0, f"Jira collection complete: {len(issues)} tasks",
+            progress_start, progress_end,
+        )
         return {"source": "Jira", "query": query, "issues": issues, "spaces": spaces,
                 "definitions": gateway.fields()}
     finally:
         gateway.close()
 
 
-def _load_clickup(record: EmployeeRecord, settings) -> dict:
+def _load_clickup(
+    record: EmployeeRecord,
+    settings,
+    *,
+    progress=None,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
+) -> dict:
     gateway = ClickUpGateway(settings.clickup_token, workspace_id=str(settings.clickup_workspace_id or ""))
     try:
         workspaces = gateway.workspaces()
@@ -111,10 +143,13 @@ def _load_clickup(record: EmployeeRecord, settings) -> dict:
             raise ClickUpCollectionError("No ClickUp Workspace was found for this account.")
         spaces = gateway.spaces(workspace_id)
         tasks, space_names = [], {}
+        if progress is None:
+            progress = st.progress(0.0, text=f"Collecting ClickUp Spaces: 0 / {len(spaces)}")
+        overall = progress
         registry = dict(st.session_state.get("employee_clickup_checkpoints") or {})
         employee_key = f"{record.name}:{record.clickup_user_id}:{workspace_id}"
         employee_checkpoints = registry.setdefault(employee_key, {})
-        for space in spaces:
+        for index, space in enumerate(spaces):
             space_id = str(space.get("id") or "")
             if not space_id:
                 continue
@@ -127,7 +162,13 @@ def _load_clickup(record: EmployeeRecord, settings) -> dict:
 
             current = gateway.all_tasks_for_space(
                 space_id,
-                progress=lambda message: st.caption(message),
+                progress=lambda message, position=index: _scaled_progress(
+                    overall,
+                    position / len(spaces) if spaces else 1.0,
+                    str(message),
+                    progress_start,
+                    progress_end,
+                ),
                 checkpoint=checkpoint,
                 checkpoint_callback=save_checkpoint,
             )
@@ -142,6 +183,17 @@ def _load_clickup(record: EmployeeRecord, settings) -> dict:
             if matching:
                 space_names[space_id] = space.get("name") or space_id
                 tasks.extend(matching)
+            _scaled_progress(
+                overall,
+                (index + 1) / len(spaces) if spaces else 1.0,
+                f"Collected ClickUp Space {index + 1} / {len(spaces)}",
+                progress_start,
+                progress_end,
+            )
+        _scaled_progress(
+            overall, 1.0, f"ClickUp collection complete: {len(tasks)} assigned tasks",
+            progress_start, progress_end,
+        )
         return {"source": "ClickUp", "workspace_id": workspace_id, "tasks": tasks, "spaces": space_names}
     finally:
         gateway.close()
@@ -156,16 +208,29 @@ def _load_employee_sources(record: EmployeeRecord, settings) -> dict:
     """
     snapshots: dict[str, dict] = {}
     warnings: list[str] = []
+    configured_sources = int(bool(record.jira_account_id)) + int(bool(record.clickup_user_id))
+    overall = st.progress(0.0, text=f"Searching employee tasks: 0 / {configured_sources} sources")
+    source_index = 0
     if record.jira_account_id:
         try:
-            snapshots["Jira"] = _load_jira(record, settings)
+            snapshots["Jira"] = _load_jira(
+                record, settings, progress=overall,
+                progress_start=source_index / configured_sources,
+                progress_end=(source_index + 1) / configured_sources,
+            )
         except CollectionError as exc:
             warnings.append(f"Jira: {exc}")
+        source_index += 1
     if record.clickup_user_id:
         try:
-            snapshots["ClickUp"] = _load_clickup(record, settings)
+            snapshots["ClickUp"] = _load_clickup(
+                record, settings, progress=overall,
+                progress_start=source_index / configured_sources,
+                progress_end=(source_index + 1) / configured_sources,
+            )
         except ClickUpCollectionError as exc:
             warnings.append(f"ClickUp: {exc}")
+        source_index += 1
     if not snapshots:
         detail = " | ".join(warnings) or "No Jira account or ClickUp member ID is configured."
         raise CollectionError(f"Could not collect {record.name}'s tasks. {detail}")
@@ -174,6 +239,7 @@ def _load_employee_sources(record: EmployeeRecord, settings) -> dict:
     for source, snapshot in snapshots.items():
         for key, label in snapshot.get("spaces", {}).items():
             spaces[_source_space_key(source, key)] = f"{source} · {label}"
+    overall.progress(1.0, text=f"Employee collection complete: {sum(len(item.get('issues', item.get('tasks', []))) for item in snapshots.values())} tasks")
     return {
         "source": "Combined" if len(snapshots) > 1 else next(iter(snapshots)),
         "sources": snapshots,
@@ -351,8 +417,7 @@ def render_employee_collection(settings):
     if st.button("Load Employee Tasks", type="primary", key="employee_load"):
         _clear_employee_state()
         try:
-            with st.spinner(f"Finding {record.name}'s assigned tasks in Jira and ClickUp..."):
-                snapshot = _load_employee_sources(record, settings)
+            snapshot = _load_employee_sources(record, settings)
             st.session_state["employee_snapshot"] = snapshot
             st.session_state["employee_snapshot_key"] = snapshot_key
             st.session_state["data_source"] = snapshot["source"]

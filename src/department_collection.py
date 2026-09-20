@@ -134,7 +134,8 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
     try:
         collected = {}
         raw_count = 0
-        for source in sources:
+        overall = st.progress(0.0, text=f"Collecting department Lists: 0 / {len(sources)}")
+        for index, source in enumerate(sources):
             list_id = source["list_id"]
             list_checkpoint = source_checkpoints.setdefault(list_id, {})
 
@@ -145,6 +146,10 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
 
             tasks = gateway.all_tasks_for_list(
                 list_id,
+                progress=lambda message, position=index: overall.progress(
+                    position / len(sources) if sources else 1.0,
+                    text=str(message),
+                ),
                 checkpoint=list_checkpoint,
                 checkpoint_callback=save_checkpoint,
             )
@@ -167,6 +172,11 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
                     _merge_sources(collected[task_id], annotated)
                 else:
                     collected[task_id] = annotated
+            overall.progress(
+                (index + 1) / len(sources) if sources else 1.0,
+                text=f"Collected department List {index + 1} / {len(sources)}",
+            )
+        overall.progress(1.0, text=f"Department collection complete: {len(collected)} tasks")
         tasks = list(collected.values())
     finally:
         gateway.close()
@@ -339,8 +349,7 @@ def render_department_collection(settings):
         default=str,
     )
     try:
-        with st.spinner("Scanning all matching ClickUp Lists..."):
-            all_tasks = _collect_department_tasks(settings, sources, cache_key)
+        all_tasks = _collect_department_tasks(settings, sources, cache_key)
     except ClickUpCollectionError as exc:
         st.error(str(exc))
         return None, False

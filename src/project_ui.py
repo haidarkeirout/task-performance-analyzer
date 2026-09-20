@@ -1788,15 +1788,46 @@ def render_project_collection(settings):
         _clear_project_run()
         st.session_state["project_selection_fingerprint"] = selection_fingerprint
         try:
-            with st.spinner("Collecting tasks from the selected project Spaces..."):
-                if jira_item:
-                    st.session_state["project_jira_prepared"] = _collect_jira_space(
-                        settings, jira_item, f"project:jira:{selection_fingerprint}"
-                    )
-                if clickup_item:
-                    st.session_state["project_clickup_prepared"] = _collect_clickup_space(
-                        settings, clickup_item, f"project:clickup:{selection_fingerprint}"
-                    )
+            # Use one shared line even when the project combines Jira and
+            # ClickUp.  Source callbacks update their assigned segment of the
+            # same bar instead of leaving one line per source/page behind.
+            source_count = int(bool(jira_item)) + int(bool(clickup_item))
+            collection_progress = st.progress(
+                0.0, text=f"Collecting project sources: 0 / {source_count}"
+            )
+            source_index = 0
+
+            def source_progress(fraction: float, message: str, position: int) -> None:
+                start = position / source_count if source_count else 0.0
+                end = (position + 1) / source_count if source_count else 1.0
+                collection_progress.progress(
+                    start + (end - start) * max(0.0, min(1.0, fraction)),
+                    text=str(message),
+                )
+
+            if jira_item:
+                st.session_state["project_jira_prepared"] = _collect_jira_space(
+                    settings,
+                    jira_item,
+                    f"project:jira:{selection_fingerprint}",
+                    progress=lambda fraction, message, position=source_index: source_progress(
+                        fraction, message, position
+                    ),
+                )
+                source_index += 1
+            if clickup_item:
+                st.session_state["project_clickup_prepared"] = _collect_clickup_space(
+                    settings,
+                    clickup_item,
+                    f"project:clickup:{selection_fingerprint}",
+                    progress=lambda fraction, message, position=source_index: source_progress(
+                        fraction, message, position
+                    ),
+                )
+                source_index += 1
+            collection_progress.progress(
+                1.0, text=f"Project collection complete: {source_index} / {source_count} sources"
+            )
             preview = build_company_preview(
                 jira_prepared=st.session_state.get("project_jira_prepared"),
                 clickup_prepared=st.session_state.get("project_clickup_prepared"),
