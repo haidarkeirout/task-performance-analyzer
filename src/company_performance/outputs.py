@@ -24,6 +24,7 @@ from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from excel_safety import write_excel_cell
+from standard_report_style import add_report_table, add_report_title, configure_report_document
 
 from .dashboard import CompanyDashboardModel, data_quality_task_rows
 from .kpis import BottleneckCandidate, Recommendation
@@ -520,24 +521,11 @@ def write_company_raw_data(snapshots: Iterable[TaskPeriodSnapshot], output_path:
 
 
 def _configure_document(document: Document) -> None:
-    document.styles["Normal"].font.name = "Arial"
-    document.styles["Normal"].font.size = Pt(10)
-    for style_name in ("Title", "Heading 1", "Heading 2"):
-        style = document.styles[style_name]
-        style.font.name = "Arial"
-        style.font.color.rgb = RGBColor(0, 0, 0)
-    for section in document.sections:
-        section.top_margin = Inches(0.65)
-        section.bottom_margin = Inches(0.65)
-        section.left_margin = Inches(0.7)
-        section.right_margin = Inches(0.7)
-        footer = section.footer.paragraphs[0]
-        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer.text = "Company Performance Analysis"
-        for run in footer.runs:
-            run.font.name = "Arial"
-            run.font.size = Pt(8)
-            run.font.color.rgb = RGBColor(102, 102, 102)
+    configure_report_document(
+        document,
+        header_label="COMPANY PERFORMANCE REPORT | PERFORMANCE EVALUATION",
+        footer_label="Task Performance Intelligence",
+    )
 
 
 def _shade_cell(cell: Any, fill: str) -> None:
@@ -566,34 +554,36 @@ def _set_cell_padding(cell: Any, padding: int = 90) -> None:
 
 def _add_table(document: Document, headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> None:
     values = list(rows)
-    table = document.add_table(rows=1, cols=len(headers))
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.style = "Table Grid"
-    for cell, header in zip(table.rows[0].cells, headers):
-        cell.text = _safe_text(header)
-        _shade_cell(cell, "1F4E78")
-        _set_cell_padding(cell)
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
-            run.font.name = "Arial"
-            run.font.size = Pt(9)
-            run.font.color.rgb = RGBColor(255, 255, 255)
-    if values:
-        for row_index, values_row in enumerate(values):
-            cells = table.add_row().cells
-            for cell, value in zip(cells, values_row):
-                cell.text = _safe_text(value)
-                _set_cell_padding(cell)
-                if row_index % 2 == 1:
-                    _shade_cell(cell, "F2F6FA")
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
-                        run.font.name = "Arial"
-                        run.font.size = Pt(9)
+    if not values:
+        values = [("N/A",) + ("",) * (len(headers) - 1)]
+    headers_tuple = tuple(headers)
+    widths_by_count = {
+        2: [2700, 6660],
+        4: [900, 1700, 3200, 3560],
+        5: [1200, 900, 1800, 900, 4560],
+        6: [1800, 1100, 1000, 1450, 1450, 2560],
+        7: [1000, 900, 1500, 800, 1200, 1250, 2710],
+        8: [800, 900, 1100, 900, 1450, 1200, 1700, 1310],
+        9: [1300, 900, 1550, 700, 950, 1150, 850, 950, 1010],
+    }
+    if headers_tuple == ("Source", "Space", "Project", "Task ID", "Task", "Status at Period End", "Reason(s)", "KPI Impact"):
+        widths = [850, 900, 1300, 850, 1500, 1200, 1750, 1010]
+    elif headers_tuple == ("Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"):
+        widths = [1200, 1900, 3000, 1100, 1050, 1110]
+    elif headers_tuple in {
+        ("Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
+        ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
+    }:
+        widths = [1500, 1200, 1300, 1500, 1500, 2360]
+    elif headers_tuple == ("Assignee", "Total Tasks", "Completed", "Open", "Completion Rate"):
+        widths = [1500, 1200, 1500, 1000, 4160]
+    elif headers_tuple == ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Overdue Days"):
+        widths = [1500, 900, 1500, 750, 1050, 1300, 950, 1410]
+    elif headers_tuple == ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Completed", "Variance (days)"):
+        widths = widths_by_count[9]
     else:
-        cells = table.add_row().cells
-        cells[0].text = "N/A — no eligible data for this section."
-        _set_cell_padding(cells[0])
+        widths = widths_by_count.get(len(headers))
+    add_report_table(document, headers, values, widths=widths)
 
 
 def _compact_kpi_definition(title: str, fallback: str) -> str:
@@ -611,6 +601,86 @@ def _compact_kpi_definition(title: str, fallback: str) -> str:
     return definitions.get(title, _safe_text(fallback).replace("**", ""))
 
 
+def _company_comparison_rows(
+    snapshots: Sequence[TaskPeriodSnapshot],
+    attribute: str,
+) -> list[tuple[Any, ...]]:
+    """Build a company-level comparison for projects or departments."""
+    groups: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
+    for snapshot in snapshots:
+        if not snapshot.in_scope:
+            continue
+        value = getattr(snapshot.task, attribute, None)
+        groups[str(value or "Unknown")].append(snapshot)
+
+    rows: list[tuple[Any, ...]] = []
+    for label, items in sorted(groups.items(), key=lambda pair: pair[0].casefold()):
+        counted = [item for item in items if item.counted_in_kpis]
+        known = [item for item in counted if item.status_at_period_end.value != "Unknown"]
+        completed = [item for item in known if item.status_at_period_end.value == "Completed"]
+        with_due = [
+            item for item in completed
+            if item.task.due_date is not None and item.final_completion_date is not None
+        ]
+        on_time = [item for item in with_due if item.final_completion_date <= item.task.due_date]
+        overdue = [
+            item for item in known
+            if item.status_at_period_end.is_open
+            and item.task.due_date is not None
+            and item.task.due_date < item.period_end
+        ]
+        rows.append((
+            label,
+            len(items),
+            len(completed),
+            f"{len(completed) / len(known) * 100.0:.1f}%" if known else "N/A",
+            f"{len(on_time) / len(with_due) * 100.0:.1f}%" if with_due else "N/A",
+            len(overdue),
+        ))
+    return rows
+
+
+def _company_word_task_pairs(snapshot: TaskPeriodSnapshot) -> list[tuple[str, Any]]:
+    """Return the compact task-level evidence block used by the Company report."""
+    task = snapshot.task
+    completed = snapshot.status_at_period_end.value == "Completed"
+    late = bool(
+        completed
+        and task.due_date
+        and snapshot.final_completion_date
+        and snapshot.final_completion_date > task.due_date
+    )
+    overdue_days = (
+        max(0, (snapshot.period_end - task.due_date).days)
+        if snapshot.status_at_period_end.is_open
+        and task.due_date
+        and task.due_date < snapshot.period_end
+        else 0
+    )
+    if snapshot.counted_in_kpis:
+        kpi_treatment = "Included in KPI calculations"
+    elif task.parent_classification.value == "Subtask":
+        kpi_treatment = "Excluded from KPI rates: Subtask"
+    elif not snapshot.in_scope:
+        kpi_treatment = "Excluded from selected analysis period"
+    else:
+        kpi_treatment = "Excluded from KPI calculations"
+    return [
+        ("Source / Space", f"{task.source_tool} / {task.source_space or 'N/A'}"),
+        ("Unified Project", task.unified_project or "N/A"),
+        ("Department", task.department or "N/A"),
+        ("Status at cutoff", snapshot.status_at_period_end.value),
+        ("Actual start / completion", f"{snapshot.actual_start_date or 'N/A'} / {snapshot.final_completion_date or 'N/A'}"),
+        ("Due date", task.due_date or "N/A"),
+        ("On-time completion", "No" if late else ("Yes" if completed and task.due_date and snapshot.final_completion_date else "N/A")),
+        ("Overdue days", overdue_days),
+        ("History complete", "Yes" if snapshot.history_available else "No"),
+        ("Workflow exceptions", "; ".join(snapshot.exception_events) or "N/A"),
+        ("Data quality flags", "; ".join(sorted(snapshot.data_quality_flags or task.data_quality_flags)) or "N/A"),
+        ("KPI treatment", kpi_treatment),
+    ]
+
+
 def write_company_word_report(
     model: CompanyDashboardModel,
     output_path: str | Path,
@@ -619,103 +689,142 @@ def write_company_word_report(
     bottlenecks: Iterable[BottleneckCandidate] = (),
     recommendations: Iterable[Recommendation] = (),
 ) -> Path:
-    """Create the exact Company Performance Word report requested by the user."""
+    """Create a Company report using the same structure as Project reports."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     snapshots = tuple(snapshots)
     bottlenecks = tuple(bottlenecks)
     recommendations = tuple(recommendations)
     rows = _task_rows(model, snapshots)
+    source_spaces = " / ".join(
+        f"{item.source_tool}: {item.source_space or 'N/A'}"
+        for item in model.source_coverage
+    ) or "N/A"
+    period = f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"
+    completion = _display(model.kpis.completion_rate)
+    on_time = _display(model.kpis.on_time_completion_rate)
+
     document = Document()
     _configure_document(document)
-    title = document.add_heading("Company Performance Report", 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle = document.add_paragraph("Company-wide Jira and ClickUp analysis")
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_table(document, ("Report Field", "Value"), [
-        ("Analysis Level", "Company"),
-        ("Data Sources", "Jira and ClickUp"),
-        ("Analysis Period", f"{model.period_start.isoformat()} to {model.period_end.isoformat()}"),
-        ("Tasks in Scope", model.in_period_task_count),
-    ])
+    add_report_title(
+        document,
+        "Company Performance Report",
+        "Company-wide Jira and ClickUp analysis",
+        metadata=(f"Source Spaces: {source_spaces}", f"Analysis period: {period}"),
+    )
 
     document.add_heading("Company Executive Summary", level=1)
     document.add_paragraph(
-        f"The analysis covers {model.in_period_task_count} task(s) from the selected Jira projects and ClickUp Spaces. "
-        f"{model.kpis.completed_tasks} task(s) are completed, completion rate is {_display(model.kpis.completion_rate)}, "
-        f"on-time rate is {_display(model.kpis.on_time_completion_rate)}, WIP is {model.kpis.current_wip}, "
-        f"and {model.kpis.overdue_open_tasks} open overdue task(s) need attention."
+        f"The Company scope combines the selected Jira projects and ClickUp Spaces for {period}. "
+        f"It contains {model.kpis.total_tasks} task(s), including visible subtasks, with "
+        f"{model.kpis.completed_tasks} completed. Completion rate is {completion}; on-time rate is "
+        f"{on_time}; {model.kpis.overdue_open_tasks} open overdue task(s) require follow-up."
     )
 
     document.add_heading("Data Sources and Analysis Scope", level=1)
-    _add_table(document, ("Source", "Space", "Project", "Tasks", "History Coverage", "Notes"), [
-        (item.source_tool, item.source_space, item.unified_project, item.task_count,
-         item.history_mode, item.reason or "N/A")
-        for item in model.source_coverage
+    _add_table(document, ("Field", "Value"), [
+        ("Company", "Company-wide Jira and ClickUp scope"),
+        ("Source", "Jira and ClickUp"),
+        ("Source Spaces", source_spaces),
+        ("Analysis Period", period),
+        ("Scope Rule", "All collected source Spaces are unified into one Company scope; duplicate Source Tool + Task ID records are removed."),
+        ("Subtask Rule", "Subtasks remain visible in task-level output but are excluded from KPI rates."),
+        ("Status Rule", "Original source statuses are retained; verified historical status is used for KPI calculations and Unknown is reported in Data Quality."),
     ])
-    document.add_paragraph(
-        "The Company view combines Jira and ClickUp records, removes duplicate Source Tool + Task ID pairs, "
-        "and keeps original source and Space identifiers available in Excel Task Details."
-    )
 
     document.add_heading("Company KPI Summary", level=1)
     _add_table(document, ("KPI", "Value"), [
         ("Total Tasks", model.kpis.total_tasks),
         ("Completed", model.kpis.completed_tasks),
-        ("Completion Rate", _display(model.kpis.completion_rate)),
-        ("On-Time Rate", _display(model.kpis.on_time_completion_rate)),
+        ("Cancelled", model.kpis.cancelled_tasks),
+        ("Rejected", model.kpis.rejected_tasks),
+        ("Completion Rate", completion),
+        ("On-Time Rate", on_time),
         ("Open Overdue", model.kpis.overdue_open_tasks),
         ("WIP", model.kpis.current_wip),
         ("Average Lead Time", _display(model.kpis.average_lead_time_days)),
         ("Average Execution Time", _display(model.kpis.average_execution_duration_days)),
     ])
 
-    counted = [item for item in snapshots if item.counted_in_kpis]
-    projects: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
-    departments: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
-    for item in counted:
-        projects[item.task.unified_project or "Unknown"].append(item)
-        departments[item.task.department or "Unknown"].append(item)
+    document.add_heading("Task Distribution", level=1)
+    in_scope = [item for item in snapshots if item.in_scope and item.task.parent_classification.value != "Container Parent"]
+    status_counts = Counter(item.status_at_period_end.value for item in in_scope)
+    _add_table(document, ("Status", "Task Count"), sorted(status_counts.items()) or [("N/A", 0)])
+    document.add_paragraph("Priority")
+    priority_counts = Counter((item.task.priority or "Unknown") for item in in_scope)
+    _add_table(document, ("Priority", "Task Count"), sorted(priority_counts.items()) or [("N/A", 0)])
+    document.add_paragraph("Task Type")
+    type_counts = Counter(
+        "Subtask" if item.task.parent_classification.value == "Subtask" else "Task"
+        for item in in_scope
+    )
+    _add_table(document, ("Task Type", "Task Count"), sorted(type_counts.items()) or [("N/A", 0)])
 
-    document.add_heading("Department Performance Comparison", level=1)
-    department_rows = []
-    for name, items in sorted(departments.items()):
-        known = [item for item in items if item.status_at_period_end.value != "Unknown"]
-        completed = [item for item in known if item.status_at_period_end.value == "Completed"]
-        with_due = [item for item in completed if item.task.due_date and item.final_completion_date]
-        on_time = [item for item in with_due if item.final_completion_date <= item.task.due_date]
-        overdue = [
-            item for item in known
-            if item.status_at_period_end.is_open and item.task.due_date and item.task.due_date < item.period_end
-        ]
-        department_rows.append((
-            name, len(items), len(completed),
-            f"{len(completed) / len(known) * 100.0:.1f}%" if known else "N/A",
-            f"{len(on_time) / len(with_due) * 100.0:.1f}%" if with_due else "N/A",
-            len(overdue),
-        ))
-    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"), department_rows or [
-        ("Unknown", 0, 0, "N/A", "N/A", 0)
-    ])
+    document.add_heading("Weekly Progress", level=1)
+    weekly_rows = _weekly_rows(rows)
+    _add_table(document, ("Week Starting", "Tasks Opened", "Tasks Completed", "Net Flow", "Cumulative Net Flow"), weekly_rows or [(model.period_start, 0, 0, 0, 0)])
 
     document.add_heading("Company-wide Bottlenecks", level=1)
     _add_table(document, ("Stage", "Assessment", "Evidence", "Average Days", "Open Tasks", "Open Overdue"), [
-        (item.status.value, item.strength, "; ".join(item.evidence),
-         item.metrics.average_days, item.metrics.open_tasks_now, item.metrics.overdue_open_tasks)
+        (item.status.value, item.strength, "; ".join(item.evidence), item.metrics.average_days,
+         item.metrics.open_tasks_now, item.metrics.overdue_open_tasks)
         for item in bottlenecks
     ] or [("N/A", "No candidate", "No bottleneck candidate was identified.", "N/A", 0, 0)])
 
     overdue_rows = [
         (row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"],
-         row["Source Space"], row["Assignee"], row["Due Date"])
+         row["Source Space"], row["Assignee"], row["Due Date"],
+         (model.period_end - row["Due Date"]).days)
         for row in rows
         if row["Counted in KPIs"] and row["Final Status"] not in {"Completed", "Cancelled", "Rejected"}
         and row["Due Date"] is not None and row["Due Date"] < model.period_end
     ]
     document.add_heading("Key Risks and Overdue Tasks", level=1)
-    _add_table(document, ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date"), overdue_rows or [
-        ("N/A", "N/A", "No open overdue tasks", "", "", "", "")
+    _add_table(document, ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Overdue Days"), overdue_rows or [
+        ("N/A", "N/A", "No open overdue tasks", "N/A", "N/A", "N/A", "N/A", 0)
     ])
+
+    late_rows = [
+        (row["Unified Project"], row["Task ID"], row["Task Name"], row["Source Tool"],
+         row["Source Space"], row["Assignee"], row["Due Date"], row["Completion Date"], row["Due Variance (days)"])
+        for row in rows
+        if row["Counted in KPIs"] and row["Final Status"] == "Completed"
+        and row["Due Variance (days)"] is not None and row["Due Variance (days)"] > 0
+    ]
+    document.add_heading("Late Completed Tasks", level=1)
+    _add_table(document, ("Project", "Task ID", "Task", "Source", "Space", "Assignee", "Due Date", "Completed", "Variance (days)"), late_rows or [
+        ("N/A", "N/A", "No late completed tasks", "N/A", "N/A", "N/A", "N/A", "N/A", 0)
+    ])
+
+    document.add_heading("Workload by Assignee", level=1)
+    assignees: dict[str, list[TaskPeriodSnapshot]] = defaultdict(list)
+    for item in in_scope:
+        if item.counted_in_kpis:
+            assignees[item.task.assignee_group].append(item)
+    assignee_rows = []
+    for name, items in sorted(assignees.items(), key=lambda pair: pair[0].casefold()):
+        known = [item for item in items if item.status_at_period_end.value != "Unknown"]
+        completed_items = [item for item in known if item.status_at_period_end.value == "Completed"]
+        assignee_rows.append((name, len(items), len(completed_items), len([item for item in known if item.status_at_period_end.is_open]),
+                              f"{len(completed_items) / len(known) * 100.0:.1f}%" if known else "N/A"))
+    _add_table(document, ("Assignee", "Total Tasks", "Completed", "Open", "Completion Rate"), assignee_rows or [("N/A", 0, 0, 0, "N/A")])
+
+    document.add_heading("Project Performance Comparison", level=1)
+    _add_table(document, ("Project", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
+               _company_comparison_rows(snapshots, "unified_project") or [("N/A", 0, 0, "N/A", "N/A", 0)])
+
+    document.add_heading("Department Performance Comparison", level=1)
+    department_rows = _company_comparison_rows(snapshots, "department")
+    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
+               department_rows or [("N/A", 0, 0, "N/A", "N/A", 0)])
+
+    document.add_heading("Top Departments Requiring Attention", level=1)
+    attention_rows = [
+        row for row in department_rows
+        if row[5] > 0 or row[3] == "N/A" or float(str(row[3]).rstrip("%")) < 70.0
+    ]
+    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"),
+               attention_rows or [("N/A", 0, 0, "N/A", "N/A", 0)])
 
     document.add_heading("Workflow Exceptions", level=1)
     exception_rows = [
@@ -723,23 +832,22 @@ def write_company_word_report(
         for row in rows for event in row["Exception Events"] or ()
     ]
     _add_table(document, ("Project", "Task ID", "Task", "Source", "Exception"), exception_rows or [
-        ("N/A", "N/A", "No workflow exceptions", "", "")
-    ])
-
-    document.add_heading("Top Departments Requiring Attention", level=1)
-    attention_rows = [
-        row for row in department_rows
-        if row[5] > 0 or row[3] == "N/A" or float(row[3].rstrip("%")) < 70.0
-    ]
-    _add_table(document, ("Department", "Total Tasks", "Completed", "Completion Rate", "On-Time Rate", "Open Overdue"), attention_rows or [
-        ("N/A", 0, 0, "N/A", "N/A", 0)
+        ("N/A", "N/A", "No workflow exceptions", "N/A", "N/A")
     ])
 
     document.add_heading("Executive Recommendations", level=1)
     _add_table(document, ("Severity", "Recommendation", "Evidence", "Suggested Action"), [
         (item.severity, item.title, item.evidence, item.suggested_action)
         for item in recommendations
-    ] or [("N/A", "No recommendations generated", "", "")])
+    ] or [("N/A", "No recommendations generated", "N/A", "N/A")])
+
+    document.add_heading("Task-Level Evaluation", level=1)
+    for snapshot in snapshots:
+        document.add_heading(
+            f"{snapshot.task.source_tool} {snapshot.task.task_id} - {snapshot.task.task_name or 'Unnamed task'}",
+            level=2,
+        )
+        _add_table(document, ("Metric", "Value"), _company_word_task_pairs(snapshot))
 
     document.add_heading("Data Quality and Coverage Limitations", level=1)
     _add_table(document, ("Data Quality Flag", "Task Count"), [
@@ -751,23 +859,23 @@ def write_company_word_report(
         (row["Source Tool"], row["Source Space"], row["Project"], row["Task ID"], row["Task Name"],
          row["Status at Period End"], row["Reason(s)"], row["KPI Impact"])
         for row in quality_rows
-    ] or [("N/A", "N/A", "N/A", "N/A", "No task-level quality findings", "N/A", "", "")])
+    ] or [("N/A", "N/A", "N/A", "N/A", "No task-level quality findings", "N/A", "N/A", "N/A")])
     document.add_paragraph(
-        "History-dependent workflow metrics remain unavailable where the source does not provide complete history. "
-        "Department labels are shown from the source record when available; records without a reliable department "
-        "label remain under Unknown. Unavailable values are not converted to zero."
+        "Unavailable values remain N/A. Unknown status is not converted to Completed, Open, WIP, or zero; "
+        "it is excluded from status-dependent KPIs and listed with its reasons in Data Quality. Source, Space, "
+        "Project, and task identifiers are preserved for auditability."
     )
 
     document.add_heading("Metric Definitions", level=1)
     _add_table(document, ("Metric", "Definition"), [
         ("Total Tasks", "All tasks in the selected Company scope; subtasks remain visible."),
-        ("Completed", "Tasks with normalized Completed status at period end."),
+        ("Completed", "Tasks with verified Completed status at period end."),
         ("Completion Rate", "Completed tasks divided by KPI-counted tasks with a verified status at period end; Unknown statuses are excluded and shown in Data Quality."),
         ("On-Time Rate", "Completed on or before due date divided by completed tasks with a known due date."),
         ("Open Overdue", "Open tasks with a due date earlier than the analysis period end."),
         ("WIP", "Open tasks currently in In Execution or In Review at period end; On Hold and At Risk are not WIP."),
         ("Average Lead Time", "Average completion date minus creation date for completed KPI-counted tasks."),
-        ("Average Execution Time", "Average completion date minus actual start date for completed tasks with both dates known."),
+        ("Average Execution Time", "Average completion date minus actual start date for completed tasks where both dates are known."),
         ("Workflow Exceptions", "Recorded rework, replanning, re-evaluation, or reopen evidence."),
     ])
 
