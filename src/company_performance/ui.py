@@ -296,19 +296,24 @@ def _task_detail_rows(items: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _filters(st: Any, result: CompanyAnalysisResult) -> DashboardFilters:
+def _filters(
+    st: Any,
+    result: CompanyAnalysisResult,
+    *,
+    key_prefix: str = "company",
+) -> DashboardFilters:
     options = build_company_dashboard(
         result.snapshots,
         coverages=result.collection.coverages,
     ).filter_options
     columns = st.columns(5)
-    sources = columns[0].multiselect("Source", options.source_tools, key="company_filter_sources")
-    projects = columns[1].multiselect("Unified Project", options.unified_projects, key="company_filter_projects")
+    sources = columns[0].multiselect("Source", options.source_tools, key=f"{key_prefix}_filter_sources")
+    projects = columns[1].multiselect("Unified Project", options.unified_projects, key=f"{key_prefix}_filter_projects")
     statuses = columns[2].multiselect(
-        "Final Status", [status.value for status in options.statuses], key="company_filter_statuses"
+        "Final Status", [status.value for status in options.statuses], key=f"{key_prefix}_filter_statuses"
     )
-    assignees = columns[3].multiselect("Assignee", options.assignee_groups, key="company_filter_assignees")
-    priorities = columns[4].multiselect("Priority", options.priorities, key="company_filter_priorities")
+    assignees = columns[3].multiselect("Assignee", options.assignee_groups, key=f"{key_prefix}_filter_assignees")
+    priorities = columns[4].multiselect("Priority", options.priorities, key=f"{key_prefix}_filter_priorities")
     lookup = {status.value: status for status in UnifiedStatus}
     return DashboardFilters(
         source_tools=tuple(sources),
@@ -319,7 +324,13 @@ def _filters(st: Any, result: CompanyAnalysisResult) -> DashboardFilters:
     )
 
 
-def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, bytes, bytes]:
+def _output_bytes(
+    result: CompanyAnalysisResult,
+    model: Any,
+    *,
+    output_stem: str = "company_performance",
+    scope_label: str = "Company",
+) -> tuple[bytes, bytes, bytes]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         selected_keys = {(detail.source_tool, detail.task_id) for detail in model.task_details}
@@ -331,21 +342,23 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
         recommendations = generate_recommendations(selected_snapshots)
         excel = write_company_excel(
             model,
-            root / "company_performance_analysis.xlsx",
+            root / f"{output_stem}_analysis.xlsx",
             snapshots=selected_snapshots,
             bottlenecks=bottlenecks,
             recommendations=recommendations,
+            scope_label=scope_label,
         ).read_bytes()
         raw = write_company_raw_data(
             selected_snapshots,
-            root / "company_performance_raw_data.xlsx",
+            root / f"{output_stem}_raw_data.xlsx",
         ).read_bytes()
         word = write_company_word_report(
             model,
-            root / "company_performance_report.docx",
+            root / f"{output_stem}_report.docx",
             snapshots=selected_snapshots,
             bottlenecks=bottlenecks,
             recommendations=recommendations,
+            scope_label=scope_label,
         ).read_bytes()
     return excel, raw, word
 
@@ -356,16 +369,25 @@ def _cached_output_bytes(
     model: Any,
     *,
     cache_prefix: str = "company",
+    output_stem: str = "company_performance",
+    scope_label: str = "Company",
 ) -> tuple[bytes, bytes, bytes]:
     selected = sorted((detail.source_tool, detail.task_id) for detail in model.task_details)
     material = repr((result.snapshots[0].period_start if result.snapshots else None,
                      result.snapshots[0].period_end if result.snapshots else None, selected))
     key = hashlib.sha256(material.encode("utf-8")).hexdigest()
     cache_key = f"{cache_prefix}:{key}"
-    if st.session_state.get("company_output_cache_key") != cache_key:
-        st.session_state["company_output_cache"] = _output_bytes(result, model)
-        st.session_state["company_output_cache_key"] = cache_key
-    return st.session_state["company_output_cache"]
+    cache_key_name = f"{cache_prefix}_output_cache_key"
+    cache_name = f"{cache_prefix}_output_cache"
+    if st.session_state.get(cache_key_name) != cache_key:
+        st.session_state[cache_name] = _output_bytes(
+            result,
+            model,
+            output_stem=output_stem,
+            scope_label=scope_label,
+        )
+        st.session_state[cache_key_name] = cache_key
+    return st.session_state[cache_name]
 
 
 def _average_text(values: list[int | float]) -> str:
@@ -479,8 +501,10 @@ def render_company_result(
     scope_title: str = "Company Performance Analysis",
     close_state_key: str = "company_analysis",
     download_stem: str = "company_performance",
+    scope_key: str = "company",
+    scope_label: str = "Company",
 ) -> None:
-    """Render a concise company dashboard plus detailed drill-down outputs."""
+    """Render a scope-specific dashboard plus detailed drill-down outputs."""
     st.divider()
     heading, action = st.columns([5, 1])
     heading.title(scope_title)
@@ -489,7 +513,7 @@ def render_company_result(
         st.rerun()
 
     with st.expander("Optional dashboard filters", expanded=False):
-        filters = _filters(st, result)
+        filters = _filters(st, result, key_prefix=scope_key)
     model = build_company_dashboard(
         result.snapshots,
         coverages=result.collection.coverages,
@@ -609,7 +633,14 @@ def render_company_result(
         else:
             st.success("No task-level Unknown status or quality reasons were recorded.")
 
-    excel, raw, word = _cached_output_bytes(st, result, model, cache_prefix=download_stem)
+    excel, raw, word = _cached_output_bytes(
+        st,
+        result,
+        model,
+        cache_prefix=scope_key,
+        output_stem=download_stem,
+        scope_label=scope_label,
+    )
     st.subheader("Downloads")
     left, middle, right = st.columns(3)
     left.download_button(
