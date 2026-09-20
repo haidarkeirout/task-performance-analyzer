@@ -66,6 +66,8 @@ def _clear_employee_state() -> None:
         "employee_collection_collected_at",
         "company_output_cache",
         "company_output_cache_key",
+        "employee_output_cache",
+        "employee_output_cache_key",
     ):
         st.session_state.pop(key, None)
 
