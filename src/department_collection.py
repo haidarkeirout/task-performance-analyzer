@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, time, timezone
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -121,16 +122,27 @@ def _merge_sources(target: dict, source: dict) -> None:
     target["_department_sources"] = source_pairs
 
 
-def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> list[dict]:
+def _collect_department_tasks(
+    settings,
+    sources: list[dict],
+    cache_key: str,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
+) -> list[dict]:
+    effective_cache_key = (
+        f"{cache_key}:collection:{collection_id}"
+        if collection_id else cache_key
+    )
     cached_key = st.session_state.get("department_tasks_cache_key")
-    if cached_key == cache_key:
+    if cached_key == effective_cache_key:
         return list(st.session_state.get("department_tasks_cache", []))
 
     gateway = _gateway(settings)
     checkpoint_registry = dict(
         st.session_state.get("department_list_checkpoints") or {}
     )
-    source_checkpoints = checkpoint_registry.setdefault(cache_key, {})
+    source_checkpoints = checkpoint_registry.setdefault(effective_cache_key, {})
     try:
         collected = {}
         raw_count = 0
@@ -141,7 +153,7 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
 
             def save_checkpoint(state, current_list_id=list_id):
                 source_checkpoints[current_list_id] = state
-                checkpoint_registry[cache_key] = source_checkpoints
+                checkpoint_registry[effective_cache_key] = source_checkpoints
                 st.session_state["department_list_checkpoints"] = checkpoint_registry
 
             tasks = gateway.all_tasks_for_list(
@@ -152,6 +164,7 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
                 ),
                 checkpoint=list_checkpoint,
                 checkpoint_callback=save_checkpoint,
+                fresh=fresh,
             )
             for raw_task in tasks:
                 task_id = str(raw_task.get("id") or "")
@@ -181,7 +194,7 @@ def _collect_department_tasks(settings, sources: list[dict], cache_key: str) -> 
     finally:
         gateway.close()
 
-    st.session_state["department_tasks_cache_key"] = cache_key
+    st.session_state["department_tasks_cache_key"] = effective_cache_key
     st.session_state["department_tasks_cache"] = tasks
     st.session_state["department_duplicate_count"] = max(0, raw_count - len(tasks))
     return tasks
@@ -343,13 +356,38 @@ def render_department_collection(settings):
         f"Spaces: {source_caption}"
     )
 
+    if "department_collection_id" not in st.session_state:
+        st.session_state["department_collection_id"] = uuid4().hex
+        st.session_state["department_collection_fresh"] = True
+    if st.button("Refresh Live Data", key=f"department_refresh_{selected_key}"):
+        for key in (
+            "department_tasks_cache_key",
+            "department_tasks_cache",
+            "clickup_prepared_data",
+            "department_analysis",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state["department_collection_id"] = uuid4().hex
+        st.session_state["department_collection_fresh"] = True
+        st.rerun()
+    if st.session_state.get("department_collection_collected_at"):
+        st.caption(f"Data collected at: {st.session_state['department_collection_collected_at']}")
+
     cache_key = json.dumps(
         {"department": selected_key, "sources": sources},
         sort_keys=True,
         default=str,
     )
     try:
-        all_tasks = _collect_department_tasks(settings, sources, cache_key)
+        all_tasks = _collect_department_tasks(
+            settings,
+            sources,
+            cache_key,
+            collection_id=st.session_state.get("department_collection_id"),
+            fresh=st.session_state.get("department_collection_fresh", False),
+        )
+        st.session_state["department_collection_fresh"] = False
+        st.session_state["department_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
     except ClickUpCollectionError as exc:
         st.error(str(exc))
         return None, False
@@ -395,6 +433,7 @@ def render_department_collection(settings):
         st.warning("No tasks match the selected department, period, and filters.")
 
     fingerprint = "department:" + json.dumps({
+        "collection_id": st.session_state.get("department_collection_id"),
         "department": selected_key,
         "sources": sources,
         "from": str(start_date),

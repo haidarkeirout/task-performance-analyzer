@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -51,6 +52,8 @@ def _clear_project_run() -> None:
         "project_scope_label",
         "project_scope_slug",
         "project_report_key",
+        "project_collection_id",
+        "project_collection_collected_at",
     ):
         st.session_state.pop(key, None)
 
@@ -143,7 +146,15 @@ def _load_catalogs(settings) -> tuple[dict[str, dict[str, Any]], dict[str, dict[
     return jira_spaces, clickup_spaces
 
 
-def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str, progress=None) -> PreparedData:
+def _collect_jira_space(
+    settings,
+    item: dict[str, Any],
+    fingerprint: str,
+    progress=None,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
+) -> PreparedData:
     project_key = str(item.get("key") or "")
     project_name = str(item.get("name") or project_key or item.get("id") or "Jira Project")
     if not project_key:
@@ -170,11 +181,25 @@ def _collect_jira_space(settings, item: dict[str, Any], fingerprint: str, progre
         space=item,
         query=query,
         fingerprint=fingerprint,
+        collection_id=collection_id,
+        fresh=fresh,
         progress=report_progress,
     )
 
 
-def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, progress=None):
+def _collect_clickup_space(
+    settings,
+    item: dict[str, Any],
+    fingerprint: str,
+    progress=None,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
+):
+    effective_fingerprint = (
+        f"{fingerprint}:collection:{collection_id}"
+        if collection_id else fingerprint
+    )
     space_id = str(item.get("id") or "")
     space_name = str(item.get("name") or space_id or "ClickUp Space")
     if not space_id:
@@ -198,10 +223,10 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, pro
     try:
         report_progress(0, f"Loading task list from ClickUp — {space_name}...")
         checkpoints = dict(st.session_state.get("project_clickup_checkpoints") or {})
-        checkpoint = checkpoints.setdefault(fingerprint, {})
+        checkpoint = checkpoints.setdefault(effective_fingerprint, {})
 
         def save_checkpoint(state):
-            checkpoints[fingerprint] = state
+            checkpoints[effective_fingerprint] = state
             st.session_state["project_clickup_checkpoints"] = checkpoints
 
         tasks = gateway.all_tasks_for_space(
@@ -209,6 +234,7 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, pro
             progress=lambda message: report_progress(0.0, message),
             checkpoint=checkpoint,
             checkpoint_callback=save_checkpoint,
+            fresh=fresh,
         )
     finally:
         gateway.close()
@@ -236,7 +262,7 @@ def _collect_clickup_space(settings, item: dict[str, Any], fingerprint: str, pro
         None,
         prepared_tasks,
         space_name,
-        fingerprint,
+        effective_fingerprint,
         settings.source_timezone,
         progress=update_progress,
         space_id=space_id,
@@ -1784,9 +1810,16 @@ def render_project_collection(settings):
         return None, False
 
     selection_fingerprint = f"{selected_jira_id or '-'}:{selected_clickup_id or '-'}"
-    if st.session_state.get("project_selection_fingerprint") != selection_fingerprint:
+    selection_changed = (
+        st.session_state.get("project_selection_fingerprint") != selection_fingerprint
+    )
+    if selection_changed:
+        retrying = bool(st.session_state.pop("project_collection_retry", False))
+        retry_id = st.session_state.get("project_collection_id") if retrying else None
         _clear_project_run()
         st.session_state["project_selection_fingerprint"] = selection_fingerprint
+        st.session_state["project_collection_id"] = retry_id or uuid4().hex
+        st.session_state["project_collection_fresh"] = not bool(retry_id)
         try:
             # Use one shared line even when the project combines Jira and
             # ClickUp.  Source callbacks update their assigned segment of the
@@ -1813,6 +1846,8 @@ def render_project_collection(settings):
                     progress=lambda fraction, message, position=source_index: source_progress(
                         fraction, message, position
                     ),
+                    collection_id=st.session_state["project_collection_id"],
+                    fresh=st.session_state.get("project_collection_fresh", False),
                 )
                 source_index += 1
             if clickup_item:
@@ -1823,6 +1858,8 @@ def render_project_collection(settings):
                     progress=lambda fraction, message, position=source_index: source_progress(
                         fraction, message, position
                     ),
+                    collection_id=st.session_state["project_collection_id"],
+                    fresh=st.session_state.get("project_collection_fresh", False),
                 )
                 source_index += 1
             collection_progress.progress(
@@ -1833,7 +1870,10 @@ def render_project_collection(settings):
                 clickup_prepared=st.session_state.get("project_clickup_prepared"),
             )
             st.session_state["project_preview"] = preview
+            st.session_state["project_collection_fresh"] = False
+            st.session_state["project_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
         except (CollectionError, ClickUpCollectionError) as exc:
+            st.session_state["project_collection_retry"] = True
             st.session_state.pop("project_selection_fingerprint", None)
             st.session_state.pop("project_jira_prepared", None)
             st.session_state.pop("project_clickup_prepared", None)
@@ -1841,6 +1881,8 @@ def render_project_collection(settings):
             return None, False
 
     preview = st.session_state.get("project_preview", ())
+    if st.session_state.get("project_collection_collected_at"):
+        st.caption(f"Data collected at: {st.session_state['project_collection_collected_at']}")
     st.subheader("Selected Project Tasks")
     st.caption(f"{len(preview)} task(s) collected from the selected Space(s).")
     st.dataframe(_preview_frame(preview), hide_index=True, use_container_width=True)

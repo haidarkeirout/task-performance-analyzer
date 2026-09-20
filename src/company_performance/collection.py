@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
+from uuid import uuid4
 
 import streamlit as st
 
@@ -503,6 +505,9 @@ def _project_names(sources: list[tuple[str, dict[str, Any]]]) -> dict[str, str]:
 def collect_company_spaces(
     settings,
     selected_company: str = ALL_COMPANIES_ID,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
 ) -> tuple[CompanyPreparedItem, ...]:
     """Collect only the selected company, or every company for All Companies."""
     catalog = discover_company_catalog(settings)
@@ -538,6 +543,8 @@ def collect_company_spaces(
     if previous_selection != selected_company:
         st.session_state.pop("company_partial_prepared_items", None)
         st.session_state["company_collection_selection"] = selected_company
+        if not st.session_state.get("company_collection_id"):
+            st.session_state["company_collection_id"] = uuid4().hex
     selected_names = [entry.company_name for entry in selected_entries]
     st.session_state["company_collection_company_name"] = (
         "All Companies" if selected_company == ALL_COMPANIES_ID else selected_names[0]
@@ -587,12 +594,18 @@ def collect_company_spaces(
             fingerprint = (
                 f"company:{selected_company}:{source.casefold()}:{source_key}"
             )
+            collector_options = (
+                {"collection_id": collection_id, "fresh": fresh}
+                if collection_id is not None or fresh
+                else {}
+            )
             if source == "Jira":
                 source_data = _collect_jira_space(
                     settings,
                     item,
                     fingerprint,
                     progress=update_source_progress,
+                    **collector_options,
                 )
             else:
                 source_data = _collect_clickup_space(
@@ -600,6 +613,7 @@ def collect_company_spaces(
                     item,
                     fingerprint,
                     progress=update_source_progress,
+                    **collector_options,
                 )
             saved[identity] = CompanyPreparedItem(
                 prepared=source_data,
@@ -621,6 +635,7 @@ def collect_company_spaces(
         text=f"Company collection complete: {len(prepared)} / {len(sources)} spaces",
     )
     st.session_state["company_collection_errors"] = tuple(failures)
+    st.session_state["company_collection_fresh"] = False
     if failures or len(prepared) != len(sources):
         raise CollectionError(
             "Company collection is incomplete, so no partial dashboard was created. "
@@ -636,6 +651,8 @@ def render_company_collection(settings, selected_company: str = ALL_COMPANIES_ID
     if st.session_state.get("company_analysis") is not None:
         return None, False
     if st.session_state.get("company_collection_selection") != selected_company:
+        st.session_state["company_collection_id"] = uuid4().hex
+        st.session_state["company_collection_fresh"] = True
         for key in (
             "company_prepared_items",
             "company_collection_attempted",
@@ -649,12 +666,39 @@ def render_company_collection(settings, selected_company: str = ALL_COMPANIES_ID
 
     if not st.session_state.get("company_collection_attempted"):
         st.session_state["company_collection_attempted"] = True
+        if not st.session_state.get("company_collection_id"):
+            st.session_state["company_collection_id"] = uuid4().hex
         try:
             st.session_state["company_prepared_items"] = collect_company_spaces(
-                settings, selected_company=selected_company
+                settings,
+                selected_company=selected_company,
+                collection_id=st.session_state.get("company_collection_id"),
+                fresh=st.session_state.get("company_collection_fresh", True),
             )
+            st.session_state["company_collection_fresh"] = False
+            st.session_state["company_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
         except (CollectionError, ClickUpCollectionError) as exc:
+            st.session_state["company_collection_fresh"] = False
             st.session_state["company_collection_error"] = str(exc)
+
+    if st.button("Refresh Live Data", key=f"company_refresh_{selected_company}"):
+        for key in (
+            "company_prepared_items",
+            "company_collection_attempted",
+            "company_collection_error",
+            "company_collection_errors",
+            "company_partial_prepared_items",
+            "company_analysis",
+            "company_output_cache_key",
+            "company_output_cache",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state["company_collection_id"] = uuid4().hex
+        st.session_state["company_collection_fresh"] = True
+        st.rerun()
+
+    if st.session_state.get("company_collection_collected_at"):
+        st.caption(f"Data collected at: {st.session_state['company_collection_collected_at']}")
 
     error = st.session_state.get("company_collection_error", "")
     if error:
