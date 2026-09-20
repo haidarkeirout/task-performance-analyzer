@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -98,6 +99,8 @@ def _load_jira(
     record: EmployeeRecord,
     settings,
     *,
+    collection_id: str | None = None,
+    fresh: bool = False,
     progress=None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
@@ -132,6 +135,8 @@ def _load_clickup(
     record: EmployeeRecord,
     settings,
     *,
+    collection_id: str | None = None,
+    fresh: bool = False,
     progress=None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
@@ -148,7 +153,10 @@ def _load_clickup(
             progress = st.progress(0.0, text=f"Collecting ClickUp Spaces: 0 / {len(spaces)}")
         overall = progress
         registry = dict(st.session_state.get("employee_clickup_checkpoints") or {})
-        employee_key = f"{record.name}:{record.clickup_user_id}:{workspace_id}"
+        employee_key = (
+            f"{record.name}:{record.clickup_user_id}:{workspace_id}"
+            + (f":collection:{collection_id}" if collection_id else "")
+        )
         employee_checkpoints = registry.setdefault(employee_key, {})
         for index, space in enumerate(spaces):
             space_id = str(space.get("id") or "")
@@ -172,6 +180,7 @@ def _load_clickup(
                 ),
                 checkpoint=checkpoint,
                 checkpoint_callback=save_checkpoint,
+                fresh=fresh,
             )
             matching = []
             for task in current:
@@ -200,7 +209,13 @@ def _load_clickup(
         gateway.close()
 
 
-def _load_employee_sources(record: EmployeeRecord, settings) -> dict:
+def _load_employee_sources(
+    record: EmployeeRecord,
+    settings,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
+) -> dict:
     """Collect every configured source for the selected employee.
 
     A failure in one connector is retained as a warning while the other source
@@ -215,7 +230,7 @@ def _load_employee_sources(record: EmployeeRecord, settings) -> dict:
     if record.jira_account_id:
         try:
             snapshots["Jira"] = _load_jira(
-                record, settings, progress=overall,
+                record, settings, collection_id=collection_id, fresh=fresh, progress=overall,
                 progress_start=source_index / configured_sources,
                 progress_end=(source_index + 1) / configured_sources,
             )
@@ -225,7 +240,7 @@ def _load_employee_sources(record: EmployeeRecord, settings) -> dict:
     if record.clickup_user_id:
         try:
             snapshots["ClickUp"] = _load_clickup(
-                record, settings, progress=overall,
+                record, settings, collection_id=collection_id, fresh=fresh, progress=overall,
                 progress_start=source_index / configured_sources,
                 progress_end=(source_index + 1) / configured_sources,
             )
@@ -324,7 +339,16 @@ def _update_employee_progress(progress, message: str, total: int) -> None:
     progress.progress(0.0, text=f"Collecting ClickUp tasks: 0 / {total}")
 
 
-def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
+def _prepare_jira(
+    record,
+    settings,
+    snapshot,
+    selected_spaces,
+    fingerprint,
+    *,
+    collection_id: str | None = None,
+    fresh: bool = False,
+):
     issues = [issue for issue in snapshot["issues"] if not selected_spaces or _jira_space_key(issue) in selected_spaces]
     if not issues:
         raise CollectionError("No tasks match the selected Spaces.")
@@ -347,6 +371,8 @@ def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
         space={"id": "*", "key": f"employee-{record.name}", "name": space_name},
         query=query,
         fingerprint=durable_fingerprint,
+        collection_id=collection_id,
+        fresh=fresh,
         seed_issues=issues,
         progress=lambda fraction, message: progress.progress(
             fraction, text=message
@@ -357,15 +383,27 @@ def _prepare_jira(record, settings, snapshot, selected_spaces, fingerprint):
     return result
 
 
-def _prepare_clickup(record, settings, snapshot, selected_spaces, fingerprint):
+def _prepare_clickup(
+    record,
+    settings,
+    snapshot,
+    selected_spaces,
+    fingerprint,
+    *,
+    collection_id: str | None = None,
+):
     tasks = [task for task in snapshot["tasks"] if not selected_spaces or task.get("employee_space_id") in selected_spaces]
     if not tasks:
         raise ClickUpCollectionError("No tasks match the selected Spaces.")
     names = sorted({task.get("employee_space_name") for task in tasks if task.get("employee_space_name")})
     total = len(tasks)
     progress = st.progress(0.0, text=f"Collecting ClickUp tasks: 0 / {total}")
+    effective_fingerprint = (
+        f"{fingerprint}:collection:{collection_id}"
+        if collection_id else fingerprint
+    )
     prepared = collect_clickup_data(
-        None, tasks, f"Employee: {record.name}", fingerprint, settings.source_timezone,
+        None, tasks, f"Employee: {record.name}", effective_fingerprint, settings.source_timezone,
         progress=lambda message: _update_employee_progress(progress, message, total),
         space_id=None,
         filter_summary=f"Assigned tasks for {record.name}" + (f" · Spaces: {', '.join(names)}" if names else ""),
@@ -416,14 +454,29 @@ def render_employee_collection(settings):
         st.rerun()
 
     if st.button("Load Employee Tasks", type="primary", key="employee_load"):
+        resume = bool(st.session_state.get("employee_collection_in_progress"))
+        if not resume:
+            st.session_state["employee_collection_id"] = uuid4().hex
+        st.session_state["employee_collection_fresh"] = not resume
+        st.session_state["employee_collection_in_progress"] = True
         _clear_employee_state()
         try:
-            snapshot = _load_employee_sources(record, settings)
+            snapshot = _load_employee_sources(
+                record,
+                settings,
+                collection_id=st.session_state.get("employee_collection_id"),
+                fresh=st.session_state.get("employee_collection_fresh", False),
+            )
             st.session_state["employee_snapshot"] = snapshot
             st.session_state["employee_snapshot_key"] = snapshot_key
             st.session_state["data_source"] = snapshot["source"]
+            st.session_state["employee_collection_fresh"] = False
+            st.session_state["employee_collection_in_progress"] = False
+            st.session_state["employee_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
             st.rerun()
         except (CollectionError, ClickUpCollectionError) as exc:
+            # Keep the Collection ID so a subsequent Load resumes the same run.
+            st.session_state["employee_collection_fresh"] = False
             st.error(str(exc))
             return None, False
 
@@ -434,6 +487,8 @@ def render_employee_collection(settings):
         return None, False
 
     st.session_state["data_source"] = snapshot["source"]
+    if st.session_state.get("employee_collection_collected_at"):
+        st.caption(f"Data collected at: {st.session_state['employee_collection_collected_at']}")
     for warning in snapshot.get("warnings", []):
         st.warning(f"Some tasks could not be loaded: {warning}")
     spaces = snapshot.get("spaces", {})
@@ -472,11 +527,14 @@ def render_employee_collection(settings):
                     jira_prepared = _prepare_jira(
                         record, settings, source_snapshots["Jira"], jira_spaces,
                         "employee:jira:" + fingerprint,
+                        collection_id=st.session_state.get("employee_collection_id"),
+                        fresh=st.session_state.get("employee_collection_fresh", False),
                     )
                 if "ClickUp" in source_snapshots:
                     clickup_prepared = _prepare_clickup(
                         record, settings, source_snapshots["ClickUp"], clickup_spaces,
                         "employee:clickup:" + fingerprint,
+                        collection_id=st.session_state.get("employee_collection_id"),
                     )
                 if jira_prepared is not None and clickup_prepared is not None:
                     prepared = EmployeePreparedBundle(record.name, jira_prepared, clickup_prepared, "employee:combined:" + fingerprint)
@@ -484,6 +542,9 @@ def render_employee_collection(settings):
                     prepared = jira_prepared or clickup_prepared
             st.session_state["employee_prepared"] = prepared
             st.session_state["prepared_data"] = prepared
+            st.session_state["employee_collection_fresh"] = False
+            st.session_state["employee_collection_in_progress"] = False
+            st.session_state["employee_collection_collected_at"] = datetime.now(timezone.utc).isoformat()
             st.success("Employee task collection completed. The source is ready for analysis.")
         except (CollectionError, ClickUpCollectionError) as exc:
             st.error(str(exc))
