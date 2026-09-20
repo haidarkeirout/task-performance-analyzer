@@ -45,6 +45,23 @@ class ClickUpResumeTests(unittest.TestCase):
         self.assertEqual(gateway.calls, [0, 1, 1])
         self.assertTrue(checkpoint["list_states"]["list-1"]["complete"])
 
+    def test_fresh_space_collection_replaces_stale_snapshot(self):
+        gateway = ResumableClickUpGateway()
+        checkpoint = {
+            "lists": [{"id": "list-1", "name": "List"}],
+            "tasks": {"OLD": {"id": "OLD", "status": {"status": "in progress"}}},
+            "list_states": {"list-1": {"complete": True, "next_page": 0}},
+        }
+        result = gateway.all_tasks_for_space(
+            "space-1",
+            checkpoint=checkpoint,
+            checkpoint_callback=lambda state: None,
+            fresh=True,
+        )
+        self.assertNotIn("OLD", {task["id"] for task in result})
+        self.assertEqual(len(result), 101)
+        self.assertTrue(checkpoint["list_states"]["list-1"]["complete"])
+
 
 if __name__ == "__main__":
     unittest.main()
