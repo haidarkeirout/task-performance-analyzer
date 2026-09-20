@@ -350,14 +350,21 @@ def _output_bytes(result: CompanyAnalysisResult, model: Any) -> tuple[bytes, byt
     return excel, raw, word
 
 
-def _cached_output_bytes(st: Any, result: CompanyAnalysisResult, model: Any) -> tuple[bytes, bytes, bytes]:
+def _cached_output_bytes(
+    st: Any,
+    result: CompanyAnalysisResult,
+    model: Any,
+    *,
+    cache_prefix: str = "company",
+) -> tuple[bytes, bytes, bytes]:
     selected = sorted((detail.source_tool, detail.task_id) for detail in model.task_details)
     material = repr((result.snapshots[0].period_start if result.snapshots else None,
                      result.snapshots[0].period_end if result.snapshots else None, selected))
     key = hashlib.sha256(material.encode("utf-8")).hexdigest()
-    if st.session_state.get("company_output_cache_key") != key:
+    cache_key = f"{cache_prefix}:{key}"
+    if st.session_state.get("company_output_cache_key") != cache_key:
         st.session_state["company_output_cache"] = _output_bytes(result, model)
-        st.session_state["company_output_cache_key"] = key
+        st.session_state["company_output_cache_key"] = cache_key
     return st.session_state["company_output_cache"]
 
 
@@ -465,13 +472,20 @@ def _weekly_company_flow_frame(snapshots: Any) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Week Starting", "Tasks Created", "Tasks Completed"])
 
 
-def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
+def render_company_result(
+    st: Any,
+    result: CompanyAnalysisResult,
+    *,
+    scope_title: str = "Company Performance Analysis",
+    close_state_key: str = "company_analysis",
+    download_stem: str = "company_performance",
+) -> None:
     """Render a concise company dashboard plus detailed drill-down outputs."""
     st.divider()
     heading, action = st.columns([5, 1])
-    heading.title("Company Performance Analysis")
-    if action.button("Close Company View", key="close_company_view", use_container_width=True):
-        st.session_state.pop("company_analysis", None)
+    heading.title(scope_title)
+    if action.button("Close Analysis", key=f"close_{close_state_key}", use_container_width=True):
+        st.session_state.pop(close_state_key, None)
         st.rerun()
 
     with st.expander("Optional dashboard filters", expanded=False):
@@ -494,7 +508,7 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
     ])
     with dashboard:
         st.caption(
-            f"Company-wide analysis period: {model.period_start.isoformat()} "
+            f"Analysis period: {model.period_start.isoformat()} "
             f"to {model.period_end.isoformat()}"
         )
         st.caption(
@@ -595,27 +609,27 @@ def render_company_result(st: Any, result: CompanyAnalysisResult) -> None:
         else:
             st.success("No task-level Unknown status or quality reasons were recorded.")
 
-    excel, raw, word = _cached_output_bytes(st, result, model)
+    excel, raw, word = _cached_output_bytes(st, result, model, cache_prefix=download_stem)
     st.subheader("Downloads")
     left, middle, right = st.columns(3)
     left.download_button(
-        "Download Company Excel",
+        "Download Excel Report",
         excel,
-        "company_performance_analysis.xlsx",
+        f"{download_stem}_analysis.xlsx",
         _MIME_XLSX,
         use_container_width=True,
     )
     middle.download_button(
         "Download Raw Collected Data",
         raw,
-        "company_performance_raw_data.xlsx",
+        f"{download_stem}_raw_data.xlsx",
         _MIME_XLSX,
         use_container_width=True,
     )
     right.download_button(
-        "Download Company Word Report",
+        "Download Word Report",
         word,
-        "company_performance_report.docx",
+        f"{download_stem}_report.docx",
         _MIME_DOCX,
         use_container_width=True,
     )

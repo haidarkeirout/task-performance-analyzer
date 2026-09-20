@@ -5,7 +5,7 @@ import hashlib
 import os
 import sys
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -45,6 +45,8 @@ from company_performance.ui import (
     render_company_launcher,
     render_company_result,
 )
+from company_performance.application import build_company_analysis
+from employee_ui import EmployeePreparedBundle
 from project_ui import render_project_collection, render_project_result
 from department_analysis import (
     build_department_result,
@@ -1338,6 +1340,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "jira_department_preview_cache",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint", "employee_clickup_checkpoints",
+        "employee_company_analysis",
         "company_prepared_items", "company_collection_attempted",
         "company_collection_error", "company_collection_errors",
         "company_partial_prepared_items",
@@ -1433,6 +1436,36 @@ if analysis_mode == "company":
     if st.session_state.get("company_analysis") is not None:
         render_company_result(st, st.session_state["company_analysis"])
         st.stop()
+
+# An employee can have a Jira account and a ClickUp member account.  The
+# collection UI prepares both snapshots, then the source-neutral Company
+# domain combines them without changing the existing single-source analyses.
+if analysis_mode == "employee" and run_button and isinstance(prepared_data, EmployeePreparedBundle):
+    try:
+        cutoff_value = str(prepared_data.cutoff or date.today().isoformat())[:10]
+        period_end = date.fromisoformat(cutoff_value)
+        with st.spinner("Calculating the combined employee analysis..."):
+            st.session_state["employee_company_analysis"] = build_company_analysis(
+                period_start=date(2000, 1, 1),
+                period_end=period_end,
+                jira_prepared=prepared_data.jira,
+                clickup_prepared=prepared_data.clickup,
+                unified_project=f"Employee: {prepared_data.employee_name}",
+            )
+        st.success("Combined Jira + ClickUp employee analysis completed successfully.")
+    except (ValueError, TypeError) as exc:
+        st.session_state.pop("employee_company_analysis", None)
+        st.error(f"Combined employee analysis could not be completed: {exc}")
+
+if analysis_mode == "employee" and st.session_state.get("employee_company_analysis") is not None:
+    render_company_result(
+        st,
+        st.session_state["employee_company_analysis"],
+        scope_title=f"Employee Performance — {getattr(prepared_data, 'employee_name', 'Selected Employee')}",
+        close_state_key="employee_company_analysis",
+        download_stem="employee_performance",
+    )
+    st.stop()
 
 if analysis_mode != "company" and run_button and prepared_data is not None:
     if st.session_state.get("data_source") == "ClickUp":

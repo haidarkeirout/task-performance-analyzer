@@ -96,14 +96,65 @@ class EmployeeDirectoryCacheTests(unittest.TestCase):
             {
                 "employee_name": "Ada",
                 "department": "Engineering",
-                "primary_source": "Jira / ClickUp",
+                "primary_source": "Asana",
                 "jira_account_id": "ada-1",
                 "clickup_user_id": "",
                 "active": "TRUE",
             }
         ]
 
-        with self.assertRaisesRegex(ValueError, r"row 2.*Jira / ClickUp.*jira.*clickup"):
+        with self.assertRaisesRegex(ValueError, r"row 2.*Asana.*jira.*clickup"):
+            directory._build_records(rows, "fixture")
+
+    def test_one_employee_can_have_both_source_ids(self):
+        rows = [{
+            "employee_name": "Ada",
+            "department": "Engineering",
+            "primary_source": "jira",
+            "jira_account_id": "ada-jira",
+            "clickup_user_id": "ada-clickup",
+            "active": "TRUE",
+        }]
+
+        records = directory._build_records(rows, "fixture")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].sources, ("jira", "clickup"))
+        self.assertEqual(records[0].primary_source, "both")
+
+    def test_cross_source_rows_for_same_employee_are_merged(self):
+        rows = [
+            {
+                "employee_name": "Ada",
+                "department": "Engineering",
+                "primary_source": "jira",
+                "jira_account_id": "ada-jira",
+                "clickup_user_id": "",
+                "active": "TRUE",
+            },
+            {
+                "employee_name": "Ada",
+                "department": "Delivery",
+                "primary_source": "clickup",
+                "jira_account_id": "",
+                "clickup_user_id": "ada-clickup",
+                "active": "TRUE",
+            },
+        ]
+
+        records = directory._build_records(rows, "fixture")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].sources, ("jira", "clickup"))
+        self.assertEqual(records[0].jira_department, "Engineering")
+        self.assertEqual(records[0].clickup_department, "Delivery")
+
+    def test_duplicate_same_source_remains_an_error(self):
+        rows = [
+            *ROWS,
+            {**ROWS[0], "jira_account_id": "ada-2"},
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate Jira accounts"):
             directory._build_records(rows, "fixture")
 
 

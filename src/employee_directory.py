@@ -15,10 +15,10 @@ import pandas as pd
 import requests
 
 
-DEFAULT_DIRECTORY_URL = (
-    "https://1drv.ms/x/c/39dd675097cd5e3d/"
-    "IQBA5U9zjQJTTrJ_U0unXsHWAVOMMDwUnBNZa5Xq3KyuAyg?e=K4tgrD"
-)
+# The workbook share URL is deployment configuration, not source code. Keep
+# it in Streamlit Secrets or the EMPLOYEE_DIRECTORY_URL environment variable
+# so a share token cannot be committed to the public repository.
+DEFAULT_DIRECTORY_URL = ""
 REQUIRED_COLUMNS = {
     "employee_name",
     "department",
@@ -40,7 +40,20 @@ class EmployeeRecord:
     primary_source: str
     jira_account_id: str = ""
     clickup_user_id: str = ""
+    jira_department: str = ""
+    clickup_department: str = ""
+    jira_position: str = ""
+    clickup_position: str = ""
     active: bool = True
+
+    @property
+    def sources(self) -> tuple[str, ...]:
+        values = []
+        if self.jira_account_id:
+            values.append("jira")
+        if self.clickup_user_id:
+            values.append("clickup")
+        return tuple(values)
 
 
 def _active(value: object) -> bool:
@@ -73,13 +86,28 @@ def _primary_source(value: object) -> str:
     """Normalize harmless Excel variations while keeping routing unambiguous."""
     raw = unicodedata.normalize("NFKC", _text(value)).casefold()
     compact = re.sub(r"[^a-z0-9]+", "", raw)
-    return {
+    normalized = {
         "jira": "jira",
         "jiracloud": "jira",
         "atlassianjira": "jira",
         "clickup": "clickup",
         "clickupcloud": "clickup",
-    }.get(compact, raw)
+        "both": "both",
+        "jiraandclickup": "both",
+        "clickupandjira": "both",
+        "jiraclickup": "both",
+        "clickupjira": "both",
+        "all": "both",
+    }.get(compact)
+    if normalized:
+        return normalized
+    if "jira" in compact and "clickup" in compact:
+        return "both"
+    if "jira" in compact:
+        return "jira"
+    if "clickup" in compact:
+        return "clickup"
+    return raw
 
 
 def _directory_url() -> str:
@@ -116,6 +144,11 @@ def _direct_download_url(url: str) -> str | None:
 
 def _download_workbook(url: str) -> bytes:
     """Download a publicly shared OneDrive workbook without Graph authentication."""
+    if not str(url or "").strip():
+        raise ValueError(
+            "The employee directory URL is not configured. Set "
+            "EMPLOYEE_DIRECTORY_URL in the deployment Secrets."
+        )
     candidates = [_with_download_parameter(url), url]
     direct = _direct_download_url(url)
     if direct:
@@ -191,8 +224,7 @@ def _remote_rows(url: str) -> list[dict[str, object]]:
 
 
 def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> list[EmployeeRecord]:
-    records: list[EmployeeRecord] = []
-    seen: set[str] = set()
+    records: dict[str, EmployeeRecord] = {}
 
     for line_number, row in enumerate(rows, 2):
         name = _text(row.get("employee_name"))
@@ -210,11 +242,7 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
             raise ValueError(
                 f"Employee directory row {line_number} in {source_label} has no employee_name."
             )
-        if name.casefold() in seen:
-            raise ValueError(
-                f"Employee directory contains a duplicate employee: {name}."
-            )
-        if source not in {"jira", "clickup"}:
+        if source not in {"jira", "clickup", "both"}:
             raise ValueError(
                 f"Employee directory row {line_number} ({name}) has an invalid "
                 f"primary_source {raw_source!r}. Use 'jira' or 'clickup'."
@@ -230,20 +258,61 @@ def _build_records(rows: Iterable[Mapping[str, object]], source_label: str) -> l
             raise ValueError(
                 f"Employee directory row {line_number} needs clickup_user_id."
             )
-
-        seen.add(name.casefold())
-        records.append(
-            EmployeeRecord(
-                name=name,
-                department=_text(row.get("department")),
-                primary_source=source,
-                jira_account_id=jira_id,
-                clickup_user_id=clickup_id,
-                active=active,
+        if source == "both" and not (jira_id or clickup_id):
+            raise ValueError(
+                f"Employee directory row {line_number} ({name}) needs at least one "
+                "jira_account_id or clickup_user_id."
             )
+
+        row_record = EmployeeRecord(
+            name=name,
+            department=_text(row.get("department")),
+            primary_source="both" if jira_id and clickup_id else source,
+            jira_account_id=jira_id,
+            clickup_user_id=clickup_id,
+            jira_department=_text(row.get("jira_department")) or (
+                _text(row.get("department")) if jira_id else ""
+            ),
+            clickup_department=_text(row.get("clickup_department")) or (
+                _text(row.get("department")) if clickup_id else ""
+            ),
+            jira_position=_text(row.get("jira_position")),
+            clickup_position=_text(row.get("clickup_position")),
+            active=active,
+        )
+        key = name.casefold()
+        previous = records.get(key)
+        if previous is None:
+            records[key] = row_record
+            continue
+
+        # A person can have one Jira row and one ClickUp row. Merge only
+        # cross-source rows; duplicate IDs in the same source remain an error
+        # so two different people sharing a name are not silently combined.
+        if previous.jira_account_id and row_record.jira_account_id:
+            raise ValueError(
+                f"Employee directory contains duplicate Jira accounts for: {name}."
+            )
+        if previous.clickup_user_id and row_record.clickup_user_id:
+            raise ValueError(
+                f"Employee directory contains duplicate ClickUp accounts for: {name}."
+            )
+        merged_jira = previous.jira_account_id or row_record.jira_account_id
+        merged_clickup = previous.clickup_user_id or row_record.clickup_user_id
+        records[key] = EmployeeRecord(
+            name=previous.name,
+            department=previous.department or row_record.department,
+            primary_source="both" if merged_jira and merged_clickup else ("jira" if merged_jira else "clickup"),
+            jira_account_id=merged_jira,
+            clickup_user_id=merged_clickup,
+            jira_department=previous.jira_department or row_record.jira_department,
+            clickup_department=previous.clickup_department or row_record.clickup_department,
+            jira_position=previous.jira_position or row_record.jira_position,
+            clickup_position=previous.clickup_position or row_record.clickup_position,
+            active=True,
         )
 
-    return [record for record in records if record.active]
+    return [record for record in records.values() if record.active]
 
 
 def load_employee_directory_with_status() -> tuple[list[EmployeeRecord], str | None]:
