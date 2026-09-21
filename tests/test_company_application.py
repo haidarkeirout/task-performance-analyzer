@@ -98,6 +98,17 @@ class CompanyApplicationTests(unittest.TestCase):
         self.assertEqual(result.model.kpis.total_tasks, 1)
         self.assertEqual(result.model.kpis.completed_tasks, 1)
 
+    def test_missing_period_uses_full_collected_task_history(self):
+        result = build_company_analysis(
+            period_start=None,
+            period_end=None,
+            jira_prepared=JiraPrepared(),
+            jira_project="Company Delivery",
+        )
+
+        self.assertEqual(result.snapshots[0].period_start, date(2026, 9, 1))
+        self.assertEqual(result.snapshots[0].period_end, date(2026, 9, 30))
+
     def test_streamlit_bridge_keeps_one_prepared_payload_per_source(self):
         """Company mode reuses authenticated collector output; it never owns credentials."""
         session_state = {}
