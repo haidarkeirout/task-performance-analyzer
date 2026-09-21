@@ -72,6 +72,24 @@ def _clear_employee_state() -> None:
         st.session_state.pop(key, None)
 
 
+def _on_employee_changed() -> None:
+    """Clear the previous employee result and rerun the full app immediately.
+
+    This renderer is a Streamlit fragment.  A fragment-only rerun can leave the
+    already-rendered dashboard below it visible even after its session state was
+    cleared, so the selector explicitly requests an app rerun.
+    """
+    _clear_employee_state()
+    for key in (
+        "employee_collection_id",
+        "employee_collection_fresh",
+        "employee_collection_in_progress",
+        "employee_run_requested",
+    ):
+        st.session_state.pop(key, None)
+    st.rerun()
+
+
 def _employee_label(record: EmployeeRecord) -> str:
     departments = [value for value in (record.jira_department, record.clickup_department) if value]
     suffix = f" · {record.department}" if record.department else ""
@@ -437,7 +455,7 @@ def render_employee_collection(settings):
     selected_name = st.selectbox(
         "Employee", [None, *names],
         format_func=lambda value: "Choose an employee" if value is None else value,
-        key="employee_selected_name", on_change=_clear_employee_state,
+                key="employee_selected_name", on_change=_on_employee_changed,
     )
     if selected_name is None:
         st.caption("Choose an employee to search Jira and ClickUp automatically.")
