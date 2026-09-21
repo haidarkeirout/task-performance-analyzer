@@ -590,7 +590,7 @@ def render_employee_collection(settings):
     if selected_name is None:
         st.caption("Choose an employee to search Jira and ClickUp automatically.")
         return None, False
-    record = next(item for item in records if item.name == selected_name)
+    record = records_by_key[selected_name]
     source_labels = " + ".join(source.title() for source in record.sources) or "Not configured"
     st.caption(
         f"Department: {record.department or 'Not specified'} · "
