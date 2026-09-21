@@ -124,6 +124,25 @@ class ClickUpGateway:
             raise ClickUpCollectionError("No ClickUp Workspaces were found for this account.")
         return teams
 
+    def workspace_members(self, workspace_id: str = ""):
+        """Return members of the selected ClickUp Workspace."""
+        selected_id = str(workspace_id or self.workspace_id or "")
+        teams = self.workspaces()
+        selected = next(
+            (team for team in teams if str(team.get("id") or "") == selected_id),
+            None,
+        )
+        if selected is None:
+            raise ClickUpCollectionError(
+                "The configured ClickUp Workspace is unavailable for this account."
+            )
+        members = selected.get("members")
+        if not isinstance(members, list):
+            raise ClickUpCollectionError(
+                "ClickUp did not return the Workspace member directory."
+            )
+        return members
+
     def spaces(self, workspace_id: str, archived: bool = False):
         data = self.request(f"/team/{workspace_id}/space", params={"archived": str(archived).lower()})
         spaces = data.get("spaces")

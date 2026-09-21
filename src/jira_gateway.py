@@ -168,6 +168,24 @@ class JiraGateway:
     def identity(self):
         return self.request("GET", "/rest/api/3/myself")
 
+    def users(self):
+        """Return all Jira users visible to the connected account."""
+        users = []
+        start_at = 0
+        page_size = 100
+        while True:
+            page = self.request(
+                "GET",
+                "/rest/api/3/users/search",
+                params={"startAt": start_at, "maxResults": page_size},
+            )
+            if not isinstance(page, list):
+                raise CollectionError("Jira returned an invalid user directory response.")
+            users.extend(page)
+            if len(page) < page_size:
+                return users
+            start_at += len(page)
+
     def spaces(self):
         return self._paged("/rest/api/3/project/search", params={"orderBy": "name"})
 
