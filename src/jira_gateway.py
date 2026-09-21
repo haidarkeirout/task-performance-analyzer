@@ -26,8 +26,14 @@ class CollectionError(RuntimeError):
 class JiraGateway:
     def __init__(self, settings: Settings, session=None, sleep=time.sleep):
         self.settings = settings
-        self.base = (f"https://api.atlassian.com/ex/jira/{settings.jira_cloud_id}"
-                     if settings.jira_cloud_id else settings.jira_url)
+        # API-token Basic authentication is supported by the Jira site URL.
+        # The Atlassian platform URL selected by jira_cloud_id is an OAuth route,
+        # so it must not override the configured Jira site for this connection.
+        self.base = str(settings.jira_url or "").rstrip("/")
+        if not self.base or not settings.jira_email or not settings.jira_token:
+            raise CollectionError(
+                "Jira is not configured. Ask the administrator to provide the Jira URL, email, and API token."
+            )
         self.session = session or requests.Session()
         self.session.auth = (settings.jira_email, settings.jira_token)
         self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
