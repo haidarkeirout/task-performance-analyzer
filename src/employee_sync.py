@@ -55,6 +55,11 @@ def _clickup_active(user: dict[str, Any]) -> bool:
 def _jira_records(users: list[dict[str, Any]]) -> list[EmployeeRecord]:
     records: dict[str, EmployeeRecord] = {}
     for user in users:
+        # Jira returns Atlassian app/service accounts in the same directory.
+        # They are not employees and must not appear in Employee Analysis.
+        account_type = _text(user.get("accountType")).casefold()
+        if account_type and account_type != "atlassian":
+            continue
         account_id = _text(user.get("accountId"))
         name = _text(user.get("displayName")) or _text(user.get("emailAddress"))
         if not account_id or not name:
