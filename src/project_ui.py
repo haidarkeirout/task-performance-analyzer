@@ -95,9 +95,7 @@ def _scope_label(jira_item: dict[str, Any] | None, clickup_item: dict[str, Any] 
 
 
 def _load_catalogs(settings) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    # Bump the catalog protocol when Jira connection behavior changes so an
-    # already-open browser session cannot keep an earlier empty Jira catalog.
-    revision = f"{getattr(settings, 'revision', '')}:jira-site-api-v1"
+    revision = str(getattr(settings, "revision", ""))
     if st.session_state.get("project_catalog_revision") == revision:
         return (
             dict(st.session_state.get("project_jira_spaces", {})),
