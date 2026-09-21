@@ -109,6 +109,11 @@ def _on_employee_period_changed() -> None:
     _clear_employee_analysis_state()
 
 
+def _request_employee_analysis_rerun() -> None:
+    """Return the Employee Run Analysis request to app.py's dispatcher."""
+    st.rerun(scope="app")
+
+
 def _on_employee_changed() -> None:
     """Clear the previous employee result and rerun the full app immediately.
 
@@ -661,6 +666,6 @@ def render_employee_collection(settings):
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
     if run_clicked:
         st.session_state["employee_run_requested"] = True
-        st.rerun()
+        _request_employee_analysis_rerun()
     run_requested = st.session_state.pop("employee_run_requested", False)
     return prepared, run_requested
