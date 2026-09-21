@@ -461,19 +461,37 @@ def calculate_task(
         task.get("labels")
     )
 
+    # Validate the entire claimed history, then reconstruct only through the
+    # selected period.  A date-only Employee period may end on today while the
+    # collection itself naturally stops earlier in the same calendar day.  In
+    # that case the history is valid for the selected date; use its actual
+    # coverage instant for elapsed-time calculations so we never count future
+    # hours.
+    history = history or {}
+    through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
+    cutoff_local_date = cutoff.tz_convert(calendar.timezone).date()
+    through_local_date = (
+        through.tz_convert(calendar.timezone).date()
+        if through is not None
+        else None
+    )
+    same_calendar_date = through_local_date == cutoff_local_date
+    effective_cutoff = (
+        through
+        if through is not None and same_calendar_date and through < cutoff
+        else cutoff
+    )
     events = get_status_events(
         history,
-        cutoff,
+        effective_cutoff,
         calendar.timezone_name,
     )
 
-    # Validate the entire claimed history, then reconstruct only through cutoff.
-    history = history or {}
-    through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
     all_events = get_status_events(history, pd.Timestamp.max.tz_localize("UTC"), calendar.timezone_name)
     invalid_events = len(all_events) != len(history.get("status_events", []))
+    coverage_ok = through is not None and (through >= cutoff or same_calendar_date)
     verified = (history.get("history_complete") is True and not history.get("error")
-                and through is not None and through >= cutoff and not invalid_events
+                and coverage_ok and not invalid_events
                 and created_at is not None and created_at <= cutoff)
     initial = all_events[0].get("from_status") if all_events else history.get("initial_status")
     intervals = []
@@ -490,9 +508,9 @@ def calculate_task(
             chain_valid = True
         if chain_valid:
             if events:
-                intervals, chain_valid = build_status_intervals(created_at, events, cutoff)
+                intervals, chain_valid = build_status_intervals(created_at, events, effective_cutoff)
             else:
-                intervals = [{"status": initial, "start": created_at, "end": cutoff}]
+                intervals = [{"status": initial, "start": created_at, "end": effective_cutoff}]
     history_complete = bool(verified and chain_valid)
     if not history_complete:
         intervals = []
@@ -569,12 +587,12 @@ def calculate_task(
 
     age_elapsed = elapsed_hours(
         created_at,
-        cutoff,
+        effective_cutoff,
     )
 
     age_business = business_hours_between(
         created_at,
-        cutoff,
+        effective_cutoff,
         calendar,
     )
 
@@ -586,12 +604,12 @@ def calculate_task(
 
     current_status_elapsed = elapsed_hours(
         current_status_start,
-        cutoff,
+        effective_cutoff,
     )
 
     current_status_business = business_hours_between(
         current_status_start,
-        cutoff,
+        effective_cutoff,
         calendar,
     )
 
@@ -599,7 +617,7 @@ def calculate_task(
     schedule_variance: int | None = None
     overdue_days: int | None = None
 
-    cutoff_local_date = cutoff.tz_convert(
+    cutoff_local_date = effective_cutoff.tz_convert(
         calendar.timezone
     ).date()
 
