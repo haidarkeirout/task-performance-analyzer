@@ -15,6 +15,7 @@ from docx import Document
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import employee_ui
 from company_performance.dashboard import build_company_dashboard
 from company_performance.models import StatusTransition, TaskRecord
 from company_performance.outputs import write_company_excel, write_company_word_report
@@ -198,3 +199,42 @@ class EmployeeScopeTests(TestCase):
 
         self.assertIn("Employee scope", model.cards[1].supporting_text)
         self.assertEqual(model.task_details[0].task_id, "EMP-J-1")
+
+
+class _EmployeeSelectionStreamlit:
+    def __init__(self):
+        self.session_state = {
+            "employee_selected_name": "New Employee",
+            "employee_snapshot": object(),
+            "employee_prepared": object(),
+            "employee_company_analysis": object(),
+            "task_metrics": object(),
+            "process_data": object(),
+            "employee_collection_id": "old-collection",
+            "employee_collection_in_progress": True,
+        }
+        self.rerun_calls = 0
+
+    def rerun(self):
+        self.rerun_calls += 1
+
+
+class EmployeeSelectionResetTests(TestCase):
+    def test_changing_employee_clears_stale_result_and_requests_full_rerun(self):
+        streamlit = _EmployeeSelectionStreamlit()
+
+        with patch.object(employee_ui, "st", streamlit):
+            employee_ui._on_employee_changed()
+
+        self.assertEqual(streamlit.rerun_calls, 1)
+        self.assertEqual(streamlit.session_state["employee_selected_name"], "New Employee")
+        for key in (
+            "employee_snapshot",
+            "employee_prepared",
+            "employee_company_analysis",
+            "task_metrics",
+            "process_data",
+            "employee_collection_id",
+            "employee_collection_in_progress",
+        ):
+            self.assertNotIn(key, streamlit.session_state)
