@@ -9,12 +9,20 @@ import pandas as pd
 
 from clickup_analysis import analyze_clickup
 from department_analysis import filter_jira_department_period
-from department_collection import _analysis_cutoff, _period_bounds, _period_filter
-from jira_department_collection import _period_query
+from department_collection import (\n    _analysis_cutoff, _period_bounds, _period_filter,\n    _update_department_preparation_progress,\n)
+from jira_department_collection import _overall_progress_fraction, _period_query
 
 
 def _milliseconds(value: str) -> str:
     return str(int(pd.Timestamp(value).timestamp() * 1000))
+
+
+class _ProgressRecorder:
+    def __init__(self):
+        self.updates = []
+
+    def progress(self, value, text):
+        self.updates.append((value, text))
 
 
 class DepartmentPeriodScopeTests(unittest.TestCase):
@@ -149,6 +157,21 @@ class DepartmentPeriodScopeTests(unittest.TestCase):
             "Asia/Damascus",
         )
         self.assertEqual(set(scoped["issue_key"]), {"OLD-OPEN", "REOPENED"})
+
+    def test_jira_department_progress_maps_each_space_into_one_full_bar(self):
+        self.assertEqual(_overall_progress_fraction(0, 2, 0.0), 0.0)
+        self.assertEqual(_overall_progress_fraction(0, 2, 1.0), 0.5)
+        self.assertEqual(_overall_progress_fraction(1, 2, 0.5), 0.75)
+        self.assertEqual(_overall_progress_fraction(1, 2, 1.0), 1.0)
+
+    def test_clickup_department_preparation_shows_completed_task_count(self):
+        progress = _ProgressRecorder()
+
+        _update_department_preparation_progress(
+            progress, "Preparing ClickUp task 3 of 25...", 25
+        )
+
+        self.assertEqual(progress.updates, [(0.12, "Preparing department tasks: 3 / 25")])
 
 
 if __name__ == "__main__":
