@@ -200,6 +200,24 @@ def _collect_department_tasks(
     return tasks
 
 
+def _update_department_preparation_progress(progress, message: str, total: int) -> None:
+    """Render a task-count progress bar while a Department source is prepared."""
+    text = str(message or "")
+    prefix = "Preparing ClickUp task "
+    if text.startswith(prefix):
+        try:
+            current = int(text[len(prefix):].split(" of ", 1)[0])
+        except (TypeError, ValueError):
+            current = None
+        if current is not None:
+            progress.progress(
+                min(current / total, 1.0) if total else 1.0,
+                text=f"Preparing department tasks: {current} / {total}",
+            )
+            return
+    progress.progress(0.0, text=f"Preparing department tasks: 0 / {total}")
+
+
 def _date_value(value):
     if isinstance(value, tuple):
         return value[0] if value else None
@@ -456,30 +474,34 @@ def render_department_collection(settings):
                 start_date, end_date, settings.source_timezone
             )
             end_cutoff = end_cutoff_value.isoformat()
-            with st.status("Preparing department tasks for analysis...", expanded=True) as progress:
-                prepared = collect_data(
-                    None,
-                    filtered_tasks,
-                    selected["name"],
-                    fingerprint,
-                    settings.source_timezone,
-                    progress=lambda message: progress.update(label=message),
-                    space_id="multiple",
-                    time_status_data={},
-                    time_status_error="",
-                    filter_summary=filter_summary,
-                    filter_criteria=criteria,
-                    analysis_mode="department",
-                    department_name=selected["name"],
-                    department_id=selected_key,
-                    cutoff=end_cutoff,
-                )
-                prepared.space_names = source_spaces
-                prepared.period_start = str(start_date)
-                prepared.period_end = str(end_date)
-                prepared.duplicate_count = st.session_state.get("department_duplicate_count", 0)
-                st.session_state["clickup_prepared_data"] = prepared
-                progress.update(label="Department task collection completed.", state="complete", expanded=False)
+            progress = st.progress(
+                0.0, text=f"Preparing department tasks: 0 / {len(filtered_tasks)}"
+            )
+            prepared = collect_data(
+                None,
+                filtered_tasks,
+                selected["name"],
+                fingerprint,
+                settings.source_timezone,
+                progress=lambda message: _update_department_preparation_progress(
+                    progress, message, len(filtered_tasks)
+                ),
+                space_id="multiple",
+                time_status_data={},
+                time_status_error="",
+                filter_summary=filter_summary,
+                filter_criteria=criteria,
+                analysis_mode="department",
+                department_name=selected["name"],
+                department_id=selected_key,
+                cutoff=end_cutoff,
+            )
+            prepared.space_names = source_spaces
+            prepared.period_start = str(start_date)
+            prepared.period_end = str(end_date)
+            prepared.duplicate_count = st.session_state.get("department_duplicate_count", 0)
+            st.session_state["clickup_prepared_data"] = prepared
+            progress.progress(1.0, text="Department task collection completed.")
         except Exception as exc:
             st.session_state["clickup_error"] = str(exc)
             st.error(f"Department collection could not be completed: {exc}")
