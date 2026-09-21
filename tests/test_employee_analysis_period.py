@@ -4,7 +4,7 @@ from datetime import date
 import json
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import employee_ui
 from clickup_analysis import analyze_clickup
@@ -43,13 +43,16 @@ class EmployeeAnalysisPeriodTests(TestCase):
         ):
             self.assertNotIn(key, fake_streamlit.session_state)
 
-    def test_run_analysis_requests_full_app_rerun(self):
-        fake_streamlit = SimpleNamespace(rerun=Mock())
+    def test_prepared_snapshot_is_kept_when_scope_marker_matches(self):
+        fake_streamlit = SimpleNamespace(
+            session_state={"employee_prepared_scope_fingerprint": "scope-123"}
+        )
+        prepared = object()
 
         with patch.object(employee_ui, "st", fake_streamlit):
-            employee_ui._request_employee_analysis_rerun()
-
-        fake_streamlit.rerun.assert_called_once_with(scope="app")
+            self.assertTrue(employee_ui._employee_prepared_matches_scope(prepared, "scope-123"))
+            self.assertFalse(employee_ui._employee_prepared_matches_scope(prepared, "scope-456"))
+            self.assertFalse(employee_ui._employee_prepared_matches_scope(None, "scope-123"))
 
     def test_clickup_analysis_uses_selected_period_without_recollection(self):
         tasks = [

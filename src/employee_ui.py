@@ -58,7 +58,8 @@ def _source_space_key(source: str, value: object) -> str:
 def _clear_employee_state() -> None:
     for key in (
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
-        "employee_prepared", "employee_fingerprint", "prepared_data", "data_source",
+        "employee_prepared", "employee_prepared_scope_fingerprint",
+        "employee_fingerprint", "prepared_data", "data_source",
         "clickup_prepared_data", "clickup_analysis", "task_metrics", "process_data",
         "validation_log", "department_analysis", "employee_run_requested",
         "clickup_run_analysis", "cutoff_text", "prepared_data",
@@ -109,9 +110,12 @@ def _on_employee_period_changed() -> None:
     _clear_employee_analysis_state()
 
 
-def _request_employee_analysis_rerun() -> None:
-    """Return the Employee Run Analysis request to app.py's dispatcher."""
-    st.rerun(scope="app")
+def _employee_prepared_matches_scope(prepared, fingerprint: str) -> bool:
+    """Keep a prepared Employee snapshot when its selected scope is unchanged."""
+    return (
+        prepared is not None
+        and st.session_state.get("employee_prepared_scope_fingerprint") == fingerprint
+    )
 
 
 def _on_employee_changed() -> None:
@@ -600,9 +604,9 @@ def render_employee_collection(settings):
     ).hexdigest()
     prepared = st.session_state.get("employee_prepared")
     prepared_fingerprint = str(getattr(prepared, "fingerprint", "")) if prepared is not None else ""
-    same_scope = prepared_fingerprint.endswith(fingerprint) or f":{fingerprint}:v2:" in prepared_fingerprint
-    if prepared is not None and not same_scope:
+    if prepared is not None and not _employee_prepared_matches_scope(prepared, fingerprint):
         st.session_state.pop("employee_prepared", None)
+        st.session_state.pop("employee_prepared_scope_fingerprint", None)
         prepared = None
 
     if st.button(
@@ -636,6 +640,7 @@ def render_employee_collection(settings):
                 else:
                     prepared = jira_prepared or clickup_prepared
             st.session_state["employee_prepared"] = prepared
+            st.session_state["employee_prepared_scope_fingerprint"] = fingerprint
             st.session_state["prepared_data"] = prepared
             st.session_state["employee_collection_fresh"] = False
             st.session_state["employee_collection_in_progress"] = False
@@ -645,27 +650,4 @@ def render_employee_collection(settings):
             st.error(str(exc))
             return None, False
     prepared = st.session_state.get("employee_prepared")
-    run_clicked = st.button(
-        "Run Analysis",
-        type="primary",
-        disabled=prepared is None or not periods_ready,
-        key="employee_run",
-    )
-    if prepared:
-        if isinstance(prepared, EmployeePreparedBundle):
-            downloads = st.columns(2)
-            for column, item, label in (
-                (downloads[0], prepared.jira, "Download Jira Source Excel"),
-                (downloads[1], prepared.clickup, "Download ClickUp Source Excel"),
-            ):
-                if item is not None:
-                    column.download_button(label, item.xlsx, item.filename,
-                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
-        else:
-            st.download_button("Download Source Excel", prepared.xlsx, prepared.filename,
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
-    if run_clicked:
-        st.session_state["employee_run_requested"] = True
-        _request_employee_analysis_rerun()
-    run_requested = st.session_state.pop("employee_run_requested", False)
-    return prepared, run_requested
+    return prepared, False
