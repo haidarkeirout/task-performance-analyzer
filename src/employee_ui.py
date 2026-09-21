@@ -119,12 +119,7 @@ def _employee_prepared_matches_scope(prepared, fingerprint: str) -> bool:
 
 
 def _on_employee_changed() -> None:
-    """Clear the previous employee result and rerun the full app immediately.
-
-    This renderer is a Streamlit fragment.  A fragment-only rerun can leave the
-    already-rendered dashboard below it visible even after its session state was
-    cleared, so the selector explicitly requests an app rerun.
-    """
+    """Clear the previous employee result and rerun the full app immediately."""
     _clear_employee_state()
     for key in (
         "employee_collection_id",
@@ -486,7 +481,6 @@ def _prepare_clickup(
     return prepared
 
 
-@st.fragment
 def render_employee_collection(settings):
     try:
         records, directory_warning = load_employee_directory_with_status()
