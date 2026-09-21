@@ -178,8 +178,33 @@ def _jira_space_key(issue: dict) -> str:
     return str(project.get("id") or project.get("key") or "")
 
 
+def _clickup_assignee_ids(person: dict[str, Any]) -> set[str]:
+    """Return all ClickUp identifier variants exposed for one task assignee."""
+    identifiers: set[str] = set()
+    if not isinstance(person, dict):
+        return identifiers
+    candidates = [person]
+    nested = person.get("user")
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    for candidate in candidates:
+        for key in ("id", "user_id", "userid", "member_id", "account_id"):
+            value = candidate.get(key)
+            if value not in (None, ""):
+                identifiers.add(str(value).strip())
+    return {value for value in identifiers if value}
+
+
 def _clickup_assigned(task: dict, user_id: str) -> bool:
-    return any(str(person.get("id")) == str(user_id) for person in (task.get("assignees") or []))
+    """Match the selected employee by ClickUp member ID, not by display name."""
+    target = str(user_id or "").strip()
+    assignees = task.get("assignees") or []
+    if isinstance(assignees, dict):
+        assignees = [assignees]
+    return bool(target) and any(
+        target in _clickup_assignee_ids(person)
+        for person in assignees
+    )
 
 
 def _scaled_progress(progress, fraction: float, text: str, start: float, end: float) -> None:
@@ -219,8 +244,14 @@ def _load_jira(
             progress, 1.0, f"Jira collection complete: {len(issues)} tasks",
             progress_start, progress_end,
         )
-        return {"source": "Jira", "query": query, "issues": issues, "spaces": spaces,
-                "definitions": gateway.fields()}
+        return {
+            "source": "Jira",
+            "query": query,
+            "issues": issues,
+            "spaces": spaces,
+            "counts": {"fetched": len(issues), "matched": len(issues)},
+            "definitions": gateway.fields(),
+        }
     finally:
         gateway.close()
 
@@ -243,6 +274,7 @@ def _load_clickup(
             raise ClickUpCollectionError("No ClickUp Workspace was found for this account.")
         spaces = gateway.spaces(workspace_id)
         tasks, space_names = [], {}
+        fetched_count = 0
         if progress is None:
             progress = st.progress(0.0, text=f"Collecting ClickUp Spaces: 0 / {len(spaces)}")
         overall = progress
@@ -276,6 +308,7 @@ def _load_clickup(
                 checkpoint_callback=save_checkpoint,
                 fresh=fresh,
             )
+            fetched_count += len(current)
             matching = []
             for task in current:
                 if _clickup_assigned(task, record.clickup_user_id):
@@ -298,7 +331,13 @@ def _load_clickup(
             overall, 1.0, f"ClickUp collection complete: {len(tasks)} assigned tasks",
             progress_start, progress_end,
         )
-        return {"source": "ClickUp", "workspace_id": workspace_id, "tasks": tasks, "spaces": space_names}
+        return {
+            "source": "ClickUp",
+            "workspace_id": workspace_id,
+            "tasks": tasks,
+            "spaces": space_names,
+            "counts": {"fetched": fetched_count, "matched": len(tasks)},
+        }
     finally:
         gateway.close()
 
@@ -346,14 +385,22 @@ def _load_employee_sources(
         raise CollectionError(f"Could not collect {record.name}'s tasks. {detail}")
 
     spaces: dict[str, str] = {}
+    source_counts: dict[str, dict[str, int]] = {}
     for source, snapshot in snapshots.items():
         for key, label in snapshot.get("spaces", {}).items():
             spaces[_source_space_key(source, key)] = f"{source} · {label}"
-    overall.progress(1.0, text=f"Employee collection complete: {sum(len(item.get('issues', item.get('tasks', []))) for item in snapshots.values())} tasks")
+        counts = snapshot.get("counts") or {}
+        source_counts[source] = {
+            "fetched": int(counts.get("fetched", len(snapshot.get("issues", snapshot.get("tasks", []))))),
+            "matched": int(counts.get("matched", len(snapshot.get("issues", snapshot.get("tasks", []))))),
+        }
+    matched_total = sum(item["matched"] for item in source_counts.values())
+    overall.progress(1.0, text=f"Employee collection complete: {matched_total} assigned tasks")
     return {
         "source": "Combined" if len(snapshots) > 1 else next(iter(snapshots)),
         "sources": snapshots,
         "spaces": spaces,
+        "source_counts": source_counts,
         "warnings": warnings,
         "employee_record": record,
     }
@@ -637,10 +684,17 @@ def render_employee_collection(settings):
     )
     visible, rows = _snapshot_visible(snapshot, selected_spaces)
     st.subheader("Assigned tasks")
+    source_counts = snapshot.get("source_counts") or {}
+    count_details = " · ".join(
+        f"{source}: {counts.get('matched', 0)} matched / {counts.get('fetched', 0)} fetched"
+        for source, counts in source_counts.items()
+    )
     st.caption(
-        f"{len(visible)} task(s) found across {len(spaces)} source Space(s). "
+        f"{len(visible)} assigned task(s) shown across {len(spaces)} source Space(s). "
         "Leave the filter empty to include all."
     )
+    if count_details:
+        st.caption(f"Collection audit: {count_details}")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
     fingerprint = hashlib.sha256(
