@@ -188,6 +188,17 @@ def _filename_component(value) -> str:
     return text or "Unavailable"
 
 
+def _employee_period_cutoff_text(period_end) -> str | None:
+    """Represent the selected local To date as an inclusive analysis cutoff."""
+    if period_end is None:
+        return None
+    if isinstance(period_end, datetime):
+        return period_end.isoformat()
+    if isinstance(period_end, date):
+        return datetime.combine(period_end, datetime.max.time()).isoformat()
+    return str(period_end)
+
+
 def calculate_dashboard_values(task_metrics):
     row = aggregate(task_metrics, []).iloc[0]
     return {"total": row["total_tasks"], "completed": row["completed_tasks"],
@@ -1340,6 +1351,7 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "jira_department_preview_cache",
         "employee_snapshot", "employee_snapshot_key", "employee_selected_spaces",
         "employee_prepared", "employee_fingerprint", "employee_clickup_checkpoints",
+        "employee_period_start", "employee_period_end",
         "employee_company_analysis",
         "company_prepared_items", "company_collection_attempted",
         "company_collection_error", "company_collection_errors",
@@ -1421,6 +1433,9 @@ prepared_data, run_button = render_collection(
     company_selection=selected_company if analysis_mode == "company" else None,
 )
 cutoff_text = prepared_data.cutoff if prepared_data else ""
+employee_period_start = st.session_state.get("employee_period_start")
+employee_period_end = st.session_state.get("employee_period_end")
+employee_period_cutoff_text = _employee_period_cutoff_text(employee_period_end)
 
 if analysis_mode == "project":
     if st.session_state.get("project_analysis") is not None:
@@ -1442,12 +1457,14 @@ if analysis_mode == "company":
 # domain combines them without changing the existing single-source analyses.
 if analysis_mode == "employee" and run_button and isinstance(prepared_data, EmployeePreparedBundle):
     try:
-        cutoff_value = str(prepared_data.cutoff or date.today().isoformat())[:10]
-        period_end = date.fromisoformat(cutoff_value)
+        if employee_period_start is None or employee_period_end is None:
+            raise ValueError("Choose both From date and To date before running the analysis.")
+        if employee_period_start > employee_period_end:
+            raise ValueError("From date must be on or before To date.")
         with st.spinner("Calculating the combined employee analysis..."):
             st.session_state["employee_company_analysis"] = build_company_analysis(
-                period_start=date(2000, 1, 1),
-                period_end=period_end,
+                period_start=employee_period_start,
+                period_end=employee_period_end,
                 jira_prepared=prepared_data.jira,
                 clickup_prepared=prepared_data.clickup,
                 unified_project=f"Employee: {prepared_data.employee_name}",
@@ -1455,7 +1472,7 @@ if analysis_mode == "employee" and run_button and isinstance(prepared_data, Empl
         st.success("Combined Jira + ClickUp employee analysis completed successfully.")
     except (ValueError, TypeError) as exc:
         st.session_state.pop("employee_company_analysis", None)
-        st.error(f"Combined employee analysis could not be completed: {exc}")
+        st.error(f"Combined Jira + ClickUp employee analysis could not be completed: {exc}")
 
 if analysis_mode == "employee" and st.session_state.get("employee_company_analysis") is not None:
     render_company_result(
@@ -1473,7 +1490,11 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
     if st.session_state.get("data_source") == "ClickUp":
         try:
             with st.spinner("Calculating ClickUp performance analysis..."):
-                clickup_result = analyze_clickup(prepared_data)
+                clickup_result = analyze_clickup(
+                    prepared_data,
+                    period_start=employee_period_start if analysis_mode == "employee" else None,
+                    period_end=employee_period_end if analysis_mode == "employee" else None,
+                )
                 if analysis_mode == "department":
                     st.session_state["department_analysis"] = build_department_result(clickup_result, prepared_data)
                     st.session_state.pop("clickup_analysis", None)
@@ -1491,7 +1512,11 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                     BytesIO(prepared_data.xlsx),
                     BytesIO(prepared_data.history_json),
                     "", "", "",
-                    prepared_data.cutoff,
+                    (
+                        employee_period_cutoff_text
+                        if analysis_mode == "employee" and employee_period_cutoff_text
+                        else prepared_data.cutoff
+                    ),
                     prepared_data.source_timezone,
                     history_source="History JSON",
                     context_overrides={
@@ -1500,8 +1525,12 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                         "Dataset Type": "Jira API collection",
                     },
                     period_start=(
-                        getattr(prepared_data, "period_start", None)
-                        if analysis_mode == "department" else None
+                        employee_period_start
+                        if analysis_mode == "employee"
+                        else (
+                            getattr(prepared_data, "period_start", None)
+                            if analysis_mode == "department" else None
+                        )
                     ),
                 )
             if task_metrics.empty:
@@ -1523,7 +1552,11 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                     st.session_state["process_data"] = process_data
                     st.session_state["task_metrics"] = task_metrics
                     st.session_state["validation_log"] = validation_log
-                    st.session_state["cutoff_text"] = prepared_data.cutoff
+                    st.session_state["cutoff_text"] = (
+                        employee_period_cutoff_text
+                        if analysis_mode == "employee" and employee_period_cutoff_text
+                        else prepared_data.cutoff
+                    )
                     st.session_state.pop("department_analysis", None)
                 st.success("Analysis completed successfully.")
         except Exception:

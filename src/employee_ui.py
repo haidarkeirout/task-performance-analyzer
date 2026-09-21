@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -72,6 +72,43 @@ def _clear_employee_state() -> None:
         st.session_state.pop(key, None)
 
 
+def _employee_period_defaults() -> tuple[date, date]:
+    """Return the default employee analysis window without recollecting data."""
+    collected_at = st.session_state.get("employee_collection_collected_at")
+    end = date.today()
+    if collected_at:
+        try:
+            end = datetime.fromisoformat(str(collected_at)).date()
+        except (TypeError, ValueError):
+            pass
+    return end.replace(day=1), end
+
+
+def _clear_employee_analysis_state() -> None:
+    """Clear only analysis outputs; keep the collected employee snapshot."""
+    for key in (
+        "employee_company_analysis",
+        "clickup_analysis",
+        "task_metrics",
+        "process_data",
+        "validation_log",
+        "department_analysis",
+        "employee_run_requested",
+        "employee_output_cache",
+        "employee_output_cache_key",
+        "clickup_excel_report",
+        "clickup_excel_report_key",
+        "clickup_word_report",
+        "clickup_word_report_key",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _on_employee_period_changed() -> None:
+    """Make a changed period require an explicit analysis rerun."""
+    _clear_employee_analysis_state()
+
+
 def _on_employee_changed() -> None:
     """Clear the previous employee result and rerun the full app immediately.
 
@@ -85,6 +122,8 @@ def _on_employee_changed() -> None:
         "employee_collection_fresh",
         "employee_collection_in_progress",
         "employee_run_requested",
+        "employee_period_start",
+        "employee_period_end",
     ):
         st.session_state.pop(key, None)
     st.rerun()
@@ -529,6 +568,28 @@ def render_employee_collection(settings):
     )
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
+    default_start, default_end = _employee_period_defaults()
+    period_columns = st.columns(2)
+    period_start = period_columns[0].date_input(
+        "From date",
+        value=default_start,
+        key="employee_period_start",
+        on_change=_on_employee_period_changed,
+    )
+    period_end = period_columns[1].date_input(
+        "To date",
+        value=default_end,
+        key="employee_period_end",
+        on_change=_on_employee_period_changed,
+    )
+    periods_ready = (
+        period_start is not None
+        and period_end is not None
+        and period_start <= period_end
+    )
+    if period_start is not None and period_end is not None and period_start > period_end:
+        st.error("From date must be on or before To date.")
+
     fingerprint = hashlib.sha256(
         json.dumps({"snapshot": snapshot_key, "spaces": selected_spaces}, sort_keys=True).encode()
     ).hexdigest()
@@ -539,7 +600,12 @@ def render_employee_collection(settings):
         st.session_state.pop("employee_prepared", None)
         prepared = None
 
-    if st.button("Done", type="primary", disabled=not visible, key="employee_done"):
+    if st.button(
+        "Done",
+        type="primary",
+        disabled=not visible or not periods_ready,
+        key="employee_done",
+    ):
         try:
             with st.spinner("Preparing the employee analysis source..."):
                 source_snapshots = snapshot.get("sources") or {snapshot["source"]: snapshot}
@@ -574,7 +640,12 @@ def render_employee_collection(settings):
             st.error(str(exc))
             return None, False
     prepared = st.session_state.get("employee_prepared")
-    run_clicked = st.button("Run Analysis", type="primary", disabled=prepared is None, key="employee_run")
+    run_clicked = st.button(
+        "Run Analysis",
+        type="primary",
+        disabled=prepared is None or not periods_ready,
+        key="employee_run",
+    )
     if prepared:
         if isinstance(prepared, EmployeePreparedBundle):
             downloads = st.columns(2)

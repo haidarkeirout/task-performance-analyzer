@@ -7,6 +7,7 @@ metrics unavailable instead of inventing them.
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, time
 from io import BytesIO
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -247,15 +248,52 @@ def _status_summary(status_frame: pd.DataFrame) -> pd.DataFrame:
             .reset_index(drop=True))
 
 
-def analyze_clickup(prepared_data):
-    """Return a ClickUp-native analysis payload for the Streamlit dashboard."""
+def _period_boundary(value: Any, source_zone: ZoneInfo, *, end_of_day: bool = False):
+    """Convert a selected local date into an inclusive UTC analysis boundary."""
+    if value in (None, ""):
+        return pd.NaT
+    try:
+        parsed = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(parsed):
+        return pd.NaT
+    if parsed.tzinfo is None:
+        if end_of_day and parsed.time() == time.min:
+            parsed = parsed.normalize() + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        parsed = parsed.tz_localize(source_zone)
+    else:
+        parsed = parsed.tz_convert("UTC")
+    return parsed.tz_convert("UTC")
+
+
+def _period_label(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (date, datetime)):
+        return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
+    return str(value)[:10]
+
+
+def analyze_clickup(prepared_data, *, period_start=None, period_end=None):
+    """Return a ClickUp-native analysis payload for the selected employee period."""
     payload = json.loads(prepared_data.history_json.decode("utf-8"))
     raw_tasks = payload.get("tasks") if isinstance(payload, dict) else []
     time_payloads = payload.get("time_in_status", {}) if isinstance(payload, dict) else {}
-    cutoff = pd.to_datetime(timestamp(prepared_data.cutoff), utc=True, errors="coerce")
     source_timezone = getattr(prepared_data, "source_timezone", "Asia/Damascus")
     source_zone = ZoneInfo(source_timezone)
     collected_at = timestamp(getattr(prepared_data, "collected_at", None))
+    collection_cutoff = pd.to_datetime(timestamp(prepared_data.cutoff), utc=True, errors="coerce")
+    cutoff = (
+        _period_boundary(period_end, source_zone, end_of_day=True)
+        if period_end is not None
+        else collection_cutoff
+    )
+    selected_start = (
+        _period_boundary(period_start, source_zone)
+        if period_start is not None
+        else pd.NaT
+    )
     historical_snapshot = (
         pd.notna(cutoff)
         and pd.notna(collected_at)
@@ -274,6 +312,15 @@ def analyze_clickup(prepared_data):
         start = timestamp(task.get("start_date"))
         due = timestamp(task.get("due_date"))
         completed = timestamp(task.get("date_closed") or task.get("date_done"))
+        if pd.notna(cutoff) and pd.notna(created) and created > cutoff:
+            continue
+        if pd.notna(selected_start):
+            open_at_end = pd.isna(completed) or completed > cutoff
+            created_in_period = pd.notna(created) and selected_start <= created <= cutoff
+            updated_in_period = pd.notna(updated) and selected_start <= updated <= cutoff
+            completed_in_period = pd.notna(completed) and selected_start <= completed <= cutoff
+            if not (created_in_period or updated_in_period or completed_in_period or open_at_end):
+                continue
         source_cancelled = status_key in CANCELLED_STATUSES
         source_completed = (
             status_key in TERMINAL_STATUSES or is_closed(task) or pd.notna(completed)
@@ -459,9 +506,9 @@ def analyze_clickup(prepared_data):
         ("Source Spaces", ", ".join(map(str, source_spaces))),
         ("Evaluation Scope", getattr(prepared_data, "filter_summary", "All tasks in the selected ClickUp Space")),
         ("Dataset Type", "ClickUp API collection"),
-        ("Evaluation Period Start", getattr(prepared_data, "period_start", "")),
-        ("Evaluation Period End", getattr(prepared_data, "period_end", "")),
-        ("Evaluation Cutoff", prepared_data.cutoff),
+        ("Evaluation Period Start", _period_label(period_start)),
+        ("Evaluation Period End", _period_label(period_end)),
+        ("Evaluation Cutoff", cutoff.isoformat() if pd.notna(cutoff) else prepared_data.cutoff),
         ("Source Timezone", prepared_data.source_timezone),
         ("Task Count", total),
         ("Duplicate task records removed", getattr(prepared_data, "duplicate_count", 0)),
@@ -520,7 +567,9 @@ def analyze_clickup(prepared_data):
         "quality": quality,
         "metric_definitions": metric_definitions,
         "findings": findings,
-        "cutoff": prepared_data.cutoff,
+        "cutoff": cutoff.isoformat() if pd.notna(cutoff) else prepared_data.cutoff,
+        "period_start": _period_label(period_start),
+        "period_end": _period_label(period_end),
         "source_timezone": prepared_data.source_timezone,
         "space_name": prepared_data.space_name,
         "space_names": source_spaces,
