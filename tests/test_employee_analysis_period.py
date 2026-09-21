@@ -1,6 +1,7 @@
 """Regression tests for Employee analysis date ranges."""
 
 from datetime import date
+import inspect
 import json
 from types import SimpleNamespace
 from unittest import TestCase
@@ -42,6 +43,11 @@ class EmployeeAnalysisPeriodTests(TestCase):
             "clickup_excel_report",
         ):
             self.assertNotIn(key, fake_streamlit.session_state)
+
+    def test_employee_collection_runs_in_main_app_flow(self):
+        source = inspect.getsource(employee_ui.render_employee_collection)
+
+        self.assertNotIn("@st.fragment", source)
 
     def test_prepared_snapshot_is_kept_when_scope_marker_matches(self):
         fake_streamlit = SimpleNamespace(
