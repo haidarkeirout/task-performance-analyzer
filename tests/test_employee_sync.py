@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from employee_sync import sync_employees
+from jira_gateway import CollectionError
 
 
 def _settings(*, jira=True, clickup=True):
@@ -45,6 +46,20 @@ class EmployeeSyncTests(unittest.TestCase):
         self.assertEqual(result.records[1].jira_account_id, "jira-1")
         self.assertEqual(result.warnings, ())
 
+    def test_jira_app_accounts_are_not_employee_records(self):
+        jira_gateway = SimpleNamespace(
+            users=lambda: [
+                {"accountId": "app-1", "displayName": "Atlas for Jira Cloud", "accountType": "app"},
+                {"accountId": "human-1", "displayName": "Ada", "accountType": "atlassian"},
+            ],
+            close=lambda: None,
+        )
+
+        with patch("employee_sync.JiraGateway", return_value=jira_gateway):
+            result = sync_employees(_settings(jira=True, clickup=False))
+
+        self.assertEqual([record.name for record in result.records], ["Ada"])
+
     def test_clickup_member_payload_can_be_flat(self):
         clickup_gateway = SimpleNamespace(
             workspace_members=lambda workspace_id: [
@@ -62,7 +77,7 @@ class EmployeeSyncTests(unittest.TestCase):
 
     def test_source_failure_is_warning_when_other_source_succeeds(self):
         jira_gateway = SimpleNamespace(
-            users=lambda: (_ for _ in ()).throw(RuntimeError("jira unavailable")),
+            users=lambda: (_ for _ in ()).throw(CollectionError("jira unavailable")),
             close=lambda: None,
         )
         clickup_gateway = SimpleNamespace(
