@@ -180,10 +180,21 @@ def _on_employee_changed() -> None:
     st.rerun()
 
 
+def _employee_identity_hint(record: EmployeeRecord) -> str:
+    """Return a compact identifier so duplicate source names are distinguishable."""
+    if record.jira_account_id:
+        account_id = str(record.jira_account_id)
+        return f"Jira ID: …{account_id[-8:]}"
+    if record.clickup_user_id:
+        return f"ClickUp ID: {record.clickup_user_id}"
+    return "No source ID"
+
+
 def _employee_label(record: EmployeeRecord) -> str:
     source = _employee_source_label(record)
+    identity = _employee_identity_hint(record)
     suffix = f" · {record.department}" if record.department else ""
-    return f"{record.name} — {source}{suffix}"
+    return f"{record.name} — {source}{suffix} · {identity}"
 
 
 def _jira_space_name(issue: dict) -> str:
@@ -561,6 +572,8 @@ def render_employee_collection(settings):
                     {
                         "Name": record.name,
                         "Source": _employee_source_label(record),
+                        "Jira Account ID": record.jira_account_id or "",
+                        "ClickUp Member ID": record.clickup_user_id or "",
                         "Status": "Active" if record.active else "Inactive",
                     }
                     for record in records
