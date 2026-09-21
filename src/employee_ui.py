@@ -13,7 +13,8 @@ import streamlit as st
 
 from clickup_export import collect_data as collect_clickup_data
 from clickup_gateway import ClickUpCollectionError, ClickUpGateway
-from employee_directory import EmployeeRecord, load_employee_directory_with_status
+from employee_directory import EmployeeRecord
+from employee_sync import sync_employees
 from jira_gateway import CollectionError, JiraGateway
 from resumable_jira import collect_jira_query
 
@@ -49,6 +50,52 @@ class EmployeePreparedBundle:
     @property
     def filename(self) -> str:
         return f"Employee_{self.employee_name.replace(' ', '_')}_sources.xlsx"
+
+
+EMPLOYEE_DIRECTORY_CACHE_TTL_SECONDS = 300
+
+
+def _employee_record_key(record: EmployeeRecord) -> str:
+    source = str(record.primary_source or "").casefold()
+    external_id = record.jira_account_id or record.clickup_user_id
+    return f"{source}:{external_id or record.name}"
+
+
+def _employee_source_label(record: EmployeeRecord) -> str:
+    sources = record.sources
+    if sources:
+        return " + ".join(source.title() for source in sources)
+    return str(record.primary_source or "Unknown").title()
+
+
+def _sync_employee_directory(settings, *, force: bool = False):
+    """Synchronize the directory once per short TTL and retain it in session state."""
+    state = st.session_state
+    revision = str(getattr(settings, "revision", ""))
+    synced_at = state.get("employee_directory_synced_at")
+    cached_revision = str(state.get("employee_directory_sync_revision", ""))
+    cached_records = state.get("employee_directory_records")
+
+    if not force and synced_at and cached_revision == revision and cached_records is not None:
+        try:
+            age = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(str(synced_at))
+            ).total_seconds()
+        except (TypeError, ValueError):
+            age = EMPLOYEE_DIRECTORY_CACHE_TTL_SECONDS
+        if age < EMPLOYEE_DIRECTORY_CACHE_TTL_SECONDS:
+            return list(cached_records), list(
+                state.get("employee_directory_sync_warnings") or []
+            )
+
+    with st.spinner("Synchronizing employees from Jira and ClickUp..."):
+        result = sync_employees(settings)
+    state["employee_directory_records"] = list(result.records)
+    state["employee_directory_synced_at"] = result.synced_at
+    state["employee_directory_sync_revision"] = revision
+    state["employee_directory_sync_warnings"] = list(result.warnings)
+    return list(result.records), list(result.warnings)
 
 
 def _source_space_key(source: str, value: object) -> str:
@@ -134,11 +181,9 @@ def _on_employee_changed() -> None:
 
 
 def _employee_label(record: EmployeeRecord) -> str:
-    departments = [value for value in (record.jira_department, record.clickup_department) if value]
+    source = _employee_source_label(record)
     suffix = f" · {record.department}" if record.department else ""
-    if len(set(departments)) > 1:
-        suffix = f" · Jira: {record.jira_department or 'N/A'} · ClickUp: {record.clickup_department or 'N/A'}"
-    return f"{record.name}{suffix}"
+    return f"{record.name} — {source}{suffix}"
 
 
 def _jira_space_name(issue: dict) -> str:
@@ -483,22 +528,65 @@ def _prepare_clickup(
 
 def render_employee_collection(settings):
     try:
-        records, directory_warning = load_employee_directory_with_status()
-    except ValueError as exc:
+        records, directory_warnings = _sync_employee_directory(settings)
+    except (CollectionError, ClickUpCollectionError, ValueError) as exc:
         st.error(str(exc))
         return None, False
-    if directory_warning:
-        st.warning(directory_warning)
-    if not records:
-        st.info("No active employees are configured yet.")
+
+    sync_columns = st.columns([3, 1])
+    synced_at = st.session_state.get("employee_directory_synced_at")
+    with sync_columns[0]:
+        if synced_at:
+            st.caption(f"Employee directory synchronized at: {synced_at}")
+        else:
+            st.caption("Employee directory has not been synchronized yet.")
+    with sync_columns[1]:
+        if st.button("Sync Employees", key="employee_sync", use_container_width=True):
+            _clear_employee_state()
+            try:
+                _sync_employee_directory(settings, force=True)
+                st.rerun()
+            except (CollectionError, ClickUpCollectionError, ValueError) as exc:
+                st.error(str(exc))
+                return None, False
+
+    if directory_warnings:
+        st.warning("Some source employees could not be synchronized: " + " | ".join(directory_warnings))
+
+    active_records = [record for record in records if record.active]
+    if records:
+        with st.expander("View synchronized employee directory"):
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Name": record.name,
+                        "Source": _employee_source_label(record),
+                        "Status": "Active" if record.active else "Inactive",
+                    }
+                    for record in records
+                ]),
+                hide_index=True,
+                use_container_width=True,
+            )
+    if not active_records:
+        st.info("No active employees were found in the connected Jira or ClickUp accounts.")
         return None, False
 
-    names = [record.name for record in records]
+    records_by_key = {
+        _employee_record_key(record): record for record in active_records
+    }
     selected_name = st.selectbox(
-        "Employee", [None, *names],
-        format_func=lambda value: "Choose an employee" if value is None else value,
-                key="employee_selected_name", on_change=_on_employee_changed,
+        "Employee",
+        [None, *records_by_key],
+        format_func=lambda value: (
+            "Choose an employee"
+            if value is None
+            else _employee_label(records_by_key[value])
+        ),
+        key="employee_selected_name",
+        on_change=_on_employee_changed,
     )
+
     if selected_name is None:
         st.caption("Choose an employee to search Jira and ClickUp automatically.")
         return None, False
