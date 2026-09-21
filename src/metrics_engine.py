@@ -457,6 +457,7 @@ def calculate_task(
             current_status
         ).strip()
 
+    history = history or {}
     snapshot = history.get("snapshot") if isinstance(history.get("snapshot"), dict) else {}
     snapshot_status = snapshot.get("current_status") or current_status
     if snapshot_status is not None:
@@ -472,7 +473,6 @@ def calculate_task(
     # that case the history is valid for the selected date; use its actual
     # coverage instant for elapsed-time calculations so we never count future
     # hours.
-    history = history or {}
     through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
     cutoff_local_date = cutoff.tz_convert(calendar.timezone).date()
     through_local_date = (
