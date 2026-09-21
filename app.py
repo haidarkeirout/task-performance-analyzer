@@ -1437,6 +1437,19 @@ employee_period_start = st.session_state.get("employee_period_start")
 employee_period_end = st.session_state.get("employee_period_end")
 employee_period_cutoff_text = _employee_period_cutoff_text(employee_period_end)
 
+if analysis_mode == "employee":
+    employee_periods_ready = (
+        employee_period_start is not None
+        and employee_period_end is not None
+        and employee_period_start <= employee_period_end
+    )
+    run_button = st.button(
+        "Run Analysis",
+        type="primary",
+        disabled=prepared_data is None or not employee_periods_ready,
+        key="employee_run",
+    )
+
 if analysis_mode == "project":
     if st.session_state.get("project_analysis") is not None:
         render_project_result(st, st.session_state["project_analysis"])
