@@ -457,6 +457,12 @@ def calculate_task(
             current_status
         ).strip()
 
+    history = history or {}
+    snapshot = history.get("snapshot") if isinstance(history.get("snapshot"), dict) else {}
+    snapshot_status = snapshot.get("current_status") or current_status
+    if snapshot_status is not None:
+        snapshot_status = str(snapshot_status).strip() or None
+
     labels = normalize_labels(
         task.get("labels")
     )
@@ -467,7 +473,6 @@ def calculate_task(
     # that case the history is valid for the selected date; use its actual
     # coverage instant for elapsed-time calculations so we never count future
     # hours.
-    history = history or {}
     through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
     cutoff_local_date = cutoff.tz_convert(calendar.timezone).date()
     through_local_date = (
@@ -512,6 +517,14 @@ def calculate_task(
             else:
                 intervals = [{"status": initial, "start": created_at, "end": effective_cutoff}]
     history_complete = bool(verified and chain_valid)
+    current_snapshot_usable = bool(
+        snapshot_status
+        and through is not None
+        and same_calendar_date
+        and created_at is not None
+        and created_at <= cutoff
+    )
+    status_known = bool(history_complete or current_snapshot_usable)
     if not history_complete:
         intervals = []
         events = []  # Partial histories cannot supply verified starts/completions/counts.
@@ -537,16 +550,16 @@ def calculate_task(
     final_status = (
         intervals[-1]["status"]
         if intervals
-        else "Unavailable"
+        else (snapshot_status if current_snapshot_usable else "Unavailable")
     )
 
-    completed = final_status == "Done"
-    rejected = final_status == "Rejected"
-    open_task = history_complete and not completed and not rejected
-    wip = final_status in {
+    completed = bool(status_known and final_status == "Done")
+    rejected = bool(status_known and final_status == "Rejected")
+    open_task = bool(status_known and not completed and not rejected)
+    wip = bool(status_known and final_status in {
         "In Progress",
         "In Review",
-    }
+    })
 
     if history_complete and initial == "Done" and latest_done is None:
         latest_done = created_at
@@ -656,7 +669,10 @@ def calculate_task(
 
     if not history_complete:
         history_note = (
-            "History coverage, timestamps, or status continuity could not be verified through cutoff."
+            "Current Jira status is usable for this cutoff, but historical coverage, "
+            "timestamps, or status continuity could not be verified."
+            if current_snapshot_usable
+            else "History coverage, timestamps, or status continuity could not be verified through cutoff."
         )
     else:
         history_note = None
@@ -673,7 +689,7 @@ def calculate_task(
         "priority": task.get("priority"),
         "status_at_cutoff": final_status,
         "source_snapshot_status": current_status,
-        "status_known": history_complete,
+        "status_known": status_known,
         "reached_review": (any(i["status"] == "In Review" for i in intervals) if history_complete else None),
         "created_at": (
             created_at.isoformat()
