@@ -90,8 +90,11 @@ class EmployeeSyncTests(unittest.TestCase):
         with patch("employee_sync.JiraGateway", return_value=jira_gateway), patch(
             "employee_sync.ClickUpGateway", return_value=clickup_gateway
         ):
-            with self.assertRaises(RuntimeError):
-                sync_employees(_settings())
+            result = sync_employees(_settings())
+
+        self.assertEqual([record.name for record in result.records], ["Bea"])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("Jira employee sync", result.warnings[0])
 
     def test_inactive_members_are_retained_but_not_active(self):
         clickup_gateway = SimpleNamespace(
