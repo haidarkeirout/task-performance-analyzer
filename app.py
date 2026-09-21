@@ -169,6 +169,27 @@ def format_number(value) -> str:
     return str(value)
 
 
+def _streamlit_safe_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Make mixed object columns safe for Streamlit/Arrow display only."""
+    if not isinstance(frame, pd.DataFrame):
+        return frame
+    safe = frame.copy()
+    for column in safe.columns:
+        if safe[column].dtype == "object":
+            def display_value(value):
+                if value is None:
+                    return ""
+                try:
+                    if pd.isna(value):
+                        return ""
+                except (TypeError, ValueError):
+                    pass
+                return str(value)
+
+            safe[column] = safe[column].map(display_value)
+    return safe
+
+
 def format_percentage(
     numerator: int,
     denominator: int,
@@ -652,7 +673,7 @@ def show_executive_dashboard(
 
 def show_process_analysis(frame, tables):
     st.subheader("Process scope and definitions")
-    st.dataframe(tables["process_context"], hide_index=True, use_container_width=True)
+    st.dataframe(_streamlit_safe_frame(tables["process_context"]), hide_index=True, use_container_width=True)
     row = tables["overall_summary"].iloc[0]
     st.caption(f"Complete histories: {int(row['history_complete_tasks'])}/{int(row['total_tasks'])}; "
                f"excluded from history-dependent metrics: {int(row['history_excluded_tasks'])}; "
@@ -1106,7 +1127,7 @@ def show_clickup_analysis(result) -> None:
 
     with tab_process:
         st.subheader("Process Scope and Definitions")
-        st.dataframe(result["analysis_context"], hide_index=True, use_container_width=True)
+        st.dataframe(_streamlit_safe_frame(result["analysis_context"]), hide_index=True, use_container_width=True)
         st.subheader("Workflow and Status Analysis")
         if result["status_summary"].empty:
             st.info("No status-duration values were returned by ClickUp for this selected scope.")
@@ -1175,7 +1196,7 @@ def show_clickup_analysis(result) -> None:
 
     with tab_quality:
         st.subheader("Data Quality and Coverage")
-        st.dataframe(result["quality"], hide_index=True, use_container_width=True)
+        st.dataframe(_streamlit_safe_frame(result["quality"]), hide_index=True, use_container_width=True)
         st.info("Unavailable ClickUp fields remain unavailable; they are not replaced with zero. Jira was not used or changed by this analysis.")
         with st.expander("Metric definitions"):
             st.dataframe(result["metric_definitions"], hide_index=True, use_container_width=True)
