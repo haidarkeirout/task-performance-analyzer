@@ -308,8 +308,8 @@ def filter_company_preview(
 
 def build_company_analysis(
     *,
-    period_start: date,
-    period_end: date,
+    period_start: date | None,
+    period_end: date | None,
     jira_prepared: Any | None = None,
     jira_project: str | None = None,
     clickup_prepared: Any | None = None,
@@ -323,9 +323,6 @@ def build_company_analysis(
     single-source callers.  Company multi-space selection can instead provide
     one explicit ``unified_project`` for the selected Jira and ClickUp spaces.
     """
-    if period_end < period_start:
-        raise ValueError("Analysis period end must not be before its start.")
-
     jira_items = _prepared_items(jira_prepared)
     clickup_items = _prepared_items(clickup_prepared)
     shared_project = (unified_project or "").strip()
@@ -367,6 +364,18 @@ def build_company_analysis(
         for record in records
     ]
     usable_coverage = [value for value in coverage_dates if value is not None]
+    if period_start is None or period_end is None:
+        automatic_end = min(usable_coverage) if usable_coverage else None
+        if automatic_end is None:
+            raise ValueError("The selected sources do not contain a usable collection cutoff.")
+        created_dates = [record.created_date for record in records if record.created_date is not None]
+        automatic_start = min(created_dates) if created_dates else automatic_end
+        if automatic_start > automatic_end:
+            automatic_start = automatic_end
+        period_start = period_start or automatic_start
+        period_end = period_end or automatic_end
+    if period_end < period_start:
+        raise ValueError("Analysis period end must not be before its start.")
     if usable_coverage and period_end > min(usable_coverage):
         raise ValueError(
             "Analysis Period To cannot be later than the collected source coverage. "
