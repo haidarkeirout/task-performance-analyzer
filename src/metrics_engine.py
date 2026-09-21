@@ -473,7 +473,7 @@ def calculate_task(
     # coverage instant for elapsed-time calculations so we never count future
     # hours.
     history = history or {}
-    through = parse_timestamp(history.get("history_through"), calendar.timezone)
+    through = parse_timestamp(history.get("history_through"), calendar.timezone_name)
     cutoff_local_date = cutoff.tz_convert(calendar.timezone).date()
     through_local_date = (
         through.tz_convert(calendar.timezone).date()
