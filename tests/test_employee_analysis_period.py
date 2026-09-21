@@ -4,7 +4,7 @@ from datetime import date
 import json
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import employee_ui
 from clickup_analysis import analyze_clickup
@@ -42,6 +42,14 @@ class EmployeeAnalysisPeriodTests(TestCase):
             "clickup_excel_report",
         ):
             self.assertNotIn(key, fake_streamlit.session_state)
+
+    def test_run_analysis_requests_full_app_rerun(self):
+        fake_streamlit = SimpleNamespace(rerun=Mock())
+
+        with patch.object(employee_ui, "st", fake_streamlit):
+            employee_ui._request_employee_analysis_rerun()
+
+        fake_streamlit.rerun.assert_called_once_with(scope="app")
 
     def test_clickup_analysis_uses_selected_period_without_recollection(self):
         tasks = [
