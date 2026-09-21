@@ -53,6 +53,18 @@ def _period_query(project_key: str, start_date, end_date) -> str:
     )
 
 
+def _overall_progress_fraction(
+    space_index: int, space_count: int, source_fraction: float,
+) -> float:
+    """Map one Jira Space's progress into the full Department collection."""
+    try:
+        normalized = float(source_fraction)
+    except (TypeError, ValueError):
+        normalized = 0.0
+    normalized = max(0.0, min(1.0, normalized))
+    return (max(0, space_index) + normalized) / max(1, space_count)
+
+
 def _preview(items: list[dict], jira_url: str) -> pd.DataFrame:
     rows = []
     for item in items:
@@ -96,6 +108,7 @@ def _collect(
     queries = []
     collected_spaces = []
 
+    collectable_spaces = []
     for space in spaces:
         project_key = str(space.get("key") or "").strip()
         project_id = str(space.get("id") or "").strip()
@@ -105,8 +118,10 @@ def _collect(
             (seed_items_by_project or {}).get(project_key)
             if seed_items_by_project is not None else None
         )
-        if seeds == []:
-            continue
+        if seeds != []:
+            collectable_spaces.append((space, project_key, seeds))
+
+    for space_index, (space, project_key, seeds) in enumerate(collectable_spaces):
         query = _period_query(project_key, start_date, end_date)
         queries.append(query)
         name = str(space.get("name") or project_key)
@@ -119,8 +134,9 @@ def _collect(
             fresh=fresh,
             cutoff=cutoff,
             seed_issues=seeds,
-            progress=lambda fraction, message, label=name: progress(
-                f"{label}: {message}"
+            progress=lambda fraction, message, label=name, index=space_index: progress(
+                _overall_progress_fraction(index, len(collectable_spaces), fraction),
+                f"{label}: {message}",
             ),
         )
         collected_spaces.append(name)
@@ -321,7 +337,7 @@ def render_jira_department_collection(settings):
                 spaces,
                 start_date,
                 end_date,
-                lambda message: progress.progress(0.0, text=str(message)),
+                lambda fraction, message: progress.progress(fraction, text=str(message)),
                 fingerprint=fingerprint,
                 collection_id=st.session_state.get("jira_department_collection_id"),
                 fresh=st.session_state.get("jira_department_collection_fresh", False),
@@ -368,7 +384,7 @@ def render_jira_department_collection(settings):
                     spaces,
                     start_date,
                     end_date,
-                    lambda message: progress.progress(0.0, text=str(message)),
+                    lambda fraction, message: progress.progress(fraction, text=str(message)),
                     fingerprint=fingerprint,
                     seed_items_by_project=preview_items_by_project,
                 )
