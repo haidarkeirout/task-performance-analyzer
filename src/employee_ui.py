@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -112,24 +112,13 @@ def _clear_employee_state() -> None:
         "clickup_run_analysis", "cutoff_text", "prepared_data",
         "employee_company_analysis",
         "employee_collection_collected_at",
+        "employee_period_start", "employee_period_end",
         "company_output_cache",
         "company_output_cache_key",
         "employee_output_cache",
         "employee_output_cache_key",
     ):
         st.session_state.pop(key, None)
-
-
-def _employee_period_defaults() -> tuple[date, date]:
-    """Return the default employee analysis window without recollecting data."""
-    collected_at = st.session_state.get("employee_collection_collected_at")
-    end = date.today()
-    if collected_at:
-        try:
-            end = datetime.fromisoformat(str(collected_at)).date()
-        except (TypeError, ValueError):
-            pass
-    return end.replace(day=1), end
 
 
 def _clear_employee_analysis_state() -> None:
@@ -152,11 +141,6 @@ def _clear_employee_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
-def _on_employee_period_changed() -> None:
-    """Make a changed period require an explicit analysis rerun."""
-    _clear_employee_analysis_state()
-
-
 def _employee_prepared_matches_scope(prepared, fingerprint: str) -> bool:
     """Keep a prepared Employee snapshot when its selected scope is unchanged."""
     return (
@@ -173,8 +157,6 @@ def _on_employee_changed() -> None:
         "employee_collection_fresh",
         "employee_collection_in_progress",
         "employee_run_requested",
-        "employee_period_start",
-        "employee_period_end",
     ):
         st.session_state.pop(key, None)
     st.rerun()
@@ -661,28 +643,6 @@ def render_employee_collection(settings):
     )
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    default_start, default_end = _employee_period_defaults()
-    period_columns = st.columns(2)
-    period_start = period_columns[0].date_input(
-        "From date",
-        value=default_start,
-        key="employee_period_start",
-        on_change=_on_employee_period_changed,
-    )
-    period_end = period_columns[1].date_input(
-        "To date",
-        value=default_end,
-        key="employee_period_end",
-        on_change=_on_employee_period_changed,
-    )
-    periods_ready = (
-        period_start is not None
-        and period_end is not None
-        and period_start <= period_end
-    )
-    if period_start is not None and period_end is not None and period_start > period_end:
-        st.error("From date must be on or before To date.")
-
     fingerprint = hashlib.sha256(
         json.dumps({"snapshot": snapshot_key, "spaces": selected_spaces}, sort_keys=True).encode()
     ).hexdigest()
@@ -696,7 +656,7 @@ def render_employee_collection(settings):
     if st.button(
         "Done",
         type="primary",
-        disabled=not visible or not periods_ready,
+        disabled=not visible,
         key="employee_done",
     ):
         try:
