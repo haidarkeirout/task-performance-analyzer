@@ -9,7 +9,10 @@ import pandas as pd
 
 from clickup_analysis import analyze_clickup
 from department_analysis import filter_jira_department_period
-from department_collection import (\n    _analysis_cutoff, _period_bounds, _period_filter,\n    _update_department_preparation_progress,\n)
+from department_collection import (
+    _analysis_cutoff, _period_bounds, _period_filter,
+    _update_department_preparation_progress,
+)
 from jira_department_collection import _overall_progress_fraction, _period_query
 
 
