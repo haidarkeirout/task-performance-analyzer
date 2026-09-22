@@ -31,6 +31,7 @@ from clickup_filters import (
     tags,
     task_type,
     timestamp,
+    custom_fields,
 )
 
 
@@ -104,6 +105,25 @@ def _timing_values(created, start, end, end_label: str):
 def _first_location(task: dict) -> str:
     values = location_values(task)
     return values[-1] if values else "Unavailable"
+
+
+def _project_space(task: dict) -> str:
+    explicit = task.get("employee_space_name")
+    if explicit not in (None, ""):
+        return str(explicit)
+    return _first_location(task)
+
+
+def _company(task: dict) -> str:
+    for key, value in task.items():
+        normalized = "".join(character for character in str(key).casefold() if character.isalnum())
+        if any(token in normalized for token in ("company", "client", "customer", "organization")) and value not in (None, ""):
+            return str(value)
+    fields = custom_fields(task)
+    for name, value in fields.items():
+        if any(token in name.casefold() for token in ("company", "client", "customer", "organization")):
+            return value
+    return "Company not specified"
 
 
 def _due_category(completed: bool, open_task: bool, due, variance):
@@ -384,6 +404,8 @@ def analyze_clickup(prepared_data, *, period_start=None, period_end=None):
             "Created By": created_by(task),
             "Priority": (task.get("priority") or {}).get("priority") if isinstance(task.get("priority"), dict) else task.get("priority"),
             "Task Type": task_type(task),
+            "Company": _company(task),
+            "Project / Space": _project_space(task),
             "Tags": ", ".join(tags(task)) or "No tags",
             "Location/List": task.get("_department_list_name") or _first_location(task),
             "Space": task.get("_department_space_name") or "",
@@ -426,7 +448,7 @@ def analyze_clickup(prepared_data, *, period_start=None, period_end=None):
             status_rows.append({"Status": status_label, "Task ID": task_id, "Minutes": minutes, "Hours": minutes / 60.0})
 
     columns = [
-        "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Tags", "Location/List",
+        "Task ID", "Task Name", "Assignee", "Created By", "Priority", "Task Type", "Company", "Project / Space", "Tags", "Location/List",
         "Space", "List", "Parent Task ID", "Is Subtask",
         "Current Status", "Status at Cutoff", "Status Known?", "Historical Status Basis",
         "Status State", "Created", "Updated", "Start Date", "Due Date", "Completed",
@@ -576,6 +598,128 @@ def analyze_clickup(prepared_data, *, period_start=None, period_end=None):
         "department_name": getattr(prepared_data, "department_name", ""),
         "filter_summary": getattr(prepared_data, "filter_summary", "All tasks in the selected ClickUp Space"),
     }
+
+
+def recalculate_clickup_analysis(result: dict, task_frame: pd.DataFrame) -> dict:
+    """Rebuild ClickUp summaries from an already analysed filtered snapshot.
+
+    Employee post-analysis filters must not trigger another API call.  This
+    function deliberately reuses the task-level values already calculated by
+    :func:`analyze_clickup` and only rebuilds aggregates and dashboard tables.
+    """
+    recalculated = dict(result)
+    tasks = task_frame.copy().reset_index(drop=True)
+    task_ids = set(tasks["Task ID"].astype(str)) if "Task ID" in tasks else set()
+    original_status_detail = result.get("status_detail", pd.DataFrame())
+    if original_status_detail.empty or "Task ID" not in original_status_detail:
+        status_frame = original_status_detail.copy()
+    else:
+        status_frame = original_status_detail[
+            original_status_detail["Task ID"].astype(str).isin(task_ids)
+        ].copy()
+
+    cutoff = timestamp(result.get("cutoff"))
+    total = len(tasks)
+    known_status_tasks = (
+        tasks[tasks["Status Known?"].eq(True)]
+        if total and "Status Known?" in tasks
+        else tasks
+    )
+    completed = tasks[tasks["Completed?"]] if total else tasks
+    open_tasks = tasks[tasks["Open?"]] if total else tasks
+    due_known_completed = completed[completed["Due Variance (days)"].notna()] if total else tasks
+    status_summary = _status_summary(status_frame)
+    status_counts = (
+        tasks["Status at Cutoff"].fillna("Unavailable").value_counts()
+        .rename_axis("Status").reset_index(name="Tasks")
+        if total else pd.DataFrame(columns=["Status", "Tasks"])
+    )
+    weekly_flow = _weekly_flow(tasks, cutoff)
+    due_status_summary = _due_status_summary(tasks, cutoff)
+    due_variance_summary = (
+        tasks[tasks["Due Variance (days)"].notna()]
+        .groupby("Due Variance Category", dropna=False)
+        .agg(Tasks=("Task ID", "count"), Average_Variance_Days=("Due Variance (days)", "mean"),
+             Median_Variance_Days=("Due Variance (days)", "median"))
+        .reset_index()
+        .rename(columns={"Average_Variance_Days": "Average Variance (days)",
+                         "Median_Variance_Days": "Median Variance (days)"})
+        .sort_values("Tasks", ascending=False).reset_index(drop=True)
+        if total else pd.DataFrame(columns=["Due Variance Category", "Tasks", "Average Variance (days)", "Median Variance (days)"])
+    )
+    assignee_summary = _assignee_summary(tasks)
+    late_completed = completed[completed["Due Variance (days)"] > 0].copy() if total else tasks
+    overdue_open = open_tasks[open_tasks["Due Variance (days)"] > 0].copy() if total else tasks
+    missing_due = tasks[tasks["Due Date"].isna()].copy() if total else tasks
+    status_duration_available = int(tasks["Total Time in Status (min)"].notna().sum()) if total else 0
+    future_start_tasks = int(tasks["Timing Data Status"].eq("Start date after evaluation cutoff").sum()) if total else 0
+    timing_conflicts = int(tasks["Timing Data Status"].isin({
+        "Start date after completion date", "Start date before creation date",
+    }).sum()) if total else 0
+
+    overall = pd.DataFrame([
+        ("Total tasks", total),
+        ("Completed tasks", int(tasks["Completed?"].sum()) if total else 0),
+        ("Open tasks", int(tasks["Open?"].sum()) if total else 0),
+        ("WIP tasks", int(tasks["WIP?"].sum()) if total else 0),
+        ("Cancelled tasks", int(tasks["Cancelled?"].sum()) if total else 0),
+        ("Known status tasks", int(len(known_status_tasks))),
+        ("Unknown status tasks", int(total - len(known_status_tasks))),
+        ("Completion rate (%)", float(known_status_tasks["Completed?"].mean() * 100.0) if len(known_status_tasks) else None),
+        ("On-time completion rate (%)", _safe_rate(completed["On Time?"]) if total else None),
+        ("Open overdue tasks", int(len(overdue_open))),
+        ("Completed late tasks", int(len(late_completed))),
+        ("Average due variance (days)", _mean(due_known_completed, "Due Variance (days)")),
+        ("Average execution hours", _mean(completed, "Execution Hours")),
+        ("Average lead time hours", _mean(completed, "Lead Time Hours")),
+        ("Average time to start hours", _mean(tasks, "Time to Start Hours")),
+        ("Tasks with Total time in Status", status_duration_available),
+    ], columns=["Metric", "Value"])
+
+    context = result.get("analysis_context", pd.DataFrame()).copy()
+    if not context.empty and "Field" in context and "Value" in context:
+        context.loc[context["Field"].eq("Task Count"), "Value"] = total
+    quality = pd.DataFrame([
+        ("Task rows collected", total, "OK" if total else "Unavailable"),
+        ("Tasks with status-duration data", status_duration_available, "OK" if status_duration_available else "Unavailable"),
+        ("Tasks missing created date", int(tasks["Created"].isna().sum()) if total else 0,
+         "Review" if total and tasks["Created"].isna().any() else "OK"),
+        ("Tasks missing due date", int(tasks["Due Date"].isna().sum()) if total else 0,
+         "Review" if total and tasks["Due Date"].isna().any() else "OK"),
+        ("Completed tasks missing completion date", int((tasks["Completed?"] & tasks["Completed"].isna()).sum()) if total else 0,
+         "Review" if total and (tasks["Completed?"] & tasks["Completed"].isna()).any() else "OK"),
+        ("Tasks scheduled after the evaluation cutoff", future_start_tasks, "Info" if future_start_tasks else "OK"),
+        ("Tasks with timing chronology conflicts", timing_conflicts, "Review" if timing_conflicts else "OK"),
+        ("Tasks with historical status unavailable", int((~tasks["Status Known?"]).sum()) if total else 0,
+         "Unavailable" if total and (~tasks["Status Known?"]).any() else "OK"),
+    ], columns=["Check", "Value", "Status"])
+    findings = pd.DataFrame([
+        ("Completed late tasks", int(len(late_completed)), "Review deadlines, task estimates, and dependencies for these completed tasks."),
+        ("Open overdue tasks", int(len(overdue_open)), "Prioritize current blockers and agree a recovery plan for open overdue work."),
+        ("Tasks without due dates", int(len(missing_due)), "Add due dates where delivery timeliness is expected to be evaluated."),
+        ("Tasks with timing chronology conflicts", timing_conflicts, "Review the task start and completion dates. Conflicting timing values are excluded from duration averages."),
+        ("Tasks without status-duration data", total - status_duration_available, "Enable or verify Total time in Status only when the ClickUp plan and permissions support it."),
+    ], columns=["Finding", "Tasks", "Recommended Follow-up"])
+
+    recalculated.update({
+        "tasks": tasks,
+        "status_detail": status_frame,
+        "status_summary": status_summary,
+        "status_counts": status_counts,
+        "weekly_flow": weekly_flow,
+        "due_status_summary": due_status_summary,
+        "due_variance_summary": due_variance_summary,
+        "assignee_summary": assignee_summary,
+        "late_completed_tasks": late_completed,
+        "overdue_tasks": overdue_open,
+        "missing_due_tasks": missing_due,
+        "overall": overall,
+        "analysis_context": context,
+        "quality": quality,
+        "findings": findings,
+        "filter_summary": f"Filtered employee snapshot: {total} task(s)",
+    })
+    return recalculated
 
 
 def _write_sheet(workbook, name: str, frame: pd.DataFrame):

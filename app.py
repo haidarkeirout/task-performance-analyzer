@@ -30,7 +30,13 @@ from metrics_engine import (
 )
 from report_builder import build_report
 from process_analysis import workbook_context, workbook_histories, process_tables, excel_bytes
-from clickup_analysis import analyze_clickup, analysis_excel
+from clickup_analysis import analyze_clickup, analysis_excel, recalculate_clickup_analysis
+from employee_filters import (
+    ALL as EMPLOYEE_FILTER_ALL,
+    apply_employee_filters,
+    employee_filter_options,
+    with_employee_filter_dimensions,
+)
 from clickup_report import create_clickup_word_report
 from company_performance.dashboard import metric_help
 from kpi_transparency import build_population, render_population_card
@@ -503,9 +509,70 @@ def run_analysis(
     task_metrics.attrs["selected_sheet"] = sheet_name
     task_metrics.attrs["validation_log"] = validation_log
     task_metrics.attrs["cutoff"] = cutoff.isoformat()
+    task_metrics.attrs["histories"] = histories
 
     tables = process_tables(task_metrics, histories, context, validation_log)
     return task_metrics, validation_log, tables
+
+
+def _reset_employee_project_filter() -> None:
+    st.session_state["employee_filter_projects"] = []
+
+
+def _clear_employee_post_analysis_filters() -> None:
+    st.session_state["employee_filter_company"] = EMPLOYEE_FILTER_ALL
+    st.session_state["employee_filter_projects"] = []
+    for key in (
+        "employee_filter_status",
+        "employee_filter_task_type",
+        "employee_filter_priority",
+        "employee_filter_due_state",
+    ):
+        st.session_state[key] = []
+
+
+def render_employee_post_analysis_filters(frame: pd.DataFrame, source: str) -> pd.DataFrame:
+    """Render Employee-only filters and return the locally filtered snapshot."""
+    dimensions = with_employee_filter_dimensions(frame, source)
+    options = employee_filter_options(dimensions)
+    st.subheader("Employee analysis filters")
+    st.caption(
+        "These filters use the collected snapshot only. Changing them does not recollect data from Jira or ClickUp."
+    )
+    top = st.columns(2)
+    company = top[0].selectbox(
+        "Company",
+        options["Company"],
+        key="employee_filter_company",
+        on_change=_reset_employee_project_filter,
+    )
+    company_options = employee_filter_options(dimensions, company)
+    projects = top[1].multiselect(
+        "Projects / Spaces",
+        company_options["Project / Space"],
+        key="employee_filter_projects",
+        help="Only Projects / Spaces belonging to the selected Company are shown.",
+    )
+    bottom = st.columns(4)
+    status = bottom[0].multiselect("Status", options["Status"], key="employee_filter_status")
+    task_type_value = bottom[1].multiselect("Task Type", options["Task Type"], key="employee_filter_task_type")
+    priority = bottom[2].multiselect("Priority", options["Priority"], key="employee_filter_priority")
+    due_state = bottom[3].multiselect("Due-Date State", options["Due-Date State"], key="employee_filter_due_state")
+    st.button("Clear Employee Filters", on_click=_clear_employee_post_analysis_filters, key="clear_employee_post_analysis_filters")
+
+    filtered = apply_employee_filters(
+        dimensions,
+        {
+            "Company": company,
+            "Project / Space": projects,
+            "Status": status,
+            "Task Type": task_type_value,
+            "Priority": priority,
+            "Due-Date State": due_state,
+        },
+    )
+    st.caption(f"Showing {len(filtered)} of {len(frame)} analysed task(s).")
+    return filtered
 
 
 def show_executive_dashboard(
@@ -1377,6 +1444,10 @@ if st.session_state.get("active_analysis_mode") != analysis_mode:
         "project_preview", "project_analysis", "project_scope_label", "project_scope_slug",
         "project_period_start", "project_period_end", "project_report_key",
         "project_clickup_checkpoints",
+        "employee_filter_company", "employee_filter_projects", "employee_filter_status",
+        "employee_filter_task_type", "employee_filter_priority", "employee_filter_due_state",
+        "employee_filter_companies", "employee_filter_spaces", "employee_filter_statuses",
+        "employee_filter_task_types", "employee_filter_priorities", "employee_filter_due_states",
     ):
         st.session_state.pop(key, None)
     st.session_state["active_analysis_mode"] = analysis_mode
@@ -1563,7 +1634,17 @@ if "department_analysis" in st.session_state:
     st.stop()
 
 if "clickup_analysis" in st.session_state:
-    show_clickup_analysis(st.session_state["clickup_analysis"])
+    clickup_result = st.session_state["clickup_analysis"]
+    if analysis_mode == "employee":
+        filtered_clickup_tasks = render_employee_post_analysis_filters(
+            clickup_result["tasks"],
+            "ClickUp",
+        )
+        clickup_result = recalculate_clickup_analysis(
+            clickup_result,
+            filtered_clickup_tasks,
+        )
+    show_clickup_analysis(clickup_result)
     st.stop()
 
 if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
@@ -1573,12 +1654,25 @@ if "task_metrics" in st.session_state and "status_known" not in st.session_state
 
 if "task_metrics" in st.session_state:
     task_metrics = st.session_state["task_metrics"]
+    if analysis_mode == "employee":
+        task_metrics = render_employee_post_analysis_filters(task_metrics, "Jira")
+        if task_metrics.empty:
+            st.warning("No analysed tasks match the selected Employee filters.")
+            st.stop()
     validation_log = st.session_state.get(
         "validation_log",
         [],
     )
 
-    process_data = st.session_state.get("process_data") or process_tables(task_metrics)
+    if analysis_mode == "employee":
+        process_data = process_tables(
+            task_metrics,
+            histories=task_metrics.attrs.get("histories", {}),
+            context=task_metrics.attrs.get("process_context", {}),
+            validation_log=validation_log,
+        )
+    else:
+        process_data = st.session_state.get("process_data") or process_tables(task_metrics)
     st.caption("Results calculated through: " + str(task_metrics.iloc[0]["evaluation_cutoff"]))
     if not task_metrics["history_complete"].all():
         st.warning("Some task histories cannot be verified. Affected statuses and metrics are unavailable; see Data Quality.")

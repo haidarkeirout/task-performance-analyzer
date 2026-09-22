@@ -20,7 +20,9 @@
     "Resolution": "resolution",
     "Created": "created_at",
     "Due date": "due_date",
-    "Custom field (Start date)": "planned_start_date"
+    "Custom field (Start date)": "planned_start_date",
+    "Project key": "project_key",
+    "Project name": "project_name"
   },
   "required_columns": [
     "Issue key",
@@ -37,7 +39,9 @@
     "Resolution",
     "Created",
     "Due date",
-    "Custom field (Start date)"
+    "Custom field (Start date)",
+    "Project key",
+    "Project name"
   ],
   "header_rules": {
     "trim_whitespace": true,

@@ -437,6 +437,14 @@ def calculate_task(
         task.get("issue_key") or ""
     ).strip()
 
+    def source_value(*tokens):
+        """Read optional source dimensions without requiring them in every export."""
+        for key, value in task.items():
+            normalized_key = "".join(character for character in str(key).casefold() if character.isalnum())
+            if any(token in normalized_key for token in tokens) and value not in (None, ""):
+                return value
+        return None
+
     created_at = parse_timestamp(
         task.get("created_at"),
         calendar.timezone_name,
@@ -680,6 +688,9 @@ def calculate_task(
     return {
         "issue_key": issue_key,
         "task_name": task.get("task_name"),
+        "project_key": task.get("project_key"),
+        "project_name": task.get("project_name"),
+        "company_name": source_value("company", "client", "customer", "organization"),
         "issue_type": task.get("issue_type")
         or "Issue type unavailable",
         "labels": labels,

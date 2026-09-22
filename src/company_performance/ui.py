@@ -270,6 +270,7 @@ def _task_detail_rows(items: Any) -> list[dict[str, Any]]:
         {
             "Source Tool": item.source_tool,
             "Space": item.source_space,
+            "Company": item.company_name or "Company not specified",
             "Task ID": item.task_id,
             "Task Name": item.task_name,
             "Unified Project": item.unified_project,
@@ -306,6 +307,43 @@ def _filters(
         result.snapshots,
         coverages=result.collection.coverages,
     ).filter_options
+    if key_prefix == "employee":
+        first = st.columns(2)
+        companies = first[0].multiselect(
+            "Company", getattr(options, "companies", ()), key=f"{key_prefix}_filter_companies"
+        )
+        selected_companies = set(companies)
+        scoped_spaces = [
+            item.task.source_space or "Space not specified"
+            for item in result.snapshots
+            if not selected_companies
+            or (item.task.company_name or "Company not specified") in selected_companies
+        ]
+        spaces = first[1].multiselect(
+            "Projects / Spaces", sorted(set(scoped_spaces)), key=f"{key_prefix}_filter_spaces",
+        )
+        second = st.columns(4)
+        statuses = second[0].multiselect(
+            "Status", [status.value for status in options.statuses], key=f"{key_prefix}_filter_statuses"
+        )
+        task_types = second[1].multiselect(
+            "Task Type", getattr(options, "task_types", ()), key=f"{key_prefix}_filter_task_types"
+        )
+        priorities = second[2].multiselect(
+            "Priority", options.priorities, key=f"{key_prefix}_filter_priorities"
+        )
+        due_states = second[3].multiselect(
+            "Due-Date State", getattr(options, "due_states", ()), key=f"{key_prefix}_filter_due_states"
+        )
+        lookup = {status.value: status for status in UnifiedStatus}
+        return DashboardFilters(
+            statuses=tuple(lookup[value] for value in statuses),
+            priorities=tuple(priorities),
+            companies=tuple(companies),
+            source_spaces=tuple(spaces),
+            task_types=tuple(task_types),
+            due_states=tuple(due_states),
+        )
     columns = st.columns(5)
     sources = columns[0].multiselect("Source", options.source_tools, key=f"{key_prefix}_filter_sources")
     projects = columns[1].multiselect("Unified Project", options.unified_projects, key=f"{key_prefix}_filter_projects")

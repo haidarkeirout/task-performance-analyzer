@@ -142,6 +142,7 @@ def _jira_export_issues(prepared_data: Any) -> list[dict[str, Any]]:
                 "summary": _row_value(row, "Summary"),
                 "issuetype": {"name": _row_value(row, "Issue Type")},
                 "project": {"key": _row_value(row, "Project key"), "name": _row_value(row, "Project name")},
+                "company_name": _row_value(row, "Company", "Company name", "Custom field (Company)", "Client", "Customer"),
                 "status": {"name": _row_value(row, "Status")},
                 "priority": {"name": _row_value(row, "Priority")},
                 "assignee": {"displayName": assignee} if assignee else None,

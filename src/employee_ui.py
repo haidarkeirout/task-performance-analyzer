@@ -117,6 +117,10 @@ def _clear_employee_state() -> None:
         "company_output_cache_key",
         "employee_output_cache",
         "employee_output_cache_key",
+        "employee_filter_company", "employee_filter_projects", "employee_filter_status",
+        "employee_filter_task_type", "employee_filter_priority", "employee_filter_due_state",
+        "employee_filter_companies", "employee_filter_spaces", "employee_filter_statuses",
+        "employee_filter_task_types", "employee_filter_priorities", "employee_filter_due_states",
     ):
         st.session_state.pop(key, None)
 
@@ -137,6 +141,8 @@ def _clear_employee_analysis_state() -> None:
         "clickup_excel_report_key",
         "clickup_word_report",
         "clickup_word_report_key",
+        "employee_filter_companies", "employee_filter_spaces", "employee_filter_statuses",
+        "employee_filter_task_types", "employee_filter_priorities", "employee_filter_due_states",
     ):
         st.session_state.pop(key, None)
 

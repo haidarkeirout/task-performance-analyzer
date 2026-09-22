@@ -45,6 +45,10 @@ class DashboardFilters:
     statuses: tuple[UnifiedStatus, ...] = ()
     assignee_groups: tuple[str, ...] = ()
     priorities: tuple[str, ...] = ()
+    companies: tuple[str, ...] = ()
+    source_spaces: tuple[str, ...] = ()
+    task_types: tuple[str, ...] = ()
+    due_states: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,10 @@ class FilterOptions:
     statuses: tuple[UnifiedStatus, ...]
     assignee_groups: tuple[str, ...]
     priorities: tuple[str, ...]
+    companies: tuple[str, ...] = ()
+    source_spaces: tuple[str, ...] = ()
+    task_types: tuple[str, ...] = ()
+    due_states: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,7 +205,25 @@ def available_filters(snapshots: Iterable[TaskPeriodSnapshot]) -> FilterOptions:
         priorities=tuple(priority for priority in _PRIORITY_ORDER if any(
             normalize_priority(item.task.source_tool, item.task.priority) == priority for item in items
         )),
+        companies=tuple(sorted({item.task.company_name or "Company not specified" for item in items})),
+        source_spaces=tuple(sorted({item.task.source_space or "Space not specified" for item in items})),
+        task_types=tuple(sorted({item.task.issue_type or "Task type unavailable" for item in items})),
+        due_states=tuple(sorted({_due_state(item) for item in items})),
     )
+
+
+def _due_state(item: TaskPeriodSnapshot) -> str:
+    if item.status_at_period_end in {UnifiedStatus.CANCELLED, UnifiedStatus.REJECTED}:
+        return "Cancelled / rejected"
+    if item.status_at_period_end is UnifiedStatus.COMPLETED:
+        if item.task.due_date is None or item.final_completion_date is None:
+            return "Due-date state unavailable"
+        return "Completed late" if item.final_completion_date > item.task.due_date else "Completed on time"
+    if item.status_at_period_end.is_open:
+        if item.task.due_date is None:
+            return "Open without due date"
+        return "Open overdue" if item.task.due_date < item.period_end else "Open not due"
+    return "Due-date state unavailable"
 
 
 def filter_snapshots(
@@ -210,6 +236,10 @@ def filter_snapshots(
     statuses = set(filters.statuses)
     assignees = set(filters.assignee_groups)
     priorities = set(filters.priorities)
+    companies = set(filters.companies)
+    source_spaces = set(filters.source_spaces)
+    task_types = set(filters.task_types)
+    due_states = set(filters.due_states)
     selected: list[TaskPeriodSnapshot] = []
     for item in snapshots:
         task = item.task
@@ -222,6 +252,14 @@ def filter_snapshots(
         if assignees and assignee_group(task) not in assignees:
             continue
         if priorities and normalize_priority(task.source_tool, task.priority) not in priorities:
+            continue
+        if companies and (task.company_name or "Company not specified") not in companies:
+            continue
+        if source_spaces and (task.source_space or "Space not specified") not in source_spaces:
+            continue
+        if task_types and (task.issue_type or "Task type unavailable") not in task_types:
+            continue
+        if due_states and _due_state(item) not in due_states:
             continue
         selected.append(item)
     return tuple(selected)

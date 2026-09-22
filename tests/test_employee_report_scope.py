@@ -102,6 +102,10 @@ class EmployeeScopeTests(TestCase):
             statuses=(),
             assignee_groups=("Test Employee",),
             priorities=("High",),
+            companies=("Acme",),
+            source_spaces=("Alpha Space",),
+            task_types=("Task",),
+            due_states=("Open overdue",),
         )
         result = SimpleNamespace(snapshots=(), collection=SimpleNamespace(coverages=()))
 
@@ -114,11 +118,12 @@ class EmployeeScopeTests(TestCase):
         self.assertEqual(
             st.keys,
             [
-                "employee_filter_sources",
-                "employee_filter_projects",
+                "employee_filter_companies",
+                "employee_filter_spaces",
                 "employee_filter_statuses",
-                "employee_filter_assignees",
+                "employee_filter_task_types",
                 "employee_filter_priorities",
+                "employee_filter_due_states",
             ],
         )
 

@@ -71,6 +71,36 @@ def _text(value: Any) -> str | None:
     return value or None
 
 
+def _company_value(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        for key in ("company", "company_name", "client", "customer", "organization", "name", "label", "value"):
+            result = _text(value.get(key))
+            if result:
+                return result
+        return None
+    return _text(value)
+
+
+def _task_company(task: Mapping[str, Any]) -> str | None:
+    for key, value in task.items():
+        normalized = "".join(character for character in str(key).casefold() if character.isalnum())
+        if any(token in normalized for token in ("company", "client", "customer", "organization")):
+            result = _company_value(value)
+            if result:
+                return result
+    fields = task.get("custom_fields")
+    if isinstance(fields, list):
+        for field in fields:
+            if not isinstance(field, Mapping):
+                continue
+            name = str(field.get("name") or "").casefold()
+            if any(token in name for token in ("company", "client", "customer", "organization")):
+                result = _company_value(field.get("value"))
+                if result:
+                    return result
+    return None
+
+
 def _named(value: Any) -> str | None:
     if isinstance(value, Mapping):
         for key in ("displayName", "name", "username", "email", "value", "id"):
@@ -372,6 +402,7 @@ def adapt_jira_collection(
             issue_type=issue_type,
             source_space=actual_space,
             unified_project=unified_project,
+            company_name=_task_company(fields),
             department="Tech Development",
             raw_status=_named(status),
             initial_status=_text(history.get("initial_status")) or _named(status),
@@ -475,6 +506,7 @@ def adapt_clickup_collection(
             task_name=_text(task.get("name")),
             source_space=source_space,
             unified_project=unified_project,
+            company_name=_task_company(task),
             department=department,
             department_id=department_id,
             raw_status=raw_status,

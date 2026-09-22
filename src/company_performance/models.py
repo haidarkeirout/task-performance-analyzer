@@ -77,6 +77,7 @@ class TaskRecord:
     issue_type: str | None = None
     source_space: str | None = None
     unified_project: str | None = None
+    company_name: str | None = None
     department: str | None = None
     department_id: str | None = None
     raw_status: str | None = None
