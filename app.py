@@ -1396,6 +1396,10 @@ from automation_ui import invalidate_selection, require_sign_in, render_collecti
 
 settings = require_sign_in()
 
+LOGO_PATH = ROOT_DIR / "assets" / "bidayah_logo_white.png"
+if LOGO_PATH.exists():
+    st.image(str(LOGO_PATH), width=190)
+
 st.title(APP_TITLE)
 analysis_mode_label = st.radio(
     "Analysis type",
