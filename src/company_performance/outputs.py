@@ -547,7 +547,7 @@ def _configure_document(document: Document, *, scope_label: str = "Company") -> 
     configure_report_document(
         document,
         header_label=f"{scope_label.upper()} PERFORMANCE REPORT | PERFORMANCE EVALUATION",
-        footer_label="Task Performance Intelligence",
+        footer_label="Performance Management",
     )
 
 

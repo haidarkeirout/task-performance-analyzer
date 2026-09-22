@@ -1,4 +1,4 @@
-# Task Performance Intelligence
+# Performance Management
 
 Read-only Streamlit analytics for Jira and ClickUp at four scopes:
 

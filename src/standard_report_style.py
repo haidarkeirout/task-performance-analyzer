@@ -156,7 +156,7 @@ def configure_report_document(
     document: Document,
     *,
     header_label: str = "PROCESS PERFORMANCE REPORT | PERFORMANCE EVALUATION",
-    footer_label: str = "Task Performance Intelligence",
+    footer_label: str = "Performance Management",
 ):
     for section in document.sections:
         section.top_margin = Inches(0.78)

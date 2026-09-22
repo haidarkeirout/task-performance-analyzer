@@ -80,7 +80,7 @@ def require_sign_in():
             values = {}
         settings = read_settings(values)
     except (SetupError, ValueError):
-        st.title("Task Performance Intelligence")
+        st.title("Performance Management")
         st.info("The system is being configured. Please contact the administrator.")
         st.stop()
     if st.session_state.get("auth_revision") != settings.revision:
@@ -89,7 +89,7 @@ def require_sign_in():
             st.session_state.clear()
         _, center, _ = st.columns([1, 1.3, 1])
         with center:
-            st.title("Task Performance Intelligence")
+            st.title("Performance Management")
             st.caption("Sign in to select a space and analyze its work items.")
             with st.form("sign_in"):
                 st.text_input("Username", key="login_username")

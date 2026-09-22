@@ -75,7 +75,7 @@ INPUT_CONFIG_PATH = CONFIG_DIR / "jira_input_config.json"
 METRICS_CONFIG_PATH = CONFIG_DIR / "jira_metrics_config.json"
 
 
-APP_TITLE = "Task Performance Intelligence"
+APP_TITLE = "Performance Management"
 
 
 st.set_page_config(

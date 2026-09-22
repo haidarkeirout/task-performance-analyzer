@@ -1,4 +1,4 @@
-# Task Performance Intelligence — verification
+# Performance Management — verification
 
 Verified locally on 2026-09-17 with no live Jira, ClickUp, employee-directory, or
 Supabase credentials.
