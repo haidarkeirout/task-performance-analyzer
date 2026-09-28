@@ -173,6 +173,7 @@ class TaskDetail:
     in_analysis_period: bool
     counted_in_kpis: bool
     exclusion_reason: str | None
+    company_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -496,6 +497,7 @@ def _task_details(snapshots: Sequence[TaskPeriodSnapshot]) -> tuple[TaskDetail, 
             in_analysis_period=item.in_scope,
             counted_in_kpis=item.counted_in_kpis,
             exclusion_reason=exclusion_reason(item),
+            company_name=item.task.company_name,
         )
         for item in snapshots
     )

@@ -95,10 +95,12 @@ class CompanyDashboardTests(unittest.TestCase):
             (event("To Do", "In Progress", "2026-09-02T09:00:00"),
              event("In Progress", "In Review", "2026-09-03T09:00:00"),
              event("In Review", "In Progress", "2026-09-04T09:00:00")),
+            company_name="Najm Al-Shamal",
         )
         detail = build_company_dashboard([item]).task_details[0]
         self.assertEqual(detail.original_status, "In Review")
         self.assertEqual(detail.final_status, "In Execution")
+        self.assertEqual(detail.company_name, "Najm Al-Shamal")
         self.assertIn("Rework", detail.exception_events)
         self.assertIn("2026-09-04: In Review → In Progress", detail.workflow_events)
 
