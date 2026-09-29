@@ -2,10 +2,30 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from employee_ui import _load_employee_sources, _snapshot_visible
+from employee_ui import _clickup_assigned, _load_employee_sources, _snapshot_visible
 
 
 class EmployeeCrossSourceTests(unittest.TestCase):
+    def test_clickup_assignment_matches_supported_member_id_shapes(self):
+        self.assertTrue(
+            _clickup_assigned(
+                {"assignees": [{"user": {"id": 21, "username": "Ada"}}]},
+                "21",
+            )
+        )
+        self.assertTrue(
+            _clickup_assigned(
+                {"assignees": [{"member_id": "21", "username": "Ada"}]},
+                "21",
+            )
+        )
+        self.assertFalse(
+            _clickup_assigned(
+                {"assignees": [{"id": "22", "username": "Ada"}]},
+                "21",
+            )
+        )
+
     def test_loading_a_dual_source_record_calls_both_connectors(self):
         record = SimpleNamespace(
             name="Ada", jira_account_id="jira-1", clickup_user_id="clickup-1"
@@ -21,6 +41,8 @@ class EmployeeCrossSourceTests(unittest.TestCase):
         load_clickup.assert_called_once()
         self.assertEqual(snapshot["source"], "Combined")
         self.assertEqual(set(snapshot["spaces"]), {"Jira:jira-space", "ClickUp:clickup-space"})
+        self.assertEqual(snapshot["source_counts"]["Jira"], {"fetched": 0, "matched": 0})
+        self.assertEqual(snapshot["source_counts"]["ClickUp"], {"fetched": 0, "matched": 0})
 
     def test_snapshot_preview_keeps_source_and_space_identity(self):
         snapshot = {
