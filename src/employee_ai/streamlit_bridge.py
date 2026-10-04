@@ -136,26 +136,19 @@ def _clear_stale_ai_answer(state: MutableMapping[str, Any], fingerprint: str) ->
         state["employee_ai_answer_fingerprint"] = fingerprint
 
 
-def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
-    """Render a small read-only assistant only after an Employee analysis exists."""
+def _render_employee_ai_dialog(
+    st: Any,
+    *,
+    context: EmployeeAIContext,
+    webhook_url: str,
+    fingerprint: str,
+) -> None:
+    """Open a chat dialog whose interactions do not rerun the dashboard."""
 
-    payload = context.to_dict()
-    state = st.session_state
-    state["employee_ai_context"] = payload
-    fingerprint = str(payload["request"]["context_fingerprint"])
-    _clear_stale_ai_answer(state, fingerprint)
-
-    try:
-        webhook_url = configured_webhook_url(_streamlit_secrets(st))
-    except EmployeeAIWebhookError:
-        # Do not expose configuration details or interrupt the Employee dashboard.
-        return
-    if not webhook_url:
-        return
-
-    with st.popover("💬 Ask AI", use_container_width=False):
+    @st.dialog("AI Assistant", width="large")
+    def assistant_dialog() -> None:
         st.caption("Ask about this Employee analysis. The assistant is read-only.")
-        messages = state.setdefault("employee_ai_messages", [])
+        messages = st.session_state.setdefault("employee_ai_messages", [])
         for message in messages:
             role = message.get("role")
             content = str(message.get("content") or "")
@@ -184,6 +177,34 @@ def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
                 messages.append({"role": "assistant", "content": answer})
             except EmployeeAIWebhookError as exc:
                 st.warning(str(exc))
+
+    assistant_dialog()
+
+
+def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
+    """Render a small read-only assistant only after an Employee analysis exists."""
+
+    payload = context.to_dict()
+    state = st.session_state
+    state["employee_ai_context"] = payload
+    fingerprint = str(payload["request"]["context_fingerprint"])
+    _clear_stale_ai_answer(state, fingerprint)
+
+    try:
+        webhook_url = configured_webhook_url(_streamlit_secrets(st))
+    except EmployeeAIWebhookError:
+        # Do not expose configuration details or interrupt the Employee dashboard.
+        return
+    if not webhook_url:
+        return
+
+    if st.button("💬 Ask AI", key=f"employee_ai_open_{fingerprint}", use_container_width=True):
+        _render_employee_ai_dialog(
+            st,
+            context=context,
+            webhook_url=webhook_url,
+            fingerprint=fingerprint,
+        )
 
 
 def safely_render_employee_ai_assistant(
