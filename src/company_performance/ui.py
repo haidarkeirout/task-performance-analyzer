@@ -541,8 +541,8 @@ def render_company_result(
     download_stem: str = "company_performance",
     scope_key: str = "company",
     scope_label: str = "Company",
-) -> None:
-    """Render a scope-specific dashboard plus detailed drill-down outputs."""
+) -> CompanyDashboardModel:
+    """Render a scope-specific dashboard and return the exact filtered model."""
     st.divider()
     heading, action = st.columns([5, 1])
     heading.title(scope_title)
@@ -703,3 +703,4 @@ def render_company_result(
         _MIME_DOCX,
         use_container_width=True,
     )
+    return model

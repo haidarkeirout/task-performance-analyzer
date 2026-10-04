@@ -13,6 +13,7 @@ from employee_ai import (
 )
 from employee_ai.sanitizer import assert_no_sensitive_fields
 from employee_ai.schemas import ContextValidationError
+from employee_ai.streamlit_bridge import build_employee_context_from_state
 
 
 SECRET = "test-only-subject-secret"
@@ -221,7 +222,12 @@ class EmployeeAIContextAdapterTests(unittest.TestCase):
         result = Result(Model(
             period_start=date(2026, 9, 1),
             period_end=date(2026, 10, 4),
-            kpis={"total_tasks": 2},
+            kpis={
+                "total_tasks": 2,
+                "completed_tasks": 1,
+                "known_status_tasks": 2,
+                "unknown_status_tasks": 0,
+            },
             cards=(Card("total_tasks", "Total Tasks", "2"),),
             task_details=(
                 Detail("Jira", "Jira Project", "J-1", "Jira task", "Completed", "High", date(2026, 9, 10), True),
@@ -239,10 +245,57 @@ class EmployeeAIContextAdapterTests(unittest.TestCase):
             "completion_population",
             {item["key"] for item in context["dashboard"]["cards"]},
         )
+        self.assertIn(
+            "completed_tasks",
+            {item["key"] for item in context["dashboard"]["cards"]},
+        )
         self.assertEqual(
             {item["source"] for item in context["evidence"]["tasks"]},
             {"Jira", "ClickUp"},
         )
+
+
+class EmployeeAIContextBridgeTests(unittest.TestCase):
+    def test_bridge_reads_active_filters_and_never_exports_source_ids(self):
+        @dataclass
+        class Record:
+            name: str = "Test Employee"
+            department: str = "Technology"
+            jira_account_id: str = "jira-sensitive"
+            clickup_user_id: str = "clickup-sensitive"
+
+        state = {
+            "employee_snapshot": {"employee_record": Record()},
+            "employee_snapshot_key": "Jira:jira-sensitive",
+            "employee_collection_id": "collection-2",
+            "employee_collection_collected_at": "2026-10-04T09:00:00+00:00",
+            "employee_analysis_completed_at": "2026-10-04T09:01:00+00:00",
+            "employee_filter_company": "Acme",
+            "employee_filter_projects": ["Alpha"],
+        }
+        result = {
+            "overall": pd.DataFrame([
+                ("Total tasks", 1), ("Completed tasks", 1), ("Known status tasks", 1),
+                ("Unknown status tasks", 0), ("Completion rate (%)", 100.0),
+                ("On-time completion rate (%)", 100.0), ("Open overdue tasks", 0),
+                ("WIP tasks", 0),
+            ], columns=["Metric", "Value"]),
+            "tasks": pd.DataFrame([{
+                "Task ID": "C-1", "Task Name": "Safe task", "Current Status": "Complete",
+                "Status Known?": True,
+            }]),
+        }
+        context = build_employee_context_from_state(
+            state,
+            source_mode="clickup",
+            analysis_result=result,
+        ).to_dict()
+        encoded = json.dumps(context)
+        self.assertEqual(context["analysis"]["scope"]["analysis_filters"]["company"], "Acme")
+        self.assertEqual(context["analysis"]["scope"]["analysis_filters"]["projects_spaces"], ["Alpha"])
+        self.assertNotIn("jira-sensitive", encoded)
+        self.assertNotIn("clickup-sensitive", encoded)
+        self.assertNotIn("_employee_ai_subject_secret", encoded)
 
 
 if __name__ == "__main__":

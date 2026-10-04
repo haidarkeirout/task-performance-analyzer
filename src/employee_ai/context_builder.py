@@ -77,7 +77,12 @@ def _metric_key(value: Any) -> str:
     """Normalise renderer-specific card keys to the public contract style."""
 
     text = re.sub(r"[^a-z0-9]+", "_", str(value or "metric").casefold())
-    return text.strip("_") or "metric"
+    key = text.strip("_") or "metric"
+    return {
+        "current_wip": "wip_tasks",
+        "overdue_open": "open_overdue",
+        "on_time_rate": "on_time_rate",
+    }.get(key, key)
 
 
 def _card(
@@ -500,6 +505,12 @@ def build_combined_employee_context(
             -1,
         )
         cards.insert(total_index + 1, population)
+    if kpis and not any(item["key"] == "completed_tasks" for item in cards):
+        cards.append(_card(
+            "completed_tasks",
+            "Completed Tasks",
+            kpis.get("completed_tasks"),
+        ))
     coverage = _records(model.get("source_coverage"))
     quality = _records(model.get("data_quality"))
     history_limited = any("history" in str(row).casefold() for row in quality)

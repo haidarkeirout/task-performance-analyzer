@@ -53,6 +53,7 @@ from company_performance.ui import (
 )
 from company_performance.application import build_company_analysis
 from employee_ui import EmployeePreparedBundle
+from employee_ai.streamlit_bridge import safely_render_employee_context_preview
 from project_ui import render_project_collection, render_project_result
 from department_analysis import (
     build_department_result,
@@ -1556,13 +1557,14 @@ if analysis_mode == "employee" and run_button and isinstance(prepared_data, Empl
                 clickup_prepared=prepared_data.clickup,
                 unified_project=f"Employee: {prepared_data.employee_name}",
             )
+        st.session_state["employee_analysis_completed_at"] = datetime.now(ZoneInfo("UTC")).isoformat()
         st.success("Combined Jira + ClickUp employee analysis completed successfully.")
     except (ValueError, TypeError) as exc:
         st.session_state.pop("employee_company_analysis", None)
         st.error(f"Combined Jira + ClickUp employee analysis could not be completed: {exc}")
 
 if analysis_mode == "employee" and st.session_state.get("employee_company_analysis") is not None:
-    render_company_result(
+    employee_dashboard_model = render_company_result(
         st,
         st.session_state["employee_company_analysis"],
         scope_title=f"Employee Performance — {getattr(prepared_data, 'employee_name', 'Selected Employee')}",
@@ -1570,6 +1572,11 @@ if analysis_mode == "employee" and st.session_state.get("employee_company_analys
         download_stem="employee_performance",
         scope_key="employee",
         scope_label="Employee",
+    )
+    safely_render_employee_context_preview(
+        st,
+        source_mode="combined",
+        analysis_result={"model": employee_dashboard_model},
     )
     st.stop()
 
@@ -1584,6 +1591,8 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                 else:
                     st.session_state["clickup_analysis"] = clickup_result
                     st.session_state.pop("department_analysis", None)
+                    if analysis_mode == "employee":
+                        st.session_state["employee_analysis_completed_at"] = datetime.now(ZoneInfo("UTC")).isoformat()
             st.success("ClickUp analysis completed successfully.")
         except Exception as exc:
             st.session_state.pop("clickup_analysis", None)
@@ -1629,6 +1638,8 @@ if analysis_mode != "company" and run_button and prepared_data is not None:
                     st.session_state["validation_log"] = validation_log
                     st.session_state["cutoff_text"] = prepared_data.cutoff
                     st.session_state.pop("department_analysis", None)
+                    if analysis_mode == "employee":
+                        st.session_state["employee_analysis_completed_at"] = datetime.now(ZoneInfo("UTC")).isoformat()
                 st.success("Analysis completed successfully.")
         except Exception:
             st.session_state.pop("task_metrics", None)
@@ -1651,6 +1662,12 @@ if "clickup_analysis" in st.session_state:
             filtered_clickup_tasks,
         )
     show_clickup_analysis(clickup_result)
+    if analysis_mode == "employee":
+        safely_render_employee_context_preview(
+            st,
+            source_mode="clickup",
+            analysis_result=clickup_result,
+        )
     st.stop()
 
 if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
@@ -1714,6 +1731,14 @@ if "task_metrics" in st.session_state:
         show_data_quality(
             task_metrics,
             validation_log,
+        )
+
+    if analysis_mode == "employee":
+        safely_render_employee_context_preview(
+            st,
+            source_mode="jira",
+            analysis_result=task_metrics,
+            dashboard_values=calculate_dashboard_values(task_metrics),
         )
 
     st.divider()
