@@ -147,8 +147,85 @@ def _render_employee_ai_dialog(
 
     @st.dialog("AI Assistant", width="large")
     def assistant_dialog() -> None:
-        st.caption("Ask about this Employee analysis. The assistant is read-only.")
+        # Keep the design local to this optional dialog.  The dashboard itself
+        # is intentionally not styled or rerun by conversations in the modal.
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"] div[role="dialog"] {
+                border-radius: 20px;
+                overflow: hidden;
+            }
+            div[data-testid="stDialog"] div[role="dialog"] > div {
+                padding-top: 0.25rem;
+            }
+            .employee-ai-header {
+                margin: -0.25rem -1rem 1.25rem;
+                padding: 1.35rem 1.5rem;
+                color: #f8fafc;
+                background: linear-gradient(120deg, #111827, #26344e);
+            }
+            .employee-ai-header__eyebrow {
+                margin: 0 0 0.35rem;
+                color: #fbbf24;
+                font-size: 0.72rem;
+                font-weight: 700;
+                letter-spacing: 0.14em;
+            }
+            .employee-ai-header__title {
+                margin: 0;
+                color: #ffffff;
+                font-size: 1.35rem;
+                font-weight: 700;
+            }
+            .employee-ai-header__copy {
+                margin: 0.45rem 0 0;
+                color: #cbd5e1;
+                font-size: 0.9rem;
+            }
+            .employee-ai-empty {
+                display: flex;
+                min-height: 250px;
+                align-items: center;
+                justify-content: center;
+                padding: 2rem;
+                border: 1px solid #e5e7eb;
+                border-radius: 16px;
+                background: linear-gradient(145deg, #ffffff, #f8fafc);
+                color: #64748b;
+                text-align: center;
+            }
+            .employee-ai-empty h3 {
+                margin: 0.35rem 0;
+                color: #1e293b;
+                font-size: 1.15rem;
+            }
+            .employee-ai-empty p {
+                margin: 0;
+            }
+            </style>
+            <section class="employee-ai-header">
+              <p class="employee-ai-header__eyebrow">EMPLOYEE / AI</p>
+              <p class="employee-ai-header__title">AI Assistant</p>
+              <p class="employee-ai-header__copy">Ask questions about this employee's current analysis.</p>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
         messages = st.session_state.setdefault("employee_ai_messages", [])
+        if not messages:
+            st.markdown(
+                """
+                <section class="employee-ai-empty">
+                  <div>
+                    <div style="font-size: 2rem;">◌</div>
+                    <h3>Start the conversation</h3>
+                    <p>Your questions and the assistant's answers will appear here.</p>
+                  </div>
+                </section>
+                """,
+                unsafe_allow_html=True,
+            )
         for message in messages:
             role = message.get("role")
             content = str(message.get("content") or "")
@@ -198,7 +275,7 @@ def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
     if not webhook_url:
         return
 
-    if st.button("💬 Ask AI", key=f"employee_ai_open_{fingerprint}", use_container_width=True):
+    if st.button("✦ Ask AI", key=f"employee_ai_open_{fingerprint}", use_container_width=True):
         _render_employee_ai_dialog(
             st,
             context=context,
