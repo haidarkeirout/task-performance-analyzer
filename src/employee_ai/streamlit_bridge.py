@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from typing import Any, Mapping, MutableMapping
 
+from .client import EmployeeAIWebhookError, ask_employee_ai, configured_webhook_url
 from .context_builder import (
     build_clickup_employee_context,
     build_combined_employee_context,
@@ -118,27 +119,70 @@ def build_employee_context_from_state(
     raise ContextValidationError(f"Unsupported Employee source mode: {source_mode}")
 
 
-def render_employee_context_preview(st: Any, context: EmployeeAIContext) -> None:
-    """Show the temporary payload inspector used before Activepieces is connected."""
+def _streamlit_secrets(st: Any) -> Mapping[str, Any]:
+    try:
+        return st.secrets.to_dict()
+    except (FileNotFoundError, AttributeError):
+        return {}
+
+
+def _clear_stale_ai_answer(state: MutableMapping[str, Any], fingerprint: str) -> None:
+    if state.get("employee_ai_answer_fingerprint") != fingerprint:
+        for key in (
+            "employee_ai_answer",
+            "employee_ai_answer_question",
+            "employee_ai_answer_fingerprint",
+        ):
+            state.pop(key, None)
+
+
+def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
+    """Render a small read-only assistant only after an Employee analysis exists."""
 
     payload = context.to_dict()
-    st.session_state["employee_ai_context"] = payload
-    with st.expander("AI Assistant Context Preview (Prototype)", expanded=False):
-        st.caption(
-            "Read-only sanitized context generated from the active Employee analysis. "
-            "It is not sent to Activepieces yet."
+    state = st.session_state
+    state["employee_ai_context"] = payload
+    fingerprint = str(payload["request"]["context_fingerprint"])
+    _clear_stale_ai_answer(state, fingerprint)
+
+    try:
+        webhook_url = configured_webhook_url(_streamlit_secrets(st))
+    except EmployeeAIWebhookError:
+        # Do not expose configuration details or interrupt the Employee dashboard.
+        return
+    if not webhook_url:
+        return
+
+    with st.popover("✨ Ask AI", use_container_width=False):
+        st.caption("Ask about the current Employee analysis. The assistant is read-only.")
+        question = st.text_area(
+            "Your question",
+            placeholder="For example: What may explain the open overdue tasks?",
+            key=f"employee_ai_question_{fingerprint}",
+            height=90,
         )
-        st.json(payload)
-        st.download_button(
-            "Download Sanitized Context JSON",
-            data=context.to_json(),
-            file_name="employee_ai_context.json",
-            mime="application/json",
-            key="download_employee_ai_context",
-        )
+        if st.button("Ask Assistant", key=f"employee_ai_submit_{fingerprint}", type="primary"):
+            try:
+                with st.spinner("Reviewing the current analysis..."):
+                    result = ask_employee_ai(
+                        context=context,
+                        question=question,
+                        webhook_url=webhook_url,
+                    )
+                state["employee_ai_answer"] = result["answer"]
+                state["employee_ai_answer_question"] = question.strip()
+                state["employee_ai_answer_fingerprint"] = result["context_fingerprint"]
+            except EmployeeAIWebhookError as exc:
+                st.warning(str(exc))
+
+        if state.get("employee_ai_answer_fingerprint") == fingerprint:
+            question_text = state.get("employee_ai_answer_question")
+            if question_text:
+                st.caption(f"Question: {question_text}")
+            st.markdown(str(state.get("employee_ai_answer") or ""))
 
 
-def safely_render_employee_context_preview(
+def safely_render_employee_ai_assistant(
     st: Any,
     *,
     source_mode: str,
@@ -154,10 +198,24 @@ def safely_render_employee_context_preview(
             analysis_result=analysis_result,
             dashboard_values=dashboard_values,
         )
-        render_employee_context_preview(st, context)
+        render_employee_ai_assistant(st, context)
     except Exception:
         st.session_state.pop("employee_ai_context", None)
-        st.warning(
-            "The AI context preview is temporarily unavailable. "
-            "The Employee analysis and reports are not affected."
-        )
+        # The optional assistant must never disturb the core Employee analysis.
+
+
+def safely_render_employee_context_preview(
+    st: Any,
+    *,
+    source_mode: str,
+    analysis_result: Any,
+    dashboard_values: Mapping[str, Any] | None = None,
+) -> None:
+    """Backward-compatible alias retained for the prototype integration points."""
+
+    safely_render_employee_ai_assistant(
+        st,
+        source_mode=source_mode,
+        analysis_result=analysis_result,
+        dashboard_values=dashboard_values,
+    )

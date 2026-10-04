@@ -12,7 +12,7 @@ import hashlib
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -541,10 +541,15 @@ def render_company_result(
     download_stem: str = "company_performance",
     scope_key: str = "company",
     scope_label: str = "Company",
+    header_action: Callable[[CompanyDashboardModel], None] | None = None,
 ) -> CompanyDashboardModel:
     """Render a scope-specific dashboard and return the exact filtered model."""
     st.divider()
-    heading, action = st.columns([5, 1])
+    if header_action is None:
+        heading, action = st.columns([5, 1])
+        assistant_action = None
+    else:
+        heading, assistant_action, action = st.columns([4, 1.2, 1])
     heading.title(scope_title)
     if action.button("Close Analysis", key=f"close_{close_state_key}", use_container_width=True):
         st.session_state.pop(close_state_key, None)
@@ -565,6 +570,13 @@ def render_company_result(
     ]
     bottlenecks = identify_bottleneck_candidates(selected)
     recommendations = generate_recommendations(selected)
+
+    # The optional Employee assistant belongs beside the result title, not after
+    # the dashboard's detailed tables and downloads.  The model already reflects
+    # the active dashboard filters at this point.
+    if header_action is not None and assistant_action is not None:
+        with assistant_action:
+            header_action(model)
 
     dashboard, workflow, details, quality = st.tabs([
         "Executive Dashboard", "Workflow & Recommendations", "Task Details", "Coverage & Data Quality"

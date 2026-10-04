@@ -1564,7 +1564,7 @@ if analysis_mode == "employee" and run_button and isinstance(prepared_data, Empl
         st.error(f"Combined Jira + ClickUp employee analysis could not be completed: {exc}")
 
 if analysis_mode == "employee" and st.session_state.get("employee_company_analysis") is not None:
-    employee_dashboard_model = render_company_result(
+    render_company_result(
         st,
         st.session_state["employee_company_analysis"],
         scope_title=f"Employee Performance — {getattr(prepared_data, 'employee_name', 'Selected Employee')}",
@@ -1572,11 +1572,11 @@ if analysis_mode == "employee" and st.session_state.get("employee_company_analys
         download_stem="employee_performance",
         scope_key="employee",
         scope_label="Employee",
-    )
-    safely_render_employee_context_preview(
-        st,
-        source_mode="combined",
-        analysis_result={"model": employee_dashboard_model},
+        header_action=lambda model: safely_render_employee_context_preview(
+            st,
+            source_mode="combined",
+            analysis_result={"model": model},
+        ),
     )
     st.stop()
 
@@ -1661,13 +1661,15 @@ if "clickup_analysis" in st.session_state:
             clickup_result,
             filtered_clickup_tasks,
         )
-    show_clickup_analysis(clickup_result)
     if analysis_mode == "employee":
-        safely_render_employee_context_preview(
-            st,
-            source_mode="clickup",
-            analysis_result=clickup_result,
-        )
+        toolbar_spacer, toolbar_assistant = st.columns([4, 1])
+        with toolbar_assistant:
+            safely_render_employee_context_preview(
+                st,
+                source_mode="clickup",
+                analysis_result=clickup_result,
+            )
+    show_clickup_analysis(clickup_result)
     st.stop()
 
 if "task_metrics" in st.session_state and "status_known" not in st.session_state["task_metrics"].columns:
@@ -1699,6 +1701,17 @@ if "task_metrics" in st.session_state:
     st.caption("Results calculated through: " + str(task_metrics.iloc[0]["evaluation_cutoff"]))
     if not task_metrics["history_complete"].all():
         st.warning("Some task histories cannot be verified. Affected statuses and metrics are unavailable; see Data Quality.")
+
+    if analysis_mode == "employee":
+        toolbar_spacer, toolbar_assistant = st.columns([4, 1])
+        with toolbar_assistant:
+            safely_render_employee_context_preview(
+                st,
+                source_mode="jira",
+                analysis_result=task_metrics,
+                dashboard_values=calculate_dashboard_values(task_metrics),
+            )
+
     tab_dashboard, tab_process, tab_individual, tab_tasks, tab_quality = st.tabs(
         [
             "Executive Dashboard",
@@ -1731,14 +1744,6 @@ if "task_metrics" in st.session_state:
         show_data_quality(
             task_metrics,
             validation_log,
-        )
-
-    if analysis_mode == "employee":
-        safely_render_employee_context_preview(
-            st,
-            source_mode="jira",
-            analysis_result=task_metrics,
-            dashboard_values=calculate_dashboard_values(task_metrics),
         )
 
     st.divider()
