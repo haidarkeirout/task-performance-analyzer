@@ -137,6 +137,12 @@ def _clear_stale_ai_answer(state: MutableMapping[str, Any], fingerprint: str) ->
         state["employee_ai_answer_fingerprint"] = fingerprint
 
 
+def _message_direction(content: str) -> str:
+    """Choose readable alignment for Arabic responses without changing content."""
+
+    return "rtl" if any("\u0600" <= character <= "\u06ff" for character in content) else "ltr"
+
+
 def _render_employee_ai_widget(
     st: Any,
     *,
@@ -251,17 +257,57 @@ def _render_employee_ai_widget(
             .st-key-employee_ai_drawer [data-testid="stChatInput"] textarea {
                 min-height: 2.8rem;
             }
-            .st-key-employee_ai_drawer [data-testid="stChatMessage"] {
-                margin: 0.35rem 0;
-                padding: 0.75rem;
-                border: 1px solid #e5e7eb;
-                border-radius: 12px;
-                background: #f8fafc;
+            div[class*="st-key-employee_ai_message_"] {
+                display: flex;
+                flex-direction: column;
+                margin: 0.55rem 0;
             }
-            .st-key-employee_ai_drawer [data-testid="stChatMessage"] *,
-            .st-key-employee_ai_drawer [data-testid="stChatMessage"] p,
-            .st-key-employee_ai_drawer [data-testid="stChatMessage"] li {
+            div[class*="st-key-employee_ai_message_"] > div {
+                width: fit-content;
+                max-width: 80%;
+                padding: 0.75rem 0.9rem;
+                border-radius: 16px;
+                box-sizing: border-box;
+            }
+            div[class*="st-key-employee_ai_message_user_"] {
+                align-items: flex-end;
+            }
+            div[class*="st-key-employee_ai_message_user_"] > div {
+                color: #ffffff;
+                background: #1e293b;
+                border-bottom-right-radius: 4px;
+            }
+            div[class*="st-key-employee_ai_message_assistant_"] {
+                align-items: flex-start;
+            }
+            div[class*="st-key-employee_ai_message_assistant_"] > div {
+                color: #111827;
+                background: #f4eadb;
+                border-bottom-left-radius: 4px;
+            }
+            div[class*="st-key-employee_ai_message_user_"] [data-testid="stMarkdownContainer"] *,
+            div[class*="st-key-employee_ai_message_user_"] [data-testid="stMarkdownContainer"] p,
+            div[class*="st-key-employee_ai_message_user_"] [data-testid="stMarkdownContainer"] li {
+                color: #ffffff !important;
+            }
+            div[class*="st-key-employee_ai_message_assistant_"] [data-testid="stMarkdownContainer"] *,
+            div[class*="st-key-employee_ai_message_assistant_"] [data-testid="stMarkdownContainer"] p,
+            div[class*="st-key-employee_ai_message_assistant_"] [data-testid="stMarkdownContainer"] li {
                 color: #111827 !important;
+            }
+            div[class*="st-key-employee_ai_message_"][class*="_rtl_"] [data-testid="stMarkdownContainer"] {
+                direction: rtl;
+                text-align: right;
+            }
+            div[class*="st-key-employee_ai_message_"][class*="_ltr_"] [data-testid="stMarkdownContainer"] {
+                direction: ltr;
+                text-align: left;
+            }
+            div[class*="st-key-employee_ai_message_"] [data-testid="stMarkdownContainer"] > :first-child {
+                margin-top: 0;
+            }
+            div[class*="st-key-employee_ai_message_"] [data-testid="stMarkdownContainer"] > :last-child {
+                margin-bottom: 0;
             }
             .st-key-employee_ai_drawer_close button {
                 min-height: 2.2rem;
@@ -337,11 +383,14 @@ def _render_employee_ai_widget(
                         """,
                         unsafe_allow_html=True,
                     )
-                for message in messages:
+                for index, message in enumerate(messages):
                     role = message.get("role")
                     content = str(message.get("content") or "")
                     if role in {"user", "assistant"} and content:
-                        with st.chat_message(role):
+                        direction = _message_direction(content)
+                        with st.container(
+                            key=f"employee_ai_message_{role}_{direction}_{index}"
+                        ):
                             st.markdown(content)
 
             question = st.chat_input(
