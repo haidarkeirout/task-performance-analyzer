@@ -185,9 +185,9 @@ def _render_employee_ai_widget(
                 max-height: calc(100vh - 132px);
                 overflow: auto;
                 padding: 0.8rem 1rem 1rem;
-                border: 1px solid #e5e7eb;
+                border: 1px solid var(--secondary-background-color);
                 border-radius: 20px;
-                background: #ffffff;
+                background: var(--secondary-background-color);
                 box-shadow: 0 22px 60px rgba(15, 23, 42, 0.24);
             }
             .st-key-employee_ai_drawer [data-testid="stVerticalBlockBorderWrapper"] {
@@ -227,13 +227,13 @@ def _render_employee_ai_widget(
             }
             .employee-ai-empty {
                 display: flex;
-                min-height: 250px;
+                min-height: 160px;
                 align-items: center;
                 justify-content: center;
                 padding: 2rem;
                 border: 1px solid #e5e7eb;
                 border-radius: 16px;
-                background: linear-gradient(145deg, #ffffff, #f8fafc);
+                background: #f8fafc;
                 color: #64748b;
                 text-align: center;
             }
@@ -250,6 +250,18 @@ def _render_employee_ai_widget(
             }
             .st-key-employee_ai_drawer [data-testid="stChatInput"] textarea {
                 min-height: 2.8rem;
+            }
+            .st-key-employee_ai_drawer [data-testid="stChatMessage"] {
+                margin: 0.35rem 0;
+                padding: 0.75rem;
+                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+                background: #f8fafc;
+            }
+            .st-key-employee_ai_drawer [data-testid="stChatMessage"] *,
+            .st-key-employee_ai_drawer [data-testid="stChatMessage"] p,
+            .st-key-employee_ai_drawer [data-testid="stChatMessage"] li {
+                color: #111827 !important;
             }
             .st-key-employee_ai_drawer_close button {
                 min-height: 2.2rem;
@@ -310,7 +322,7 @@ def _render_employee_ai_widget(
                     st.rerun(scope="fragment")
 
             messages = state.setdefault("employee_ai_messages", [])
-            conversation = st.container(height=390, border=True, key="employee_ai_conversation")
+            conversation = st.container(height=260, border=True, key="employee_ai_conversation")
             with conversation:
                 if not messages:
                     st.markdown(
