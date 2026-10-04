@@ -64,6 +64,8 @@ class EmployeeAIClientTests(unittest.TestCase):
         self.assertEqual(sent["question"], "Explain the result")
         self.assertEqual(sent["context"]["request"]["question"], "Explain the result")
         self.assertEqual(sent["context_fingerprint"], fingerprint)
+        self.assertEqual(request.get_header("User-agent"), "Performance-Management-Employee-AI/1.0")
+        self.assertEqual(request.get_header("Accept"), "application/json")
 
     @patch("employee_ai.client.urlopen")
     def test_rejects_response_for_another_analysis(self, post):
