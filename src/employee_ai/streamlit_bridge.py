@@ -129,11 +129,11 @@ def _streamlit_secrets(st: Any) -> Mapping[str, Any]:
 def _clear_stale_ai_answer(state: MutableMapping[str, Any], fingerprint: str) -> None:
     if state.get("employee_ai_answer_fingerprint") != fingerprint:
         for key in (
-            "employee_ai_answer",
-            "employee_ai_answer_question",
             "employee_ai_answer_fingerprint",
+            "employee_ai_messages",
         ):
             state.pop(key, None)
+        state["employee_ai_answer_fingerprint"] = fingerprint
 
 
 def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
@@ -153,33 +153,37 @@ def render_employee_ai_assistant(st: Any, context: EmployeeAIContext) -> None:
     if not webhook_url:
         return
 
-    with st.popover("✨ Ask AI", use_container_width=False):
-        st.caption("Ask about the current Employee analysis. The assistant is read-only.")
-        question = st.text_area(
-            "Your question",
-            placeholder="For example: What may explain the open overdue tasks?",
+    with st.popover("💬 Ask AI", use_container_width=False):
+        st.caption("Ask about this Employee analysis. The assistant is read-only.")
+        messages = state.setdefault("employee_ai_messages", [])
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content") or "")
+            if role in {"user", "assistant"} and content:
+                with st.chat_message(role):
+                    st.markdown(content)
+
+        question = st.chat_input(
+            "Ask about the current analysis…",
             key=f"employee_ai_question_{fingerprint}",
-            height=90,
         )
-        if st.button("Ask Assistant", key=f"employee_ai_submit_{fingerprint}", type="primary"):
+        if question:
+            messages.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
             try:
-                with st.spinner("Reviewing the current analysis..."):
-                    result = ask_employee_ai(
-                        context=context,
-                        question=question,
-                        webhook_url=webhook_url,
-                    )
-                state["employee_ai_answer"] = result["answer"]
-                state["employee_ai_answer_question"] = question.strip()
-                state["employee_ai_answer_fingerprint"] = result["context_fingerprint"]
+                with st.chat_message("assistant"):
+                    with st.spinner("Reviewing the current analysis..."):
+                        result = ask_employee_ai(
+                            context=context,
+                            question=question,
+                            webhook_url=webhook_url,
+                        )
+                    answer = result["answer"]
+                    st.markdown(answer)
+                messages.append({"role": "assistant", "content": answer})
             except EmployeeAIWebhookError as exc:
                 st.warning(str(exc))
-
-        if state.get("employee_ai_answer_fingerprint") == fingerprint:
-            question_text = state.get("employee_ai_answer_question")
-            if question_text:
-                st.caption(f"Question: {question_text}")
-            st.markdown(str(state.get("employee_ai_answer") or ""))
 
 
 def safely_render_employee_ai_assistant(
