@@ -13,7 +13,9 @@ from .schemas import EmployeeAIContext, validate_employee_ai_context
 
 
 WEBHOOK_SECRET_NAME = "ACTIVEPIECES_EMPLOYEE_AI_WEBHOOK_URL"
-DEFAULT_TIMEOUT_SECONDS = 30
+# A synchronous Activepieces flow includes an external AI call.  Thirty seconds
+# is often too short even when the webhook and the response contract are valid.
+DEFAULT_TIMEOUT_SECONDS = 75
 MAX_QUESTION_LENGTH = 2_000
 
 
@@ -82,7 +84,15 @@ def ask_employee_ai(
         )
         with urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
             raw_body = response.read()
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+    except HTTPError as exc:
+        raise EmployeeAIWebhookError(
+            f"The AI assistant webhook returned HTTP {exc.code}"
+        ) from exc
+    except TimeoutError as exc:
+        raise EmployeeAIWebhookError(
+            "The AI assistant took too long to respond. Please try again."
+        ) from exc
+    except (URLError, OSError) as exc:
         raise EmployeeAIWebhookError("The AI assistant could not be reached") from exc
     try:
         body = json.loads(raw_body.decode("utf-8"))
