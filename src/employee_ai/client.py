@@ -17,6 +17,7 @@ WEBHOOK_SECRET_NAME = "ACTIVEPIECES_EMPLOYEE_AI_WEBHOOK_URL"
 # is often too short even when the webhook and the response contract are valid.
 DEFAULT_TIMEOUT_SECONDS = 75
 MAX_QUESTION_LENGTH = 2_000
+CLIENT_USER_AGENT = "Performance-Management-Employee-AI/1.0"
 
 
 class EmployeeAIWebhookError(RuntimeError):
@@ -79,7 +80,11 @@ def ask_employee_ai(
         request = Request(
             url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": CLIENT_USER_AGENT,
+            },
             method="POST",
         )
         with urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
